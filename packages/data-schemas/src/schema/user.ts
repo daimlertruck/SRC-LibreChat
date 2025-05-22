@@ -1,4 +1,4 @@
-import { Schema, Document } from 'mongoose';
+import { Schema, Document, Types } from 'mongoose';
 import { SystemRoles } from 'librechat-data-provider';
 
 export interface IUser extends Document {
@@ -30,6 +30,8 @@ export interface IUser extends Document {
   }>;
   expiresAt?: Date;
   termsAccepted?: boolean;
+  // New field for group membership
+  groupIds?: Types.ObjectId[];
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -156,6 +158,11 @@ const User = new Schema<IUser>(
       type: Boolean,
       default: false,
     },
+    // New field for group membership
+    groupIds: [{
+      type: Schema.Types.ObjectId,
+      ref: 'Group',
+    }],
   },
   { timestamps: true },
 );
