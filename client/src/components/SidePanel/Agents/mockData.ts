@@ -15,6 +15,11 @@ import type {
 // Mock users from different sources (Entra ID and local)
 export const MOCK_USERS: TPrincipal[] = [
   { id: 'user1', name: 'John Doe', email: 'john.doe@company.com', type: 'user', source: 'entra' },
+  { id: 'user1', name: 'John 2', email: 'john.2@company.com', type: 'user', source: 'entra' },
+  { id: 'user1', name: 'John 3', email: 'john.3@company.com', type: 'user', source: 'entra' },
+  { id: 'user1', name: 'John 4', email: 'john.4@company.com', type: 'user', source: 'entra' },
+  { id: 'user1', name: 'John 5', email: 'john.5@company.com', type: 'user', source: 'entra' },
+  { id: 'user1', name: 'John 6', email: 'john.6@company.com', type: 'user', source: 'entra' },
   { id: 'user2', name: 'Jane Smith', email: 'jane.smith@company.com', type: 'user', source: 'entra' },
   { id: 'user3', name: 'Bob Wilson', email: 'bob.wilson@company.com', type: 'user', source: 'local' },
   { id: 'user4', name: 'Alice Johnson', email: 'alice@company.com', type: 'user', source: 'entra' },
@@ -76,17 +81,32 @@ export const MOCK_CURRENT_SHARES: TSelectedPrincipal[] = [
 export const getAllMockPrincipals = (): TPrincipal[] => [...MOCK_USERS, ...MOCK_GROUPS];
 
 /**
- * Simulate search API delay
+ * Simulate search API delay with filtering
  */
-export const simulateSearchDelay = async (query: string): Promise<TPrincipal[]> => {
+export const simulateSearchDelay = async (
+  query: string, 
+  filterType: 'all' | 'user' | 'group' = 'all',
+  selectedUsers: TSelectedPrincipal[] = []
+): Promise<TPrincipal[]> => {
   // Reason: Simulates realistic API delay for better UX testing
   await new Promise(resolve => setTimeout(resolve, 300));
   
   const allPrincipals = getAllMockPrincipals();
   const queryLower = query.toLowerCase();
   
-  return allPrincipals.filter(p => 
+  let filtered = allPrincipals.filter(p => 
     p.name?.toLowerCase().includes(queryLower) || 
     (p.email && p.email.toLowerCase().includes(queryLower))
   );
+  
+  // Filter by type if not 'all'
+  if (filterType !== 'all') {
+    filtered = filtered.filter(p => p.type === filterType);
+  }
+  
+  // Filter out already selected principals
+  const selectedIds = selectedUsers.map(s => s.id);
+  filtered = filtered.filter(p => !selectedIds.includes(p.id));
+  
+  return filtered.slice(0, 10); // Limit results for performance
 };

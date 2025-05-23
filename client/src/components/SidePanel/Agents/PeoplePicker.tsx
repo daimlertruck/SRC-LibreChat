@@ -12,7 +12,7 @@ import type { TPrincipal, TSelectedPrincipal } from 'librechat-data-provider';
 import { DropdownPopup } from '~/components/ui';
 import Spinner from '~/components/svg/Spinner';
 import { cn } from '~/utils';
-import { getAllMockPrincipals } from './mockData';
+import { simulateSearchDelay } from './mockData';
 
 interface PeoplePickerProps {
   selectedShares: TSelectedPrincipal[];
@@ -38,38 +38,33 @@ export default function PeoplePicker({
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Filter search results based on query and type
-  const searchResults = useMemo(() => {
-    if (!searchQuery || searchQuery.length < 2) return [];
-    
-    const allPrincipals = getAllMockPrincipals();
-    const query = searchQuery.toLowerCase();
-    
-    let filtered = allPrincipals.filter(p => 
-      p.name?.toLowerCase().includes(query) || 
-      (p.email && p.email.toLowerCase().includes(query))
-    );
-    
-    // Filter by type if not 'all'
-    if (searchType !== 'all') {
-      filtered = filtered.filter(p => p.type === searchType);
-    }
-    
-    // Filter out already selected principals
-    const selectedIds = selectedShares.map(s => s.id);
-    filtered = filtered.filter(p => !selectedIds.includes(p.id));
-    
-    return filtered.slice(0, 10); // Limit results for performance
-  }, [searchQuery, searchType, selectedShares]);
+  // State for search results
+  const [searchResults, setSearchResults] = useState<TPrincipal[]>([]);
 
-  // Simulate search delay for better UX
+  // Perform search with realistic delay simulation
   useEffect(() => {
-    if (searchQuery.length >= 2) {
-      setIsSearching(true);
-      const timer = setTimeout(() => setIsSearching(false), 300);
-      return () => clearTimeout(timer);
+    if (searchQuery.length < 2) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
     }
-  }, [searchQuery]);
+
+    setIsSearching(true);
+    
+    const performSearch = async () => {
+      try {
+        const results = await simulateSearchDelay(searchQuery, searchType, selectedShares);
+        setSearchResults(results);
+      } catch (error) {
+        console.error('Search failed:', error);
+        setSearchResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    };
+
+    performSearch();
+  }, [searchQuery, searchType, selectedShares]);
 
   const getPrincipalIcon = (principal: TPrincipal) => {
     // Reason: Visual distinction between users and groups improves UX
