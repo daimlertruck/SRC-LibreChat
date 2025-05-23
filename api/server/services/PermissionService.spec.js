@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const { AclEntry } = require('~/models/AclEntry');
-const { User } = require('~/models/User');
+const User = require('~/models/User');
 const Group = require('~/models/Group');
 const { AccessRole, findRoleByIdentifier } = require('~/models/AccessRole');
 const { getUserPrincipals } = require('~/models/userGroupMethods');
@@ -17,12 +17,13 @@ const {
   revokeProjectPermissionWithCleanup,
   resetResourcePermissions,
   isResourceAuthor,
-  getAvailableRoles
+  getAvailableRoles,
+  bulkUpdateResourcePermissions
 } = require('./PermissionService');
 
-// Mock the getTransactionSupport function from dbUtils
+// Mock the getTransactionSupport function from dbUtils - disable transactions for testing
 jest.mock('~/lib/db/dbUtils', () => ({
-  getTransactionSupport: jest.fn().mockResolvedValue(true)
+  getTransactionSupport: jest.fn().mockResolvedValue(false)
 }));
 
 // Mock the logger
@@ -406,6 +407,8 @@ describe('PermissionService', () => {
   });
   
   describe('checkPermission', () => {
+    let otherResourceId;
+    
     beforeEach(async () => {
       // Reset the mock implementation for getUserPrincipals
       getUserPrincipals.mockReset();
@@ -420,7 +423,7 @@ describe('PermissionService', () => {
         grantedBy: grantedById
       });
       
-      const otherResourceId = new mongoose.Types.ObjectId();
+      otherResourceId = new mongoose.Types.ObjectId();
       await grantPermission({
         principalType: 'group',
         principalId: groupId,
@@ -441,7 +444,7 @@ describe('PermissionService', () => {
         userId,
         resourceType: 'agent',
         resourceId,
-        accessRoleId: 'agent_viewer'
+        requiredPermissions: RoleBits.VIEWER // 1 = VIEW
       });
       
       expect(hasViewPermission).toBe(true);
@@ -451,15 +454,13 @@ describe('PermissionService', () => {
         userId,
         resourceType: 'agent',
         resourceId,
-        accessRoleId: 'agent_editor'
+        requiredPermissions: RoleBits.EDITOR // 3 = VIEW + EDIT
       });
       
       expect(hasEditPermission).toBe(false);
     });
     
     test('should check permission for user and group principals', async () => {
-      const otherResourceId = new mongoose.Types.ObjectId();
-      
       // Mock getUserPrincipals to return both user and group principals
       getUserPrincipals.mockResolvedValue([
         { principalType: 'user', principalId: userId },
@@ -471,7 +472,7 @@ describe('PermissionService', () => {
         userId,
         resourceType: 'agent',
         resourceId,
-        accessRoleId: 'agent_viewer'
+        requiredPermissions: RoleBits.VIEWER // 1 = VIEW
       });
       
       expect(hasViewOnOriginal).toBe(true);
@@ -481,7 +482,7 @@ describe('PermissionService', () => {
         userId,
         resourceType: 'agent',
         resourceId: otherResourceId,
-        accessRoleId: 'agent_editor'
+        requiredPermissions: RoleBits.VIEWER // 1 = VIEW
       });
       
       // Group has agent_editor role which includes viewer permissions
@@ -512,31 +513,31 @@ describe('PermissionService', () => {
         userId,
         resourceType: 'agent',
         resourceId: publicResourceId,
-        accessRoleId: 'agent_viewer'
+        requiredPermissions: RoleBits.VIEWER // 1 = VIEW
       });
       
       expect(hasPublicAccess).toBe(true);
     });
     
-    test('should return false for non-existent permission or role', async () => {
+    test('should return false for invalid permission bits', async () => {
       getUserPrincipals.mockResolvedValue([
         { principalType: 'user', principalId: userId }
       ]);
       
-      const nonExistentRole = await checkPermission({
-        userId,
-        resourceType: 'agent',
-        resourceId,
-        accessRoleId: 'non_existent_role'
-      });
-      
-      expect(nonExistentRole).toBe(false);
+      await expect(
+        checkPermission({
+          userId,
+          resourceType: 'agent',
+          resourceId,
+          requiredPermissions: 'invalid'
+        })
+      ).rejects.toThrow('requiredPermissions must be a positive number');
       
       const nonExistentResource = await checkPermission({
         userId,
         resourceType: 'agent',
         resourceId: new mongoose.Types.ObjectId(),
-        accessRoleId: 'agent_viewer'
+        requiredPermissions: RoleBits.VIEWER
       });
       
       expect(nonExistentResource).toBe(false);
@@ -549,7 +550,7 @@ describe('PermissionService', () => {
         userId,
         resourceType: 'agent',
         resourceId,
-        accessRoleId: 'agent_viewer'
+        requiredPermissions: RoleBits.VIEWER
       });
       
       expect(hasPermission).toBe(false);
@@ -761,7 +762,7 @@ describe('PermissionService', () => {
       const viewableResources = await findAccessibleResources({
         userId,
         resourceType: 'agent',
-        accessRoleId: 'agent_viewer'
+        requiredPermissions: RoleBits.VIEWER // 1 = VIEW
       });
       
       // Should find both resources (viewer role is included in editor role)
@@ -777,10 +778,10 @@ describe('PermissionService', () => {
       const editableResources = await findAccessibleResources({
         userId,
         resourceType: 'agent',
-        accessRoleId: 'agent_editor'
+        requiredPermissions: RoleBits.EDITOR // 3 = VIEW + EDIT
       });
       
-      // Should find only one resource
+      // Should find only one resource (only the editor resource has EDIT permission)
       expect(editableResources).toHaveLength(1);
     });
     
@@ -794,30 +795,30 @@ describe('PermissionService', () => {
       const viewableResources = await findAccessibleResources({
         userId,
         resourceType: 'agent',
-        accessRoleId: 'agent_viewer'
+        requiredPermissions: RoleBits.VIEWER // 1 = VIEW
       });
       
       // Should find all three resources
       expect(viewableResources).toHaveLength(3);
     });
     
-    test('should return empty array for non-existent permissions or roles', async () => {
+    test('should return empty array for invalid permissions', async () => {
       getUserPrincipals.mockResolvedValue([
         { principalType: 'user', principalId: userId }
       ]);
       
-      const nonExistentRole = await findAccessibleResources({
-        userId,
-        resourceType: 'agent',
-        accessRoleId: 'non_existent_role'
-      });
-      
-      expect(nonExistentRole).toEqual([]);
+      await expect(
+        findAccessibleResources({
+          userId,
+          resourceType: 'agent',
+          requiredPermissions: 'invalid'
+        })
+      ).rejects.toThrow('requiredPermissions must be a positive number');
       
       const nonExistentType = await findAccessibleResources({
         userId,
         resourceType: 'non_existent_type',
-        accessRoleId: 'agent_viewer'
+        requiredPermissions: RoleBits.VIEWER
       });
       
       expect(nonExistentType).toEqual([]);
@@ -829,7 +830,7 @@ describe('PermissionService', () => {
       const resources = await findAccessibleResources({
         userId,
         resourceType: 'agent',
-        accessRoleId: 'agent_viewer'
+        requiredPermissions: RoleBits.VIEWER
       });
       
       expect(resources).toEqual([]);
@@ -838,12 +839,15 @@ describe('PermissionService', () => {
   
   describe('syncEntraPrincipal', () => {
     test('should create a new user if not found', async () => {
-      const entraObjectId = 'entra-user-123';
-      const entraDisplayName = 'Test Entra User';
+      const entraIdObject = {
+        id: 'entra-user-123',
+        name: 'Test Entra User',
+        email: 'test@example.com',
+        username: 'testuser'
+      };
       
       const localId = await syncEntraPrincipal({
-        entraObjectId,
-        entraDisplayName,
+        entraIdObject,
         principalType: 'user'
       });
       
@@ -852,9 +856,11 @@ describe('PermissionService', () => {
       // Verify user was created
       const user = await User.findById(localId);
       expect(user).toBeDefined();
-      expect(user.name).toBe(entraDisplayName);
-      expect(user.idOnTheSource).toBe(entraObjectId);
-      expect(user.source).toBe('entra');
+      expect(user.name).toBe(entraIdObject.name);
+      expect(user.openidId).toBe(entraIdObject.id);
+      expect(user.email).toBe(entraIdObject.email);
+      expect(user.username).toBe(entraIdObject.username);
+      expect(user.provider).toBe('openid');
       expect(user.emailVerified).toBe(true);
     });
     
@@ -866,9 +872,9 @@ describe('PermissionService', () => {
       
       const user = await User.create({
         name: originalName,
-        idOnTheSource: entraObjectId,
-        source: 'entra',
-        email: `${entraObjectId}@entra.id`,
+        openidId: entraObjectId,
+        provider: 'openid',
+        email: 'test@example.com',
         username: `entra-${entraObjectId}`,
         avatar: '',
         emailVerified: true
@@ -876,8 +882,11 @@ describe('PermissionService', () => {
       
       // Now sync with updated name
       const localId = await syncEntraPrincipal({
-        entraObjectId,
-        entraDisplayName: newName,
+        entraIdObject: {
+          id: entraObjectId,
+          name: newName,
+          email: 'test@example.com'
+        },
         principalType: 'user'
       });
       
@@ -889,12 +898,13 @@ describe('PermissionService', () => {
     });
     
     test('should create a new group if not found', async () => {
-      const entraObjectId = 'entra-group-123';
-      const entraDisplayName = 'Test Entra Group';
+      const entraIdObject = {
+        id: 'entra-group-123',
+        name: 'Test Entra Group'
+      };
       
       const localId = await syncEntraPrincipal({
-        entraObjectId,
-        entraDisplayName,
+        entraIdObject,
         principalType: 'group'
       });
       
@@ -903,8 +913,8 @@ describe('PermissionService', () => {
       // Verify group was created
       const group = await Group.findById(localId);
       expect(group).toBeDefined();
-      expect(group.name).toBe(entraDisplayName);
-      expect(group.idOnTheSource).toBe(entraObjectId);
+      expect(group.name).toBe(entraIdObject.name);
+      expect(group.idOnTheSource).toBe(entraIdObject.id);
       expect(group.source).toBe('entra');
       expect(group.memberIds).toEqual([]);
     });
@@ -924,8 +934,10 @@ describe('PermissionService', () => {
       
       // Now sync with updated name
       const localId = await syncEntraPrincipal({
-        entraObjectId,
-        entraDisplayName: newName,
+        entraIdObject: {
+          id: entraObjectId,
+          name: newName
+        },
         principalType: 'group'
       });
       
@@ -939,31 +951,19 @@ describe('PermissionService', () => {
     test('should throw error for invalid principal type', async () => {
       await expect(
         syncEntraPrincipal({
-          entraObjectId: 'test-123',
-          entraDisplayName: 'Test',
+          entraIdObject: { id: 'test-123', name: 'Test' },
           principalType: 'invalid'
         })
       ).rejects.toThrow('Invalid principal type: invalid');
     });
     
-    test('should throw error for missing Entra Object ID', async () => {
+    test('should throw error for missing email when creating user', async () => {
       await expect(
         syncEntraPrincipal({
-          entraObjectId: null,
-          entraDisplayName: 'Test',
+          entraIdObject: { id: 'test-123', name: 'Test User' },
           principalType: 'user'
         })
-      ).rejects.toThrow('Entra Object ID is required');
-    });
-    
-    test('should throw error for missing Entra Display Name', async () => {
-      await expect(
-        syncEntraPrincipal({
-          entraObjectId: 'test-123',
-          entraDisplayName: null,
-          principalType: 'user'
-        })
-      ).rejects.toThrow('Entra Display Name is required');
+      ).rejects.toThrow('Email is required for user creation');
     });
   });
   
@@ -1379,6 +1379,360 @@ describe('PermissionService', () => {
       });
       
       expect(roles).toEqual([]);
+    });
+  });
+
+  describe('bulkUpdateResourcePermissions', () => {
+    const otherUserId = new mongoose.Types.ObjectId();
+    const anotherGroupId = new mongoose.Types.ObjectId();
+    
+    beforeEach(async () => {
+      // Setup existing permissions for testing
+      await grantPermission({
+        principalType: 'user',
+        principalId: userId,
+        resourceType: 'agent',
+        resourceId,
+        accessRoleId: 'agent_viewer',
+        grantedBy: grantedById
+      });
+      
+      await grantPermission({
+        principalType: 'group',
+        principalId: groupId,
+        resourceType: 'agent',
+        resourceId,
+        accessRoleId: 'agent_editor',
+        grantedBy: grantedById
+      });
+      
+      await grantPermission({
+        principalType: 'public',
+        principalId: null,
+        resourceType: 'agent',
+        resourceId,
+        accessRoleId: 'agent_viewer',
+        grantedBy: grantedById
+      });
+    });
+    
+    test('should grant new permissions in bulk', async () => {
+      const newResourceId = new mongoose.Types.ObjectId();
+      const permissions = [
+        {
+          principalType: 'user',
+          principalId: userId,
+          accessRoleId: 'agent_viewer'
+        },
+        {
+          principalType: 'user',
+          principalId: otherUserId,
+          accessRoleId: 'agent_editor'
+        },
+        {
+          principalType: 'group',
+          principalId: groupId,
+          accessRoleId: 'agent_manager'
+        }
+      ];
+      
+      const results = await bulkUpdateResourcePermissions({
+        resourceType: 'agent',
+        resourceId: newResourceId,
+        permissions,
+        grantedBy: grantedById
+      });
+      
+      expect(results.granted).toHaveLength(3);
+      expect(results.updated).toHaveLength(0);
+      expect(results.revoked).toHaveLength(0);
+      expect(results.errors).toHaveLength(0);
+      
+      // Verify permissions were created
+      const aclEntries = await AclEntry.find({
+        resourceType: 'agent',
+        resourceId: newResourceId
+      });
+      expect(aclEntries).toHaveLength(3);
+    });
+    
+    test('should update existing permissions in bulk', async () => {
+      const permissions = [
+        {
+          principalType: 'user',
+          principalId: userId,
+          accessRoleId: 'agent_editor' // Upgrade from viewer to editor
+        },
+        {
+          principalType: 'group',
+          principalId: groupId,
+          accessRoleId: 'agent_manager' // Upgrade from editor to manager
+        },
+        {
+          principalType: 'public',
+          accessRoleId: 'agent_viewer' // Keep same role
+        }
+      ];
+      
+      const results = await bulkUpdateResourcePermissions({
+        resourceType: 'agent',
+        resourceId,
+        permissions,
+        grantedBy: grantedById
+      });
+      
+      expect(results.granted).toHaveLength(0);
+      expect(results.updated).toHaveLength(2); // Only user and group updated, public stayed same
+      expect(results.revoked).toHaveLength(0);
+      expect(results.errors).toHaveLength(0);
+      
+      // Verify updates
+      const userEntry = await AclEntry.findOne({
+        principalType: 'user',
+        principalId: userId,
+        resourceType: 'agent',
+        resourceId
+      }).populate('roleId', 'accessRoleId');
+      expect(userEntry.roleId.accessRoleId).toBe('agent_editor');
+      
+      const groupEntry = await AclEntry.findOne({
+        principalType: 'group',
+        principalId: groupId,
+        resourceType: 'agent',
+        resourceId
+      }).populate('roleId', 'accessRoleId');
+      expect(groupEntry.roleId.accessRoleId).toBe('agent_manager');
+    });
+    
+    test('should revoke permissions not in the new list', async () => {
+      const permissions = [
+        {
+          principalType: 'user',
+          principalId: userId,
+          accessRoleId: 'agent_viewer'
+        }
+        // Group and public permissions not included, should be revoked
+      ];
+      
+      const results = await bulkUpdateResourcePermissions({
+        resourceType: 'agent',
+        resourceId,
+        permissions,
+        grantedBy: grantedById
+      });
+      
+      expect(results.granted).toHaveLength(0);
+      expect(results.updated).toHaveLength(0);
+      expect(results.revoked).toHaveLength(2); // Group and public revoked
+      expect(results.errors).toHaveLength(0);
+      
+      // Verify only user permission remains
+      const remainingEntries = await AclEntry.find({
+        resourceType: 'agent',
+        resourceId
+      });
+      expect(remainingEntries).toHaveLength(1);
+      expect(remainingEntries[0].principalType).toBe('user');
+      expect(remainingEntries[0].principalId.toString()).toBe(userId.toString());
+    });
+    
+    test('should handle mixed operations (grant, update, revoke)', async () => {
+      const permissions = [
+        {
+          principalType: 'user',
+          principalId: userId,
+          accessRoleId: 'agent_manager' // Update existing
+        },
+        {
+          principalType: 'user',
+          principalId: otherUserId,
+          accessRoleId: 'agent_viewer' // New permission
+        }
+        // Group and public permissions not included, should be revoked
+      ];
+      
+      const results = await bulkUpdateResourcePermissions({
+        resourceType: 'agent',
+        resourceId,
+        permissions,
+        grantedBy: grantedById
+      });
+      
+      expect(results.granted).toHaveLength(1); // New user
+      expect(results.updated).toHaveLength(1); // Existing user updated
+      expect(results.revoked).toHaveLength(2); // Group and public revoked
+      expect(results.errors).toHaveLength(0);
+      
+      // Verify final state
+      const finalEntries = await AclEntry.find({
+        resourceType: 'agent',
+        resourceId
+      }).populate('roleId', 'accessRoleId');
+      
+      expect(finalEntries).toHaveLength(2);
+      
+      const userEntry = finalEntries.find(e => 
+        e.principalId.toString() === userId.toString()
+      );
+      expect(userEntry.roleId.accessRoleId).toBe('agent_manager');
+      
+      const otherUserEntry = finalEntries.find(e => 
+        e.principalId.toString() === otherUserId.toString()
+      );
+      expect(otherUserEntry.roleId.accessRoleId).toBe('agent_viewer');
+    });
+    
+    test('should handle errors for invalid roles gracefully', async () => {
+      const permissions = [
+        {
+          principalType: 'user',
+          principalId: userId,
+          accessRoleId: 'agent_viewer' // Valid
+        },
+        {
+          principalType: 'user',
+          principalId: otherUserId,
+          accessRoleId: 'non_existent_role' // Invalid
+        },
+        {
+          principalType: 'group',
+          principalId: groupId,
+          accessRoleId: 'project_viewer' // Wrong resource type
+        }
+      ];
+      
+      const results = await bulkUpdateResourcePermissions({
+        resourceType: 'agent',
+        resourceId,
+        permissions,
+        grantedBy: grantedById
+      });
+      
+      expect(results.granted).toHaveLength(0);
+      expect(results.updated).toHaveLength(0); // User permission unchanged
+      expect(results.revoked).toHaveLength(1); // Public permission revoked
+      expect(results.errors).toHaveLength(2); // Two invalid permissions
+      
+      // Check error details
+      expect(results.errors[0].error).toContain('Role non_existent_role not found');
+      expect(results.errors[1].error).toContain('Role project_viewer is for project resources, not agent');
+    });
+    
+    test('should handle empty permissions array (revoke all)', async () => {
+      const results = await bulkUpdateResourcePermissions({
+        resourceType: 'agent',
+        resourceId,
+        permissions: [],
+        grantedBy: grantedById
+      });
+      
+      expect(results.granted).toHaveLength(0);
+      expect(results.updated).toHaveLength(0);
+      expect(results.revoked).toHaveLength(3); // All existing revoked
+      expect(results.errors).toHaveLength(0);
+      
+      // Verify all permissions removed
+      const remainingEntries = await AclEntry.find({
+        resourceType: 'agent',
+        resourceId
+      });
+      expect(remainingEntries).toHaveLength(0);
+    });
+    
+    test('should throw error for invalid permissions array', async () => {
+      await expect(
+        bulkUpdateResourcePermissions({
+          resourceType: 'agent',
+          resourceId,
+          permissions: 'not an array',
+          grantedBy: grantedById
+        })
+      ).rejects.toThrow('permissions must be an array');
+    });
+    
+    test('should throw error for invalid resource ID', async () => {
+      await expect(
+        bulkUpdateResourcePermissions({
+          resourceType: 'agent',
+          resourceId: 'invalid-id',
+          permissions: [],
+          grantedBy: grantedById
+        })
+      ).rejects.toThrow('Invalid resource ID: invalid-id');
+    });
+    
+    test('should handle public permissions correctly', async () => {
+      const permissions = [
+        {
+          principalType: 'public',
+          accessRoleId: 'agent_editor' // Update public permission
+        },
+        {
+          principalType: 'user',
+          principalId: otherUserId,
+          accessRoleId: 'agent_viewer' // New user permission
+        }
+        // Existing user and group permissions should be revoked
+      ];
+      
+      const results = await bulkUpdateResourcePermissions({
+        resourceType: 'agent',
+        resourceId,
+        permissions,
+        grantedBy: grantedById
+      });
+      
+      expect(results.granted).toHaveLength(1); // New user
+      expect(results.updated).toHaveLength(1); // Public updated
+      expect(results.revoked).toHaveLength(2); // Existing user and group revoked
+      expect(results.errors).toHaveLength(0);
+      
+      // Verify public permission was updated
+      const publicEntry = await AclEntry.findOne({
+        principalType: 'public',
+        resourceType: 'agent',
+        resourceId
+      }).populate('roleId', 'accessRoleId');
+      
+      expect(publicEntry).toBeDefined();
+      expect(publicEntry.roleId.accessRoleId).toBe('agent_editor');
+    });
+    
+    test('should work with different resource types', async () => {
+      // Test with project resources
+      const projectResourceId = new mongoose.Types.ObjectId();
+      const permissions = [
+        {
+          principalType: 'user',
+          principalId: userId,
+          accessRoleId: 'project_viewer'
+        },
+        {
+          principalType: 'group',
+          principalId: groupId,
+          accessRoleId: 'project_editor'
+        }
+      ];
+      
+      const results = await bulkUpdateResourcePermissions({
+        resourceType: 'project',
+        resourceId: projectResourceId,
+        permissions,
+        grantedBy: grantedById
+      });
+      
+      expect(results.granted).toHaveLength(2);
+      expect(results.updated).toHaveLength(0);
+      expect(results.revoked).toHaveLength(0);
+      expect(results.errors).toHaveLength(0);
+      
+      // Verify permissions were created with correct resource type
+      const projectEntries = await AclEntry.find({
+        resourceType: 'project',
+        resourceId: projectResourceId
+      });
+      expect(projectEntries).toHaveLength(2);
+      expect(projectEntries.every(e => e.resourceType === 'project')).toBe(true);
     });
   });
 });
