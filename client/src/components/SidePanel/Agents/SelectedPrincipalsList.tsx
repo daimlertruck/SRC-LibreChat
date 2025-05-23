@@ -5,17 +5,11 @@
  * including role assignment and removal functionality.
  */
 
-import React from 'react';
-import { Users, User, X, Eye, Edit, ExternalLink } from 'lucide-react';
+import React, { useState, useId } from 'react';
+import { Users, User, X, Eye, Edit, ExternalLink, ChevronDown } from 'lucide-react';
+import * as Menu from '@ariakit/react/menu';
 import type { TSelectedPrincipal, TAccessRole } from 'librechat-data-provider';
-import { Button } from '~/components/ui';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '~/components/ui/Select';
+import { Button, DropdownPopup } from '~/components/ui';
 import { MOCK_ACCESS_ROLES } from './mockData';
 
 interface SelectedPrincipalsListProps {
@@ -52,6 +46,11 @@ export default function SelectedPrincipalsList({
   const getRoleIcon = (roleId: string) => {
     // Reason: Visual indicator helps users quickly identify permission levels
     return roleId.includes('editor') ? <Edit className="h-3 w-3" /> : <Eye className="h-3 w-3" />;
+  };
+
+  const getRoleDisplayName = (accessRoleId: string) => {
+    const role = MOCK_ACCESS_ROLES.find(r => r.accessRoleId === accessRoleId);
+    return role?.name || 'Unknown Role';
   };
 
   if (selectedShares.length === 0) {
@@ -107,24 +106,10 @@ export default function SelectedPrincipalsList({
               </div>
               
               <div className="flex items-center gap-2 flex-shrink-0">
-                <Select
-                  value={share.accessRoleId}
-                  onValueChange={(value) => onRoleChange(share.tempId!, value)}
-                >
-                  <SelectTrigger className="w-32">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MOCK_ACCESS_ROLES.map(role => (
-                      <SelectItem key={role.accessRoleId} value={role.accessRoleId}>
-                        <div className="flex items-center gap-2">
-                          {getRoleIcon(role.accessRoleId)}
-                          {role.name}
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <RoleSelector
+                  currentRole={share.accessRoleId}
+                  onRoleChange={(newRole) => onRoleChange(share.tempId!, newRole)}
+                />
                 
                 <Button
                   variant="ghost"
@@ -141,5 +126,49 @@ export default function SelectedPrincipalsList({
         })}
       </div>
     </div>
+  );
+}
+
+// RoleSelector component using DropdownPopup pattern
+interface RoleSelectorProps {
+  currentRole: string;
+  onRoleChange: (newRole: string) => void;
+}
+
+function RoleSelector({ currentRole, onRoleChange }: RoleSelectorProps) {
+  const menuId = useId();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  const currentRoleData = MOCK_ACCESS_ROLES.find(r => r.accessRoleId === currentRole);
+  const currentRoleIcon = currentRole.includes('editor') ? 
+    <Edit className="h-4 w-4 text-green-500" /> : 
+    <Eye className="h-4 w-4 text-blue-500" />;
+
+  return (
+    <DropdownPopup
+      portal={true}
+      mountByState={true}
+      unmountOnHide={true}
+      preserveTabOrder={true}
+      isOpen={isMenuOpen}
+      setIsOpen={setIsMenuOpen}
+      trigger={
+        <Menu.MenuButton className="flex h-8 items-center gap-2 rounded-md border border-border-medium bg-surface-secondary px-2 py-1 text-sm font-medium transition-colors duration-200 hover:bg-surface-tertiary">
+          {currentRoleIcon}
+          <span className="hidden sm:inline">{currentRoleData?.name}</span>
+          <ChevronDown className="h-3 w-3" />
+        </Menu.MenuButton>
+      }
+      items={MOCK_ACCESS_ROLES.map((role) => ({
+        id: role.accessRoleId,
+        label: role.name,
+        icon: role.accessRoleId.includes('editor') ? 
+          <Edit className="h-4 w-4 text-green-500" /> : 
+          <Eye className="h-4 w-4 text-blue-500" />,
+        onClick: () => onRoleChange(role.accessRoleId),
+      }))}
+      menuId={menuId}
+      className="z-30"
+    />
   );
 }
