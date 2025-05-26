@@ -105,3 +105,30 @@ export type VerifyToolAuthResponse = { authenticated: boolean; message?: string 
 
 export type GetToolCallParams = { conversationId: string };
 export type ToolCallResults = a.ToolCallResult[];
+
+/* Principal Search */
+export type PrincipalSearchParams = {
+  q: string; // search query (required)
+  limit?: number; // max results (1-50, default 10)
+  type?: 'user' | 'group'; // filter by type (optional)
+};
+
+export type PrincipalSearchResult = {
+  id: string;
+  type: 'user' | 'group';
+  name: string;
+  email?: string; // for users
+  username?: string; // for users
+  avatar?: string; // for users
+  provider?: string; // for users
+  source: 'local' | 'entra';
+  memberCount?: number; // for groups
+};
+
+export type PrincipalSearchResponse = {
+  query: string;
+  limit: number;
+  type?: 'user' | 'group';
+  results: PrincipalSearchResult[];
+  count: number;
+};

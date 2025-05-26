@@ -8,6 +8,7 @@ import { Constants, initialModelsConfig } from '../config';
 import { defaultOrderQuery } from '../types/assistants';
 import * as dataService from '../data-service';
 import * as m from '../types/mutations';
+import * as q from '../types/queries';
 import { QueryKeys } from '../keys';
 import * as s from '../schemas';
 import * as t from '../types';
@@ -343,6 +344,24 @@ export const useGetCustomConfigSpeechQuery = (
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
       refetchOnMount: false,
+      ...config,
+    },
+  );
+};
+
+export const useSearchPrincipalsQuery = (
+  params: q.PrincipalSearchParams,
+  config?: UseQueryOptions<q.PrincipalSearchResponse>,
+): QueryObserverResult<q.PrincipalSearchResponse> => {
+  return useQuery<q.PrincipalSearchResponse>(
+    [QueryKeys.principalSearch, params],
+    () => dataService.searchPrincipals(params),
+    {
+      enabled: !!params.q && params.q.length >= 2,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+      staleTime: 30000, // Cache results for 30 seconds to reduce API calls while typing
       ...config,
     },
   );

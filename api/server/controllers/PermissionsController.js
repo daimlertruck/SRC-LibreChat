@@ -7,6 +7,7 @@ const {
   bulkUpdateResourcePermissions
 } = require('~/server/services/PermissionService');
 const { AclEntry } = require('~/models/AclEntry');
+const { searchPrincipals: searchPrincipalsService } = require('~/models/userGroupMethods');
 
 /**
  * Generic controller for resource permission endpoints
@@ -293,6 +294,76 @@ const getUserEffectivePermissions = async (req, res) => {
   }
 };
 
+/**
+ * Search for users and groups to grant permissions
+ * @route GET /api/permissions/search-principals
+ */
+const searchPrincipals = async (req, res) => {
+  try {
+    const { q: query, limit = 10, type } = req.query;
+
+    if (!query || query.trim().length === 0) {
+      return res.status(400).json({
+        error: 'Query parameter "q" is required and must not be empty'
+      });
+    }
+
+    if (query.trim().length < 2) {
+      return res.status(400).json({
+        error: 'Query must be at least 2 characters long'
+      });
+    }
+
+    const searchLimit = Math.min(Math.max(1, parseInt(limit) || 10), 50);
+    const typeFilter = ['user', 'group'].includes(type) ? type : null;
+
+    const principals = await searchPrincipalsService(
+      query.trim(),
+      searchLimit,
+      typeFilter
+    );
+
+    // Format the results for frontend consumption
+    const formattedResults = principals.map(principal => {
+      if (principal.type === 'user') {
+        return {
+          id: principal._id,
+          type: 'user',
+          name: principal.name || principal.email,
+          email: principal.email,
+          username: principal.username,
+          avatar: principal.avatar,
+          provider: principal.provider,
+          source: 'local' // Users are always local
+        };
+      } else {
+        return {
+          id: principal._id,
+          type: 'group',
+          name: principal.name,
+          source: principal.source || 'local',
+          memberCount: principal.memberIds ? principal.memberIds.length : 0
+        };
+      }
+    });
+
+    res.status(200).json({
+      query: query.trim(),
+      limit: searchLimit,
+      type: typeFilter,
+      results: formattedResults,
+      count: formattedResults.length
+    });
+
+  } catch (error) {
+    logger.error('Error searching principals:', error);
+    res.status(500).json({
+      error: 'Failed to search principals',
+      details: error.message
+    });
+  }
+};
+
 module.exports = {
   createResourcePermission,
   updateResourcePermissions,
@@ -300,5 +371,6 @@ module.exports = {
   updateResourcePermission,
   deleteResourcePermission,
   getResourceRoles,
-  getUserEffectivePermissions
+  getUserEffectivePermissions,
+  searchPrincipals
 };

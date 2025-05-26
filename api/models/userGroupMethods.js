@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const User = require('./User');
 const Group = require('./Group');
+const { searchUsers } = require('./userMethods');
 const { logger } = require('~/config');
 
 /**
@@ -309,6 +310,112 @@ const syncUserEntraGroups = async function (userId, entraGroups, session = null)
   };
 };
 
+/**
+ * Search for principals (users and groups) by pattern matching on name/email
+ * Returns combined results sorted by relevance
+ * @param {string} searchPattern - The pattern to search for
+ * @param {number} [limit=10] - Maximum number of results to return
+ * @param {string} [typeFilter] - Optional filter: 'user', 'group', or null for all
+ * @param {mongoose.ClientSession} [session] - Optional MongoDB session for transactions
+ * @returns {Promise<Array>} Array of principals with type field and relevance sorting
+ */
+const searchPrincipals = async function (searchPattern, limit = 10, typeFilter = null, session = null) {
+  if (!searchPattern || searchPattern.trim().length === 0) {
+    return [];
+  }
+
+  const trimmedPattern = searchPattern.trim();
+  const promises = [];
+
+  // Search users if not filtering for groups only
+  if (!typeFilter || typeFilter === 'user') {
+    const userFields = 'name email username avatar provider';
+    promises.push(
+      searchUsers(trimmedPattern, limit * 2, userFields)
+        .then(users => users.map(user => ({ ...user, type: 'user' })))
+    );
+  } else {
+    promises.push(Promise.resolve([]));
+  }
+
+  // Search groups if not filtering for users only
+  if (!typeFilter || typeFilter === 'group') {
+    promises.push(
+      findGroupsByNamePattern(trimmedPattern, null, limit * 2, session)
+        .then(groups => groups.map(group => ({ ...group, type: 'group' })))
+    );
+  } else {
+    promises.push(Promise.resolve([]));
+  }
+
+  const [users, groups] = await Promise.all(promises);
+
+  // Combine all results
+  const combined = [...users, ...groups];
+
+  // Score all results for relevance
+  const exactRegex = new RegExp(`^${trimmedPattern}$`, 'i');
+  const startsWithPattern = trimmedPattern.toLowerCase();
+
+  const scoredResults = combined.map(item => {
+    // Get searchable text based on type
+    const searchableFields = item.type === 'user' 
+      ? [item.name, item.email, item.username].filter(Boolean)
+      : [item.name].filter(Boolean);
+    
+    let maxScore = 0;
+    
+    for (const field of searchableFields) {
+      const fieldLower = field.toLowerCase();
+      let score = 0;
+      
+      // Exact match gets highest score
+      if (exactRegex.test(field)) {
+        score = 100;
+      }
+      // Starts with query gets high score
+      else if (fieldLower.startsWith(startsWithPattern)) {
+        score = 80;
+      }
+      // Contains query gets medium score
+      else if (fieldLower.includes(startsWithPattern)) {
+        score = 50;
+      }
+      // Default score for regex match
+      else {
+        score = 10;
+      }
+      
+      maxScore = Math.max(maxScore, score);
+    }
+    
+    return { ...item, _searchScore: maxScore };
+  });
+
+  // Sort by relevance and return top results
+  return scoredResults
+    .sort((a, b) => {
+      // First sort by score (descending)
+      if (b._searchScore !== a._searchScore) {
+        return b._searchScore - a._searchScore;
+      }
+      // If scores are equal, prioritize users over groups
+      if (a.type !== b.type) {
+        return a.type === 'user' ? -1 : 1;
+      }
+      // Finally sort alphabetically
+      const aName = a.name || a.email || '';
+      const bName = b.name || b.email || '';
+      return aName.localeCompare(bName);
+    })
+    .slice(0, limit)
+    .map(result => {
+      // Remove the search score from final results
+      const { _searchScore, ...resultWithoutScore } = result;
+      return resultWithoutScore;
+    });
+};
+
 module.exports = {
   // Group-related functions
   findGroupById,
@@ -323,5 +430,8 @@ module.exports = {
   removeUserFromGroup,
   getUserGroups,
   getUserPrincipals,
-  syncUserEntraGroups
+  syncUserEntraGroups,
+  
+  // Search functions
+  searchPrincipals
 };

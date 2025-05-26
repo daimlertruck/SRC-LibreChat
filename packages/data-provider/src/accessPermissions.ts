@@ -154,9 +154,39 @@ export type TGrantPermissionRequest = z.infer<typeof grantPermissionRequestSchem
 export type TBulkUpdatePermissionsRequest = z.infer<typeof bulkUpdatePermissionsRequestSchema>;
 
 /**
+ * Principal search request parameters
+ */
+export type TPrincipalSearchParams = {
+  q: string; // search query (required)
+  limit?: number; // max results (1-50, default 10)
+  type?: 'user' | 'group'; // filter by type (optional)
+};
+
+/**
+ * Principal search result item
+ */
+export type TPrincipalSearchResult = {
+  id: string;
+  type: 'user' | 'group';
+  name: string;
+  email?: string; // for users
+  username?: string; // for users
+  avatar?: string; // for users
+  provider?: string; // for users
+  source: 'local' | 'entra';
+  memberCount?: number; // for groups
+};
+
+/**
  * Principal search response
  */
-export type TPrincipalSearchResponse = TPrincipal[];
+export type TPrincipalSearchResponse = {
+  query: string;
+  limit: number;
+  type?: 'user' | 'group';
+  results: TPrincipalSearchResult[];
+  count: number;
+};
 
 /**
  * Available roles response

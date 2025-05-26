@@ -7,7 +7,8 @@ const {
   updateResourcePermission,
   deleteResourcePermission,
   getResourceRoles,
-  getUserEffectivePermissions
+  getUserEffectivePermissions,
+  searchPrincipals
 } = require('~/server/controllers/PermissionsController');
 
 const router = express.Router();
@@ -21,6 +22,12 @@ router.use(uaParser);
  * Generic routes for resource permissions
  * Pattern: /api/permissions/{resourceType}/{resourceId}
  */
+
+/**
+ * GET /api/permissions/search-principals
+ * Search for users and groups to grant permissions
+ */
+router.get('/search-principals', searchPrincipals);
 
 /**
  * GET /api/permissions/{resourceType}/roles

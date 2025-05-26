@@ -782,3 +782,10 @@ export function verifyTwoFactorTemp(
 ): Promise<t.TVerify2FATempResponse> {
   return request.post(endpoints.verifyTwoFactorTemp(), payload);
 }
+
+/* Principal Search */
+export function searchPrincipals(
+  params: q.PrincipalSearchParams,
+): Promise<q.PrincipalSearchResponse> {
+  return request.get(endpoints.searchPrincipals(params));
+}

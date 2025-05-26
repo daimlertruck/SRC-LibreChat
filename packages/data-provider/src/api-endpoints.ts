@@ -277,3 +277,19 @@ export const confirmTwoFactor = () => '/api/auth/2fa/confirm';
 export const disableTwoFactor = () => '/api/auth/2fa/disable';
 export const regenerateBackupCodes = () => '/api/auth/2fa/backup/regenerate';
 export const verifyTwoFactorTemp = () => '/api/auth/2fa/verify-temp';
+
+/* Permissions & Principal Search */
+export const searchPrincipals = (params: q.PrincipalSearchParams) => {
+  const { q: query, limit, type } = params;
+  let url = `/api/permissions/search-principals?q=${encodeURIComponent(query)}`;
+  
+  if (limit !== undefined) {
+    url += `&limit=${limit}`;
+  }
+  
+  if (type !== undefined) {
+    url += `&type=${type}`;
+  }
+  
+  return url;
+};
