@@ -199,6 +199,7 @@ export default function GrantAccessDialog({
               sizeClasses="w-[180px]"
               testId="DefaultPermissionDropdown"
               className="z-50"
+              portal={false}
             />
           </div>
 

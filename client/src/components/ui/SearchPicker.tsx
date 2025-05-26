@@ -116,7 +116,7 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
         </div>
       </div>
       <Ariakit.ComboboxPopover
-        portal
+        portal={false} //todo fix focus when set to true
         gutter={10}
         // sameWidth
         open={
@@ -126,6 +126,8 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
         }
         store={combobox}
         unmountOnHide
+        autoFocusOnShow={false}
+        modal={false}
         className={cn(
           'animate-popover z-[9999] min-w-64 overflow-hidden rounded-xl border border-border-light bg-surface-secondary shadow-lg',
           '[pointer-events:auto]', // Override body's pointer-events:none when in modal
