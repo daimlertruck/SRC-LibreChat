@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/Select';
-import { MOCK_ACCESS_ROLES } from '../mockData';
+import { MOCK_ACCESS_ROLES } from './mockData';
 
 interface PublicSharingToggleProps {
   isPublic: boolean;

@@ -11,7 +11,7 @@ import * as Menu from '@ariakit/react/menu';
 import type { TPrincipal, TSelectedPrincipal } from 'librechat-data-provider';
 
 import { DropdownPopup } from '~/components/ui';
-import { simulateSearchDelay } from '../mockData';
+import { simulateSearchDelay } from './mockData';
 import { SearchPicker } from '~/components/ui/SearchPicker';
 
 interface PeoplePickerProps {
@@ -77,28 +77,25 @@ export default function PeoplePicker({
 
   return (
     <div className={`space-y-3 ${className}`}>
-      <div>
-        <label className="mb-2 block text-sm font-medium">Search Users and Groups</label>
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <SearchPicker<TPrincipal & { key: string; value: string }>
-              options={selectableResults.map((s) => ({ ...s, key: s.email!, value: s.name! }))}
-              renderOptions={(o) => (
-                <div>
-                  {o.name} - {o.email}
-                </div>
-              )}
-              placeholder={placeholder}
-              query={searchQuery}
-              onQueryChange={function (query: string): void {
-                setSearchQuery(query);
-              }}
-              onPick={onSelectPrincipal}
-              label={'Search Users and Groups'}
-            />
-          </div>
-          <SearchTypeFilter searchType={searchType} onSearchTypeChange={setSearchType} />
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <SearchPicker<TPrincipal & { key: string; value: string }>
+            options={selectableResults.map((s) => ({ ...s, key: s.email!, value: s.name! }))}
+            renderOptions={(o) => (
+              <div>
+                {o.name} - {o.email}
+              </div>
+            )}
+            placeholder={placeholder}
+            query={searchQuery}
+            onQueryChange={function (query: string): void {
+              setSearchQuery(query);
+            }}
+            onPick={onSelectPrincipal}
+            label={'Search Users and Groups'}
+          />
         </div>
+        {/* <SearchTypeFilter searchType={searchType} onSearchTypeChange={setSearchType} /> */}
       </div>
     </div>
   );

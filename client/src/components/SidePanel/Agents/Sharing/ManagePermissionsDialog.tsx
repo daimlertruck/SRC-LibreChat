@@ -26,7 +26,7 @@ import { useLocalize } from '~/hooks';
 // Import modular components
 import SelectedPrincipalsList from '../SelectedPrincipalsList';
 import PublicSharingToggle from './PublicSharingToggle';
-import { MOCK_CURRENT_SHARES } from '../mockData';
+import { MOCK_CURRENT_SHARES } from './mockData';
 
 export default function ManagePermissionsDialog({
   agent_id = '',
@@ -41,7 +41,11 @@ export default function ManagePermissionsDialog({
   currentShares?: TSelectedPrincipal[];
   isPublic?: boolean;
   publicRole?: string;
-  onUpdatePermissions?: (shares: TSelectedPrincipal[], isPublic: boolean, publicRole: string) => void;
+  onUpdatePermissions?: (
+    shares: TSelectedPrincipal[],
+    isPublic: boolean,
+    publicRole: string,
+  ) => void;
 }) {
   const localize = useLocalize();
   const { showToast } = useToastContext();
@@ -73,7 +77,7 @@ export default function ManagePermissionsDialog({
     const sharesChanged = JSON.stringify(managedShares) !== JSON.stringify(currentShares);
     const publicChanged = managedIsPublic !== isPublic;
     const publicRoleChanged = managedPublicRole !== publicRole;
-    
+
     setHasChanges(sharesChanged || publicChanged || publicRoleChanged);
   }, [managedShares, managedIsPublic, managedPublicRole, currentShares, isPublic, publicRole]);
 
@@ -93,7 +97,7 @@ export default function ManagePermissionsDialog({
 
   const handleSaveChanges = async () => {
     setIsSubmitting(true);
-    
+
     try {
       // TODO: Replace with real API calls when backend is ready
       console.log('Updating agent permissions:', {
@@ -133,7 +137,11 @@ export default function ManagePermissionsDialog({
   };
 
   const handleRevokeAll = () => {
-    if (window.confirm('Are you sure you want to revoke access for all users and groups? This action cannot be undone.')) {
+    if (
+      window.confirm(
+        'Are you sure you want to revoke access for all users and groups? This action cannot be undone.',
+      )
+    ) {
       setManagedShares([]);
       setManagedIsPublic(false);
     }
@@ -158,11 +166,7 @@ export default function ManagePermissionsDialog({
             <Settings className="icon-md h-4 w-4" />
             <span className="hidden sm:inline">Manage</span>
             {/* Show share count indicator */}
-            {originalTotalShares > 0 && (
-              <Badge variant="secondary" className="text-xs">
-                {originalTotalShares}
-              </Badge>
-            )}
+            {originalTotalShares > 0 && `(${originalTotalShares})`}
           </div>
         </button>
       </OGDialogTrigger>
@@ -183,8 +187,9 @@ export default function ManagePermissionsDialog({
               <div>
                 <h3 className="text-sm font-medium text-text-primary">Current Access</h3>
                 <p className="text-xs text-text-secondary">
-                  {totalShares === 0 ? 'No users or groups have access' : 
-                   `Shared with ${managedShares.length} ${managedShares.length === 1 ? 'person' : 'people'}${managedIsPublic ? ' and public' : ''}`}
+                  {totalShares === 0
+                    ? 'No users or groups have access'
+                    : `Shared with ${managedShares.length} ${managedShares.length === 1 ? 'person' : 'people'}${managedIsPublic ? ' and public' : ''}`}
                 </p>
               </div>
               {managedShares.length > 0 && (
@@ -194,7 +199,7 @@ export default function ManagePermissionsDialog({
                   onClick={handleRevokeAll}
                   className="text-red-600 hover:text-red-700"
                 >
-                  <Trash2 className="h-4 w-4 mr-2" />
+                  <Trash2 className="mr-2 h-4 w-4" />
                   Revoke All
                 </Button>
               )}
@@ -212,7 +217,7 @@ export default function ManagePermissionsDialog({
                 selectedShares={managedShares}
                 onRemoveShare={handleRemoveShare}
                 onRoleChange={handleRoleChange}
-                showRemoveButton={true}
+                // showRemoveButton={true}
               />
             </div>
           ) : (
@@ -242,9 +247,9 @@ export default function ManagePermissionsDialog({
                 Cancel
               </Button>
             </OGDialogClose>
-            <Button 
-              onClick={handleSaveChanges} 
-              disabled={isSubmitting || !hasChanges} 
+            <Button
+              onClick={handleSaveChanges}
+              disabled={isSubmitting || !hasChanges}
               className="min-w-[120px]"
             >
               {isSubmitting ? (

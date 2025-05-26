@@ -1,6 +1,6 @@
 /**
  * SelectedPrincipalsList Component for Agent Sharing
- * 
+ *
  * Displays and manages the list of users/groups that an agent is shared with,
  * including role assignment and removal functionality.
  */
@@ -10,7 +10,7 @@ import { Users, User, X, Eye, Edit, ExternalLink, ChevronDown } from 'lucide-rea
 import * as Menu from '@ariakit/react/menu';
 import type { TSelectedPrincipal, TAccessRole } from 'librechat-data-provider';
 import { Button, DropdownPopup } from '~/components/ui';
-import { MOCK_ACCESS_ROLES } from './mockData';
+import { MOCK_ACCESS_ROLES } from './Sharing/mockData';
 
 interface SelectedPrincipalsListProps {
   selectedShares: TSelectedPrincipal[];
@@ -23,9 +23,8 @@ export default function SelectedPrincipalsList({
   selectedShares,
   onRemoveShare,
   onRoleChange,
-  className = "",
+  className = '',
 }: SelectedPrincipalsListProps) {
-  
   const getPrincipalIcon = (principal: TSelectedPrincipal) => {
     // Reason: Consistent visual representation across all sharing components
     return principal.type === 'user' ? (
@@ -39,7 +38,7 @@ export default function SelectedPrincipalsList({
     // Reason: Standardized display logic used across multiple components
     const displayName = principal.name || 'Unknown';
     const subtitle = principal.email || `${principal.type} (${principal.source || 'local'})`;
-    
+
     return { displayName, subtitle };
   };
 
@@ -49,21 +48,21 @@ export default function SelectedPrincipalsList({
   };
 
   const getRoleDisplayName = (accessRoleId: string) => {
-    const role = MOCK_ACCESS_ROLES.find(r => r.accessRoleId === accessRoleId);
+    const role = MOCK_ACCESS_ROLES.find((r) => r.accessRoleId === accessRoleId);
     return role?.name || 'Unknown Role';
   };
 
   if (selectedShares.length === 0) {
     return (
       <div className={`space-y-3 ${className}`}>
-        <h3 className="text-sm font-medium flex items-center gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-medium">
           <Users className="h-4 w-4" />
           Shared With (0)
         </h3>
-        <div className="text-center py-8 text-muted-foreground border border-dashed border-border rounded-lg">
-          <Users className="h-8 w-8 mx-auto mb-2 opacity-50" />
+        <div className="rounded-lg border border-dashed border-border py-8 text-center text-muted-foreground">
+          <Users className="mx-auto mb-2 h-8 w-8 opacity-50" />
           <p className="text-sm">Not shared with anyone yet</p>
-          <p className="text-xs mt-1">Search above to add users or groups</p>
+          <p className="mt-1 text-xs">Search above to add users or groups</p>
         </div>
       </div>
     );
@@ -71,29 +70,25 @@ export default function SelectedPrincipalsList({
 
   return (
     <div className={`space-y-3 ${className}`}>
-      <h3 className="text-sm font-medium flex items-center gap-2">
+      <h3 className="flex items-center gap-2 text-sm font-medium">
         <Users className="h-4 w-4" />
         Shared With ({selectedShares.length})
       </h3>
-      
+
       <div className="space-y-2">
         {selectedShares.map((share) => {
           const { displayName, subtitle } = getPrincipalDisplayInfo(share);
           return (
             <div
               key={share.tempId}
-              className="flex items-center justify-between p-3 bg-surface border border-border rounded-lg"
+              className="bg-surface flex items-center justify-between rounded-lg border border-border p-3"
             >
-              <div className="flex items-center gap-3 flex-1 min-w-0">
-                <div className="flex-shrink-0">
-                  {getPrincipalIcon(share)}
-                </div>
-                
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm truncate">
-                    {displayName}
-                  </div>
-                  <div className="text-xs text-muted-foreground flex items-center gap-1">
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <div className="flex-shrink-0">{getPrincipalIcon(share)}</div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{displayName}</div>
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
                     <span>{subtitle}</span>
                     {share.source === 'entra' && (
                       <>
@@ -104,13 +99,13 @@ export default function SelectedPrincipalsList({
                   </div>
                 </div>
               </div>
-              
-              <div className="flex items-center gap-2 flex-shrink-0">
+
+              <div className="flex flex-shrink-0 items-center gap-2">
                 <RoleSelector
                   currentRole={share.accessRoleId}
                   onRoleChange={(newRole) => onRoleChange(share.tempId!, newRole)}
                 />
-                
+
                 <Button
                   variant="ghost"
                   size="sm"
@@ -139,10 +134,12 @@ function RoleSelector({ currentRole, onRoleChange }: RoleSelectorProps) {
   const menuId = useId();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
-  const currentRoleData = MOCK_ACCESS_ROLES.find(r => r.accessRoleId === currentRole);
-  const currentRoleIcon = currentRole.includes('editor') ? 
-    <Edit className="h-4 w-4 text-green-500" /> : 
-    <Eye className="h-4 w-4 text-blue-500" />;
+  const currentRoleData = MOCK_ACCESS_ROLES.find((r) => r.accessRoleId === currentRole);
+  const currentRoleIcon = currentRole.includes('editor') ? (
+    <Edit className="h-4 w-4 text-green-500" />
+  ) : (
+    <Eye className="h-4 w-4 text-blue-500" />
+  );
 
   return (
     <DropdownPopup
@@ -162,9 +159,11 @@ function RoleSelector({ currentRole, onRoleChange }: RoleSelectorProps) {
       items={MOCK_ACCESS_ROLES.map((role) => ({
         id: role.accessRoleId,
         label: role.name,
-        icon: role.accessRoleId.includes('editor') ? 
-          <Edit className="h-4 w-4 text-green-500" /> : 
-          <Eye className="h-4 w-4 text-blue-500" />,
+        icon: role.accessRoleId.includes('editor') ? (
+          <Edit className="h-4 w-4 text-green-500" />
+        ) : (
+          <Eye className="h-4 w-4 text-blue-500" />
+        ),
         onClick: () => onRoleChange(role.accessRoleId),
       }))}
       menuId={menuId}
