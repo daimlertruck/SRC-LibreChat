@@ -12,7 +12,7 @@ const ROW_HEIGHT = 36;
 
 type SearchPickerProps<TOption extends { key: string }> = {
   options: TOption[];
-  renderOptions: (option: TOption) => React.ReactNode;
+  renderOptions: (option: TOption) => React.ReactElement;
   query: string;
   onQueryChange: (query: string) => void;
   onPick: (pickedOption: TOption) => void;
@@ -36,6 +36,7 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
   resetValueOnHide = false,
 }: SearchPickerProps<TOption>) {
   const [open, setOpen] = React.useState(false);
+
   const combobox = Ariakit.useComboboxStore({
     // defaultItems: items.map(getItem),
     resetValueOnHide,
@@ -52,13 +53,7 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
   };
 
   return (
-    <Ariakit.ComboboxProvider
-      store={combobox}
-      // value={query}
-      // open={open}
-      // setOpen={setOpen}
-      // setValue={(value) => React.startTransition(() => onQueryChange(value))}
-    >
+    <Ariakit.ComboboxProvider store={combobox}>
       <Ariakit.ComboboxLabel className="text-token-text-primary mb-2 block font-medium">
         {label}
       </Ariakit.ComboboxLabel>
@@ -80,12 +75,14 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
       </div>
       {/* <Ariakit.Combobox placeholder="e.g., Bluesky" className="combobox" autoSelect /> */}
       <Ariakit.ComboboxPopover
+        portal
         gutter={4}
         // sameWidth
         store={combobox}
         unmountOnHide
         className={cn(
-          'animate-popover z-50 overflow-hidden rounded-xl border border-border-light bg-surface-secondary shadow-lg',
+          'animate-popover z-[9999] overflow-hidden rounded-xl border border-border-light bg-surface-secondary shadow-lg',
+          '[pointer-events:auto]', // Override body's pointer-events:none when in modal
         )}
       >
         {options.length
@@ -93,16 +90,16 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
               <Ariakit.ComboboxItem
                 key={o.key}
                 focusOnHover
-                hideOnClick
+                // hideOnClick
                 value={o.value}
+                selectValueOnClick
                 className={cn(
                   'flex w-full cursor-pointer items-center px-3 text-sm',
                   'text-text-primary hover:bg-surface-tertiary',
                   'data-[active-item]:bg-surface-tertiary',
                 )}
-              >
-                {renderOptions(o)}
-              </Ariakit.ComboboxItem>
+                render={renderOptions(o)}
+              ></Ariakit.ComboboxItem>
             ))
           : query != '' && <div className={cn()}>No results found</div>}
       </Ariakit.ComboboxPopover>

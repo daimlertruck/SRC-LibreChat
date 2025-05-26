@@ -55,6 +55,7 @@ export const principalSchema = z.object({
   name: z.string().optional(),
   email: z.string().optional(), // for user type
   source: z.enum(['local', 'entra']).optional(),
+  avatar: z.string().optional(),
 });
 
 /**

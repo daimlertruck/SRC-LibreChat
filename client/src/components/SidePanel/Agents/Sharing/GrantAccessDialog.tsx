@@ -81,9 +81,7 @@ export default function GrantAccessDialog({
   };
 
   const handleRoleChange = (tempId: string, newRole: string) => {
-    setNewShares(
-      newShares.map((s) => (s.tempId === tempId ? { ...s, accessRoleId: newRole } : s)),
-    );
+    setNewShares(newShares.map((s) => (s.tempId === tempId ? { ...s, accessRoleId: newRole } : s)));
   };
 
   const handleGrantAccess = async () => {
@@ -96,7 +94,7 @@ export default function GrantAccessDialog({
     }
 
     setIsSubmitting(true);
-    
+
     try {
       // TODO: Replace with real API calls when backend is ready
       console.log('Granting agent access:', {
@@ -145,7 +143,7 @@ export default function GrantAccessDialog({
   const totalCurrentShares = currentShares.length + (currentIsPublic ? 1 : 0);
 
   return (
-    <OGDialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+    <OGDialog open={isModalOpen} onOpenChange={setIsModalOpen} modal>
       <OGDialogTrigger asChild>
         <button
           className={cn(
@@ -169,7 +167,12 @@ export default function GrantAccessDialog({
         </button>
       </OGDialogTrigger>
 
-      <OGDialogContent className="max-h-[90vh] w-11/12 overflow-y-auto md:max-w-3xl">
+      <OGDialogContent
+        className="w-11/12 overflow-y-auto md:max-w-3xl"
+        onInteractOutside={(e) => {
+          e.preventDefault();
+        }}
+      >
         <OGDialogTitle>
           <div className="flex items-center gap-2">
             <Users className="h-5 w-5" />
@@ -182,9 +185,9 @@ export default function GrantAccessDialog({
 
         <div className="space-y-6 p-2">
           {/* People Picker Section */}
-          <PeoplePicker 
-            selectedShares={allExistingShares} 
-            onSelectPrincipal={handleSelectPrincipal} 
+          <PeoplePicker
+            selectedShares={allExistingShares}
+            onSelectPrincipal={handleSelectPrincipal}
           />
 
           {/* New Shares List */}
@@ -219,7 +222,7 @@ export default function GrantAccessDialog({
               isPublic={currentIsPublic}
               publicRole={currentPublicRole}
             />
-            
+
             {/* Main Action Buttons - Bottom Right */}
             <div className="flex gap-3">
               <OGDialogClose asChild>
@@ -227,9 +230,9 @@ export default function GrantAccessDialog({
                   Cancel
                 </Button>
               </OGDialogClose>
-              <Button 
-                onClick={handleGrantAccess} 
-                disabled={isSubmitting || (newShares.length === 0 && !isPublic)} 
+              <Button
+                onClick={handleGrantAccess}
+                disabled={isSubmitting || (newShares.length === 0 && !isPublic)}
                 className="min-w-[120px]"
               >
                 {isSubmitting ? (

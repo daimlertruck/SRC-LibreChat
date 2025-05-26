@@ -10,9 +10,10 @@ import { Users, User, ExternalLink, Filter } from 'lucide-react';
 import * as Menu from '@ariakit/react/menu';
 import type { TPrincipal, TSelectedPrincipal } from 'librechat-data-provider';
 
-import { DropdownPopup } from '~/components/ui';
+import { Dropdown, DropdownPopup } from '~/components/ui';
 import { simulateSearchDelay } from './mockData';
 import { SearchPicker } from '~/components/ui/SearchPicker';
+import PeoplePickerSearchItem from './PeoplePickerSearchItem';
 
 interface PeoplePickerProps {
   selectedShares: TSelectedPrincipal[];
@@ -81,11 +82,7 @@ export default function PeoplePicker({
         <div className="relative flex-1">
           <SearchPicker<TPrincipal & { key: string; value: string }>
             options={selectableResults.map((s) => ({ ...s, key: s.email!, value: s.name! }))}
-            renderOptions={(o) => (
-              <div>
-                {o.name} - {o.email}
-              </div>
-            )}
+            renderOptions={(o) => <PeoplePickerSearchItem principal={o} />}
             placeholder={placeholder}
             query={searchQuery}
             onQueryChange={function (query: string): void {
