@@ -168,13 +168,6 @@ export type TAvailableRolesResponse = {
 
 // ===== UTILITY TYPES =====
 
-/**
- * Selected principal for UI - extends TPrincipal with role assignment
- */
-export interface TSelectedPrincipal extends TPrincipal {
-  accessRoleId: string;
-  tempId?: string; // for UI state before saving
-}
 
 /**
  * Permission check result

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Share2Icon, Users, Loader, UserPlus } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { ACCESS_ROLE_IDS } from 'librechat-data-provider';
-import type { TPrincipal, TSelectedPrincipal } from 'librechat-data-provider';
+import type { TPrincipal } from 'librechat-data-provider';
 import {
   Button,
   OGDialog,
@@ -15,8 +15,7 @@ import { cn, removeFocusOutlines } from '~/utils';
 import { useToastContext } from '~/Providers';
 import { useLocalize } from '~/hooks';
 
-import PeoplePicker from './PeoplePicker';
-import SelectedPrincipalsList from '../SelectedPrincipalsList';
+import PeoplePicker from './PeoplePicker/PeoplePicker';
 import PublicSharingToggle from './PublicSharingToggle';
 import ManagePermissionsDialog from './ManagePermissionsDialog';
 
@@ -31,9 +30,9 @@ export default function GrantAccessDialog({
 }: {
   agent_id?: string;
   agentName?: string;
-  onGrantAccess?: (shares: TSelectedPrincipal[], isPublic: boolean, publicRole: string) => void;
-  existingShares?: TSelectedPrincipal[];
-  currentShares?: TSelectedPrincipal[];
+  onGrantAccess?: (shares: TPrincipal[], isPublic: boolean, publicRole: string) => void;
+  existingShares?: TPrincipal[];
+  currentShares?: TPrincipal[];
   isPublic?: boolean;
   publicRole?: string;
 }) {
@@ -41,7 +40,7 @@ export default function GrantAccessDialog({
   const { showToast } = useToastContext();
 
   // State for new shares being added
-  const [newShares, setNewShares] = useState<TSelectedPrincipal[]>([]);
+  const [newShares, setNewShares] = useState<TPrincipal[]>([]);
   const [isPublic, setIsPublic] = useState(false);
   const [publicRole, setPublicRole] = useState<string>(ACCESS_ROLE_IDS.AGENT_VIEWER);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -57,23 +56,16 @@ export default function GrantAccessDialog({
     return null;
   }
 
-  const handleSelectPrincipal = (principal: TPrincipal) => {
-    // Default new shares to viewer role for security
-    const newShare: TSelectedPrincipal = {
-      ...principal,
-      accessRoleId: ACCESS_ROLE_IDS.AGENT_VIEWER,
-      tempId: `temp-${Date.now()}`,
-    };
-
-    setNewShares([...newShares, newShare]);
+  const handleSelectPrincipal = (principals: TPrincipal[]) => {
+    setNewShares([...principals]);
   };
 
-  const handleRemoveShare = (tempId: string) => {
-    setNewShares(newShares.filter((s) => s.tempId !== tempId));
+  const handleRemoveShare = (id: string) => {
+    setNewShares(newShares.filter((s) => s.id !== id));
   };
 
-  const handleRoleChange = (tempId: string, newRole: string) => {
-    setNewShares(newShares.map((s) => (s.tempId === tempId ? { ...s, accessRoleId: newRole } : s)));
+  const handleRoleChange = (id: string, newRole: string) => {
+    setNewShares(newShares.map((s) => (s.id === id ? { ...s, accessRoleId: newRole } : s)));
   };
 
   const handleGrantAccess = async () => {
@@ -173,23 +165,9 @@ export default function GrantAccessDialog({
         <div className="space-y-6 p-2">
           {/* People Picker Section */}
           <PeoplePicker
-            selectedShares={allExistingShares}
-            onSelectPrincipal={handleSelectPrincipal}
+            onSelectionChange={setNewShares}
+            placeholder="Search for people or groups by name or email"
           />
-
-          {/* New Shares List */}
-          {newShares.length > 0 && (
-            <div>
-              <h3 className="mb-3 text-sm font-medium text-text-primary">
-                New Access ({newShares.length})
-              </h3>
-              <SelectedPrincipalsList
-                selectedShares={newShares}
-                onRemoveShare={handleRemoveShare}
-                onRoleChange={handleRoleChange}
-              />
-            </div>
-          )}
 
           {/* Public Sharing Toggle */}
           <PublicSharingToggle

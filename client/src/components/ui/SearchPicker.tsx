@@ -2,15 +2,12 @@
 
 import * as React from 'react';
 import * as Ariakit from '@ariakit/react';
-
 import { Search, X } from 'lucide-react';
-
 import { cn } from '~/utils';
-import { Content, Portal, Root, Trigger } from '@radix-ui/react-popover';
-import { MenuItem } from '@ariakit/react';
 import { Spinner } from '~/components/svg';
 import { Skeleton } from '~/components/ui';
-const ROW_HEIGHT = 36;
+import { useLocation } from 'react-router-dom';
+import { useLocalize } from '~/hooks';
 
 type SearchPickerProps<TOption extends { key: string }> = {
   options: TOption[];
@@ -41,23 +38,28 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
   isLoading = false,
   minQueryLengthForNoResults = 2,
 }: SearchPickerProps<TOption>) {
+  const localize = useLocalize();
+  const location = useLocation();
   const [open, setOpen] = React.useState(false);
-
+  const inputRef = React.useRef<HTMLInputElement>(null);
   const combobox = Ariakit.useComboboxStore({
-    // defaultItems: items.map(getItem),
     resetValueOnHide,
-    value: query,
-    setValue: (value) => {
-      onQueryChange(value);
-      console.log(value);
-    },
   });
   const onPickHandler = (option: TOption) => {
     onQueryChange('');
     onPick(option);
     setOpen(false);
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
   };
-
+  const showClearIcon = query.trim().length > 0;
+  const clearText = () => {
+    onQueryChange('');
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
+  };
   return (
     <Ariakit.ComboboxProvider store={combobox}>
       <Ariakit.ComboboxLabel className="text-token-text-primary mb-2 block font-medium">
@@ -76,19 +78,52 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
             <Search className="absolute left-3 h-4 w-4 text-text-secondary group-focus-within:text-text-primary group-hover:text-text-primary" />
           )}
           <Ariakit.Combobox
+            ref={inputRef}
+            onKeyDown={(e) => {
+              // if escape is pressed when dropwdown is open, close it
+              if (e.key === 'Escape' && combobox.getState().open) {
+                e.preventDefault();
+                e.stopPropagation();
+                onQueryChange('');
+                setOpen(false);
+              }
+            }}
             store={combobox}
+            setValueOnClick={false}
+            setValueOnChange={false}
+            onChange={(e) => {
+              onQueryChange(e.target.value);
+            }}
+            value={query}
             // autoSelect
             placeholder={placeholder}
             className="m-0 mr-0 w-full rounded-md border-none bg-surface-secondary bg-transparent p-0 py-2 pl-7 pl-9 pr-3 text-sm leading-tight text-text-primary placeholder-text-secondary placeholder-opacity-100 focus:outline-none focus-visible:outline-none group-focus-within:placeholder-text-primary group-hover:placeholder-text-primary"
           />
+          <button
+            type="button"
+            aria-label={`${localize('com_ui_clear')} ${localize('com_ui_search')}`}
+            className={cn(
+              'absolute right-[7px] flex h-5 w-5 items-center justify-center rounded-full border-none bg-transparent p-0 transition-opacity duration-200',
+              showClearIcon ? 'opacity-100' : 'opacity-0',
+              isSmallScreen === true ? 'right-[16px]' : '',
+            )}
+            onClick={clearText}
+            tabIndex={showClearIcon ? 0 : -1}
+            disabled={!showClearIcon}
+          >
+            <X className="h-5 w-5 cursor-pointer" />
+          </button>
         </div>
       </div>
-      {/* <Ariakit.Combobox placeholder="e.g., Bluesky" className="combobox" autoSelect /> */}
       <Ariakit.ComboboxPopover
         portal
         gutter={10}
         // sameWidth
-        open={isLoading || options.length > 0 || (query.trim().length >= minQueryLengthForNoResults && !isLoading)}
+        open={
+          isLoading ||
+          options.length > 0 ||
+          (query.trim().length >= minQueryLengthForNoResults && !isLoading)
+        }
         store={combobox}
         unmountOnHide
         className={cn(
@@ -115,7 +150,8 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
               focusOnHover
               // hideOnClick
               value={o.value}
-              selectValueOnClick
+              selectValueOnClick={false}
+              onClick={(e) => onPickHandler(o)}
               className={cn(
                 'flex w-full cursor-pointer items-center px-3 text-sm',
                 'text-text-primary hover:bg-surface-tertiary',

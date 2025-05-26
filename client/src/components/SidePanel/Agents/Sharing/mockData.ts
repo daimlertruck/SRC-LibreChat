@@ -8,18 +8,17 @@
 import { ACCESS_ROLE_IDS } from 'librechat-data-provider';
 import type { 
   TPrincipal,
-  TSelectedPrincipal,
   TAccessRole,
 } from 'librechat-data-provider';
 
 // Mock users from different sources (Entra ID and local)
 export const MOCK_USERS: TPrincipal[] = [
-  { id: 'user1', name: 'John Doe', email: 'john.doe@company.com', type: 'user', source: 'entra' },
-  { id: 'user1', name: 'John 2', email: 'john.2@company.com', type: 'user', source: 'entra' },
-  { id: 'user1', name: 'John 3', email: 'john.3@company.com', type: 'user', source: 'entra' },
-  { id: 'user1', name: 'John 4', email: 'john.4@company.com', type: 'user', source: 'entra' },
-  { id: 'user1', name: 'John 5', email: 'john.5@company.com', type: 'user', source: 'entra' },
-  { id: 'user1', name: 'John 6', email: 'john.6@company.com', type: 'user', source: 'entra' },
+  { id: 'user1', name: 'John Doe', email: 'john.doe@company.com', type: 'user', source: 'entra', avatar:"/images/6818c36f96708c25b6675dd4/dc48102ec3a1a8d8892462a3332791fa44c6502f37510f4cc03d9ad39c6fc328.png" },
+  { id: 'user12', name: 'John 2', email: 'john.2@company.com', type: 'user', source: 'entra' },
+  { id: 'user13', name: 'John 3', email: 'john.3@company.com', type: 'user', source: 'entra' },
+  { id: 'user14', name: 'John 4', email: 'john.4@company.com', type: 'user', source: 'entra' },
+  { id: 'user15', name: 'John 5', email: 'john.5@company.com', type: 'user', source: 'entra' },
+  { id: 'user16', name: 'John 6', email: 'john.6@company.com', type: 'user', source: 'entra' },
   { id: 'user2', name: 'Jane Smith', email: 'jane.smith@company.com', type: 'user', source: 'entra' },
   { id: 'user3', name: 'Bob Wilson', email: 'bob.wilson@company.com', type: 'user', source: 'local' },
   { id: 'user4', name: 'Alice Johnson', email: 'alice@company.com', type: 'user', source: 'entra' },
@@ -55,23 +54,22 @@ export const MOCK_ACCESS_ROLES: TAccessRole[] = [
 ];
 
 // Mock existing shares for demonstration
-export const MOCK_CURRENT_SHARES: TSelectedPrincipal[] = [
+export const MOCK_CURRENT_SHARES: TPrincipal[] = [
   { 
     id: 'user2', 
     name: 'Jane Smith', 
     email: 'jane.smith@company.com',
     type: 'user', 
     source: 'entra',
-    accessRoleId: ACCESS_ROLE_IDS.AGENT_EDITOR,
-    tempId: 'share1'
+    
+   
   },
   { 
     id: 'group1', 
     name: 'Development Team', 
     type: 'group', 
     source: 'entra',
-    accessRoleId: ACCESS_ROLE_IDS.AGENT_VIEWER,
-    tempId: 'share2'
+    
   },
 ];
 
@@ -86,7 +84,7 @@ export const getAllMockPrincipals = (): TPrincipal[] => [...MOCK_USERS, ...MOCK_
 export const simulateSearchDelay = async (
   query: string, 
   filterType: 'all' | 'user' | 'group' = 'all',
-  selectedUsers: TSelectedPrincipal[] = []
+  selectedUsers: TPrincipal[] = []
 ): Promise<TPrincipal[]> => {
   // Reason: Simulates realistic API delay for better UX testing
   await new Promise(resolve => setTimeout(resolve, 300));

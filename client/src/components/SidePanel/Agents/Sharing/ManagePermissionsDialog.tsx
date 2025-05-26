@@ -8,8 +8,7 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, Users, Loader, UserCheck, Trash2, Shield } from 'lucide-react';
 import { useForm } from 'react-hook-form';
-import { ACCESS_ROLE_IDS } from 'librechat-data-provider';
-import type { TSelectedPrincipal } from 'librechat-data-provider';
+import { ACCESS_ROLE_IDS, TPrincipal } from 'librechat-data-provider';
 import {
   Button,
   OGDialog,
@@ -24,7 +23,7 @@ import { useToastContext } from '~/Providers';
 import { useLocalize } from '~/hooks';
 
 // Import modular components
-import SelectedPrincipalsList from '../SelectedPrincipalsList';
+import SelectedPrincipalsList from './PeoplePicker/SelectedPrincipalsList';
 import PublicSharingToggle from './PublicSharingToggle';
 import { MOCK_CURRENT_SHARES } from './mockData';
 
@@ -38,20 +37,16 @@ export default function ManagePermissionsDialog({
 }: {
   agent_id?: string;
   agentName?: string;
-  currentShares?: TSelectedPrincipal[];
+  currentShares?: TPrincipal[];
   isPublic?: boolean;
   publicRole?: string;
-  onUpdatePermissions?: (
-    shares: TSelectedPrincipal[],
-    isPublic: boolean,
-    publicRole: string,
-  ) => void;
+  onUpdatePermissions?: (shares: TPrincipal[], isPublic: boolean, publicRole: string) => void;
 }) {
   const localize = useLocalize();
   const { showToast } = useToastContext();
 
   // State for managing current permissions
-  const [managedShares, setManagedShares] = useState<TSelectedPrincipal[]>(currentShares);
+  const [managedShares, setManagedShares] = useState<TPrincipal[]>(currentShares);
   const [managedIsPublic, setManagedIsPublic] = useState(isPublic);
   const [managedPublicRole, setManagedPublicRole] = useState<string>(publicRole);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -85,14 +80,12 @@ export default function ManagePermissionsDialog({
     return null;
   }
 
-  const handleRemoveShare = (tempId: string) => {
-    setManagedShares(managedShares.filter((s) => s.tempId !== tempId));
+  const handleRemoveShare = (id: string) => {
+    setManagedShares(managedShares.filter((s) => s.id !== id));
   };
 
-  const handleRoleChange = (tempId: string, newRole: string) => {
-    setManagedShares(
-      managedShares.map((s) => (s.tempId === tempId ? { ...s, accessRoleId: newRole } : s)),
-    );
+  const handleRoleChange = (id: string, newRole: string) => {
+    setManagedShares(managedShares.map((s) => (s.id === id ? { ...s, accessRoleId: newRole } : s)));
   };
 
   const handleSaveChanges = async () => {
@@ -214,9 +207,9 @@ export default function ManagePermissionsDialog({
                 User & Group Permissions ({managedShares.length})
               </h3>
               <SelectedPrincipalsList
-                selectedShares={managedShares}
-                onRemoveShare={handleRemoveShare}
-                onRoleChange={handleRoleChange}
+                principles={managedShares}
+                onRemoveHandler={handleRemoveShare}
+                // onRoleChange={handleRoleChange}
                 // showRemoveButton={true}
               />
             </div>
