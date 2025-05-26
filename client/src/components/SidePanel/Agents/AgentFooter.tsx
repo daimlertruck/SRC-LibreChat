@@ -9,7 +9,7 @@ import DuplicateAgent from './DuplicateAgent';
 import AdminSettings from './AdminSettings';
 import DeleteButton from './DeleteButton';
 import { Spinner } from '~/components';
-import ShareAgentEnhanced from './ShareAgentEnhanced';
+import GrantAccessDialog from './Sharing/GrantAccessDialog';
 import { Panel } from '~/common';
 
 export default function AgentFooter({
@@ -65,11 +65,9 @@ export default function AgentFooter({
         />
         {(agent?.author === user?.id || user?.role === SystemRoles.ADMIN) &&
           hasAccessToShareAgents && (
-            <ShareAgentEnhanced
+            <GrantAccessDialog
               agent_id={agent_id}
               agentName={agent?.name ?? ''}
-              projectIds={agent?.projectIds ?? []}
-              isCollaborative={agent?.isCollaborative}
             />
           )}
         {agent && agent.author === user?.id && <DuplicateAgent agent_id={agent_id} />}
