@@ -1,10 +1,3 @@
-/**
- * GrantAccessDialog Component - Add New Shares to Agents
- *
- * Focused component for selecting users/groups and granting them access to agents.
- * This dialog handles the initial sharing flow.
- */
-
 import React, { useState } from 'react';
 import { Share2Icon, Users, Loader, UserPlus } from 'lucide-react';
 import { useForm } from 'react-hook-form';
@@ -22,7 +15,6 @@ import { cn, removeFocusOutlines } from '~/utils';
 import { useToastContext } from '~/Providers';
 import { useLocalize } from '~/hooks';
 
-// Import modular components
 import PeoplePicker from './PeoplePicker';
 import SelectedPrincipalsList from '../SelectedPrincipalsList';
 import PublicSharingToggle from './PublicSharingToggle';

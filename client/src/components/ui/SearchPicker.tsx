@@ -101,7 +101,20 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
                 render={renderOptions(o)}
               ></Ariakit.ComboboxItem>
             ))
-          : query != '' && <div className={cn()}>No results found</div>}
+          : query != '' && (
+              <div className={cn(
+                'flex items-center justify-center px-4 py-8 text-center',
+                'text-sm text-text-secondary'
+              )}>
+                <div className="flex flex-col items-center gap-2">
+                  <Search className="h-8 w-8 text-text-tertiary opacity-50" />
+                  <div className="font-medium">No results found</div>
+                  <div className="text-xs text-text-tertiary">
+                    Try adjusting your search terms
+                  </div>
+                </div>
+              </div>
+            )}
       </Ariakit.ComboboxPopover>
     </Ariakit.ComboboxProvider>
   );
