@@ -8,6 +8,8 @@ import { Search, X } from 'lucide-react';
 import { cn } from '~/utils';
 import { Content, Portal, Root, Trigger } from '@radix-ui/react-popover';
 import { MenuItem } from '@ariakit/react';
+import { Spinner } from '~/components/svg';
+import { Skeleton } from '~/components/ui';
 const ROW_HEIGHT = 36;
 
 type SearchPickerProps<TOption extends { key: string }> = {
@@ -21,6 +23,8 @@ type SearchPickerProps<TOption extends { key: string }> = {
   label: string;
   resetValueOnHide?: boolean;
   isSmallScreen?: boolean;
+  isLoading?: boolean;
+  minQueryLengthForNoResults?: number;
 };
 
 export function SearchPicker<TOption extends { key: string; value: string }>({
@@ -34,6 +38,8 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
   isSmallScreen = false,
   placeholder = 'Select options...',
   resetValueOnHide = false,
+  isLoading = false,
+  minQueryLengthForNoResults = 2,
 }: SearchPickerProps<TOption>) {
   const [open, setOpen] = React.useState(false);
 
@@ -64,7 +70,11 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
             isSmallScreen === true ? 'mb-2 h-14 rounded-2xl' : '',
           )}
         >
-          <Search className="absolute left-3 h-4 w-4 text-text-secondary group-focus-within:text-text-primary group-hover:text-text-primary" />
+          {isLoading ? (
+            <Spinner className="absolute left-3 h-4 w-4 text-text-primary" />
+          ) : (
+            <Search className="absolute left-3 h-4 w-4 text-text-secondary group-focus-within:text-text-primary group-hover:text-text-primary" />
+          )}
           <Ariakit.Combobox
             store={combobox}
             // autoSelect
@@ -76,45 +86,60 @@ export function SearchPicker<TOption extends { key: string; value: string }>({
       {/* <Ariakit.Combobox placeholder="e.g., Bluesky" className="combobox" autoSelect /> */}
       <Ariakit.ComboboxPopover
         portal
-        gutter={4}
+        gutter={10}
         // sameWidth
+        open={isLoading || options.length > 0 || (query.trim().length >= minQueryLengthForNoResults && !isLoading)}
         store={combobox}
         unmountOnHide
         className={cn(
-          'animate-popover z-[9999] overflow-hidden rounded-xl border border-border-light bg-surface-secondary shadow-lg',
+          'animate-popover z-[9999] min-w-64 overflow-hidden rounded-xl border border-border-light bg-surface-secondary shadow-lg',
           '[pointer-events:auto]', // Override body's pointer-events:none when in modal
         )}
       >
-        {options.length
-          ? options.map((o) => (
-              <Ariakit.ComboboxItem
-                key={o.key}
-                focusOnHover
-                // hideOnClick
-                value={o.value}
-                selectValueOnClick
-                className={cn(
-                  'flex w-full cursor-pointer items-center px-3 text-sm',
-                  'text-text-primary hover:bg-surface-tertiary',
-                  'data-[active-item]:bg-surface-tertiary',
-                )}
-                render={renderOptions(o)}
-              ></Ariakit.ComboboxItem>
-            ))
-          : query != '' && (
-              <div className={cn(
-                'flex items-center justify-center px-4 py-8 text-center',
-                'text-sm text-text-secondary'
-              )}>
-                <div className="flex flex-col items-center gap-2">
-                  <Search className="h-8 w-8 text-text-tertiary opacity-50" />
-                  <div className="font-medium">No results found</div>
-                  <div className="text-xs text-text-tertiary">
-                    Try adjusting your search terms
-                  </div>
+        {isLoading ? (
+          <div className="space-y-2 p-2">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <div key={index} className="flex items-center gap-3 px-3 py-2">
+                <Skeleton className="h-8 w-8 rounded-full" />
+                <div className="flex-1 space-y-1">
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-3 w-1/2" />
                 </div>
               </div>
-            )}
+            ))}
+          </div>
+        ) : options.length ? (
+          options.map((o) => (
+            <Ariakit.ComboboxItem
+              key={o.key}
+              focusOnHover
+              // hideOnClick
+              value={o.value}
+              selectValueOnClick
+              className={cn(
+                'flex w-full cursor-pointer items-center px-3 text-sm',
+                'text-text-primary hover:bg-surface-tertiary',
+                'data-[active-item]:bg-surface-tertiary',
+              )}
+              render={renderOptions(o)}
+            ></Ariakit.ComboboxItem>
+          ))
+        ) : (
+          query.trim().length >= minQueryLengthForNoResults && (
+            <div
+              className={cn(
+                'flex items-center justify-center px-4 py-8 text-center',
+                'text-sm text-text-secondary',
+              )}
+            >
+              <div className="flex flex-col items-center gap-2">
+                <Search className="h-8 w-8 text-text-tertiary opacity-50" />
+                <div className="font-medium">No results found</div>
+                <div className="text-xs text-text-tertiary">Try adjusting your search terms</div>
+              </div>
+            </div>
+          )
+        )}
       </Ariakit.ComboboxPopover>
     </Ariakit.ComboboxProvider>
   );

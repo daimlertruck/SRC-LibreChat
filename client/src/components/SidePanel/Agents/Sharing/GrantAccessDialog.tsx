@@ -159,12 +159,7 @@ export default function GrantAccessDialog({
         </button>
       </OGDialogTrigger>
 
-      <OGDialogContent
-        className="w-11/12 overflow-y-auto md:max-w-3xl"
-        onInteractOutside={(e) => {
-          e.preventDefault();
-        }}
-      >
+      <OGDialogContent className="w-11/12 overflow-y-auto md:max-w-3xl">
         <OGDialogTitle>
           <div className="flex items-center gap-2">
             <Users className="h-5 w-5" />

@@ -5,7 +5,7 @@
  * Supports both local LibreChat users and Entra ID integration.
  */
 
-import React, { useState, useEffect, useId } from 'react';
+import React, { useState, useEffect, useId, useMemo } from 'react';
 import { Users, User, ExternalLink, Filter } from 'lucide-react';
 import * as Menu from '@ariakit/react/menu';
 import type { TPrincipal, TSelectedPrincipal } from 'librechat-data-provider';
@@ -20,6 +20,7 @@ interface PeoplePickerProps {
   onSelectPrincipal: (principal: TPrincipal) => void;
   placeholder?: string;
   className?: string;
+  debounceMs?: number;
 }
 
 type SearchType = 'all' | 'user' | 'group';
@@ -29,30 +30,42 @@ export default function PeoplePicker({
   onSelectPrincipal,
   placeholder = 'Search by name or email (min 2 chars)',
   className = '',
+  debounceMs = 300,
 }: PeoplePickerProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchType, setSearchType] = useState<SearchType>('all');
   const [searchResults, setSearchResults] = useState<TPrincipal[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Perform search with realistic delay simulation
   useEffect(() => {
     if (searchQuery.length < 2) {
       setSearchResults([]);
+      setIsLoading(false);
       return;
     }
 
-    const performSearch = async () => {
-      try {
-        const results = await simulateSearchDelay(searchQuery, searchType, selectedShares);
-        setSearchResults(results);
-      } catch (error) {
-        console.error('Search failed:', error);
-        setSearchResults([]);
-      }
-    };
+    // Set loading immediately when user types a valid query
+    setIsLoading(true);
 
-    performSearch();
-  }, [searchQuery, searchType, selectedShares]);
+    const timeoutId = setTimeout(() => {
+      const performSearch = async () => {
+        try {
+          const results = await simulateSearchDelay(searchQuery, searchType, selectedShares);
+          setSearchResults(results);
+        } catch (error) {
+          console.error('Search failed:', error);
+          setSearchResults([]);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      performSearch();
+    }, debounceMs);
+
+    return () => clearTimeout(timeoutId);
+  }, [searchQuery, searchType, selectedShares, debounceMs]);
 
   const getPrincipalIcon = (principal: TPrincipal) => {
     // Reason: Visual distinction between users and groups improves UX
@@ -90,6 +103,7 @@ export default function PeoplePicker({
             }}
             onPick={onSelectPrincipal}
             label={'Search Users and Groups'}
+            isLoading={isLoading}
           />
         </div>
         {/* <SearchTypeFilter searchType={searchType} onSearchTypeChange={setSearchType} /> */}
