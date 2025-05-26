@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Share2Icon, Users, Loader, UserPlus } from 'lucide-react';
+import { Share2Icon, Users, Loader, UserPlus, ChevronDown, Shield } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { ACCESS_ROLE_IDS } from 'librechat-data-provider';
 import type { TPrincipal } from 'librechat-data-provider';
@@ -10,6 +10,7 @@ import {
   OGDialogClose,
   OGDialogContent,
   OGDialogTrigger,
+  Dropdown,
 } from '~/components/ui';
 import { cn, removeFocusOutlines } from '~/utils';
 import { useToastContext } from '~/Providers';
@@ -18,6 +19,7 @@ import { useLocalize } from '~/hooks';
 import PeoplePicker from './PeoplePicker/PeoplePicker';
 import PublicSharingToggle from './PublicSharingToggle';
 import ManagePermissionsDialog from './ManagePermissionsDialog';
+import { MOCK_ACCESS_ROLES } from './mockData';
 
 export default function GrantAccessDialog({
   agent_id = '',
@@ -41,6 +43,7 @@ export default function GrantAccessDialog({
 
   // State for new shares being added
   const [newShares, setNewShares] = useState<TPrincipal[]>([]);
+  const [defaultPermission, setDefaultPermission] = useState<string>(ACCESS_ROLE_IDS.AGENT_VIEWER);
   const [isPublic, setIsPublic] = useState(false);
   const [publicRole, setPublicRole] = useState<string>(ACCESS_ROLE_IDS.AGENT_VIEWER);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -56,8 +59,10 @@ export default function GrantAccessDialog({
     return null;
   }
 
-  const handleSelectPrincipal = (principals: TPrincipal[]) => {
-    setNewShares([...principals]);
+  const handleSelectPrincipal = (principal: TPrincipal) => {
+    // Add the selected principal with the current default permission
+    const principalWithRole = { ...principal, accessRoleId: defaultPermission };
+    setNewShares([...newShares, principalWithRole]);
   };
 
   const handleRemoveShare = (id: string) => {
@@ -100,6 +105,7 @@ export default function GrantAccessDialog({
 
       // Reset form and close
       setNewShares([]);
+      setDefaultPermission(ACCESS_ROLE_IDS.AGENT_VIEWER);
       setIsPublic(false);
       setPublicRole(ACCESS_ROLE_IDS.AGENT_VIEWER);
       setIsModalOpen(false);
@@ -115,6 +121,7 @@ export default function GrantAccessDialog({
 
   const handleCancel = () => {
     setNewShares([]);
+    setDefaultPermission(ACCESS_ROLE_IDS.AGENT_VIEWER);
     setIsPublic(false);
     setPublicRole(ACCESS_ROLE_IDS.AGENT_VIEWER);
     setIsModalOpen(false);
@@ -151,7 +158,7 @@ export default function GrantAccessDialog({
         </button>
       </OGDialogTrigger>
 
-      <OGDialogContent className="w-11/12 overflow-y-auto md:max-w-3xl">
+      <OGDialogContent className="max-h-[90vh] w-11/12 overflow-y-auto md:max-w-3xl">
         <OGDialogTitle>
           <div className="flex items-center gap-2">
             <Users className="h-5 w-5" />
@@ -168,6 +175,32 @@ export default function GrantAccessDialog({
             onSelectionChange={setNewShares}
             placeholder="Search for people or groups by name or email"
           />
+
+          {/* Default Permission Level */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Shield className="h-4 w-4 text-text-secondary" />
+                <label className="text-sm font-medium text-text-primary">Permission Level</label>
+              </div>
+            </div>
+            <Dropdown
+              value={defaultPermission}
+              onChange={setDefaultPermission}
+              options={MOCK_ACCESS_ROLES.map((role) => ({
+                value: role.accessRoleId,
+                label: role.name,
+                icon: role.accessRoleId.includes('editor') ? (
+                  <div className="h-2 w-2 rounded-full bg-green-500" />
+                ) : (
+                  <div className="h-2 w-2 rounded-full bg-blue-500" />
+                ),
+              }))}
+              sizeClasses="w-[180px]"
+              testId="DefaultPermissionDropdown"
+              className="z-50"
+            />
+          </div>
 
           {/* Public Sharing Toggle */}
           <PublicSharingToggle
