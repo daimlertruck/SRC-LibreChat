@@ -329,7 +329,7 @@ const searchPrincipals = async function (searchPattern, limit = 10, typeFilter =
 
   // Search users if not filtering for groups only
   if (!typeFilter || typeFilter === 'user') {
-    const userFields = 'name email username avatar provider';
+    const userFields = 'name email username avatar provider openidId';
     promises.push(
       searchUsers(trimmedPattern, limit * 2, userFields)
         .then(users => users.map(user => ({ ...user, type: 'user' })))

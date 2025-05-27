@@ -21,19 +21,23 @@ export default function PeoplePicker({
   const [selectedShares, setSelectedShares] = useState<TPrincipal[]>([]);
 
   // Search parameters for the API
-  const searchParams: PrincipalSearchParams = useMemo(() => ({
-    q: searchQuery,
-    limit: 10,
-    // type: undefined // search both users and groups
-  }), [searchQuery]);
+  const searchParams: PrincipalSearchParams = useMemo(
+    () => ({
+      q: searchQuery,
+      limit: 10,
+      // type: undefined // search both users and groups
+    }),
+    [searchQuery],
+  );
 
   // Use the real API to search for principals
-  const { data: searchResponse, isLoading: queryIsLoading, error } = useSearchPrincipalsQuery(
-    searchParams,
-    {
-      enabled: searchQuery.length >= 2, // Only search when query is long enough
-    }
-  );
+  const {
+    data: searchResponse,
+    isLoading: queryIsLoading,
+    error,
+  } = useSearchPrincipalsQuery(searchParams, {
+    enabled: searchQuery.length >= 2, // Only search when query is long enough
+  });
 
   // Calculate actual loading state: only show loading when query is valid and actually loading
   const isLoading = searchQuery.length >= 2 && queryIsLoading;
@@ -42,15 +46,15 @@ export default function PeoplePicker({
   const selectableResults = useMemo(() => {
     const results = searchResponse?.results || [];
     // Convert PrincipalSearchResult to TPrincipal format with guaranteed non-undefined id
-    const convertedResults: TPrincipal[] = results.map(result => ({
-      id: result.id, // This is guaranteed to be a string from the API
+    const convertedResults: TPrincipal[] = results.map((result) => ({
+      id: result.id || result.idOnTheSource, // This is guaranteed to be a string from the API
       type: result.type,
       name: result.name,
       email: result.email,
       source: result.source,
       avatar: result.avatar,
     }));
-    
+
     return convertedResults.filter(
       (result) => !selectedShares.some((share) => share.id === result.id),
     );
@@ -68,10 +72,10 @@ export default function PeoplePicker({
             // API search results always have id and name, email for users
             const key = s.email || s.id || 'unknown';
             const value = s.name || s.email || s.id || 'Unknown';
-            return { 
-              ...s, 
-              key, 
-              value 
+            return {
+              ...s,
+              key,
+              value,
             };
           })}
           renderOptions={(o) => <PeoplePickerSearchItem principal={o} />}

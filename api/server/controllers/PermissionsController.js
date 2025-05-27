@@ -362,13 +362,16 @@ const searchPrincipals = async (req, res) => {
           );
           
           // Step 4: Merge and deduplicate results
-          const localEmails = new Set(localResults.map(p => p.email).filter(Boolean));
-          const localOpenIdIds = new Set(localResults.map(p => p.openidId).filter(Boolean));
+          // TODO: Currently only checking email duplicates - need to fix openIdId mapping
+          // when Graph API id field is verified to match stored openidId (sub claim)
+          const localEmails = new Set(localResults.map(p => p.email?.toLowerCase()).filter(Boolean));
           const localGroupSourceIds = new Set(localResults.map(p => p.idOnTheSource).filter(Boolean));
           
-          // Add Graph API users (avoid duplicates by openidId and email)
+          // Add Graph API users (avoid duplicates by email only for now)
           for (const person of graphResults.people || []) {
-            if (!localOpenIdIds.has(person.openidId) && !localEmails.has(person.email)) {
+            const isDuplicateByEmail = person.email && localEmails.has(person.email.toLowerCase());
+            
+            if (!isDuplicateByEmail) {
               allPrincipals.push({
                 _id: null, // Reason: Keep _id null, frontend will upsert based on idOnTheSource
                 type: 'user',
