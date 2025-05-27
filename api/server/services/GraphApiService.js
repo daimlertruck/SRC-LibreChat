@@ -191,7 +191,6 @@ const transformPersonToInternal = (person) => {
   const primaryEmail = person.scoredEmailAddresses?.[0]?.address || person.userPrincipalName;
   
   return {
-    id: person.id,
     type: 'user',
     displayName: person.displayName,
     email: primaryEmail,
@@ -207,7 +206,8 @@ const transformPersonToInternal = (person) => {
     },
     relevanceScore: person.scoredEmailAddresses?.[0]?.relevanceScore || 0.5,
     phones: person.phones || [],
-    source: 'graph',
+    source: 'entra',
+    openidId: person.id, // Reason: Include openidId for duplicate removal against local users
   };
 };
 
@@ -220,7 +220,6 @@ const transformGroupToInternal = (group) => {
   const primaryEmail = group.scoredEmailAddresses?.[0]?.address || group.userPrincipalName;
   
   return {
-    id: group.id,
     type: 'group',
     displayName: group.displayName,
     email: primaryEmail,
@@ -230,7 +229,8 @@ const transformGroupToInternal = (group) => {
       subclass: group.personType?.subclass,
     },
     relevanceScore: group.scoredEmailAddresses?.[0]?.relevanceScore || 0.5,
-    source: 'graph',
+    source: 'entra',
+    idOnTheSource: group.id, // Reason: Include Entra ID for duplicate removal and mapping to group schema
   };
 };
 

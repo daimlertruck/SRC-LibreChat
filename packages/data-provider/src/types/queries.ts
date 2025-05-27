@@ -114,7 +114,7 @@ export type PrincipalSearchParams = {
 };
 
 export type PrincipalSearchResult = {
-  id: string;
+  id: string | null; // null for Entra ID principals that don't exist locally yet
   type: 'user' | 'group';
   name: string;
   email?: string; // for users
@@ -123,6 +123,7 @@ export type PrincipalSearchResult = {
   provider?: string; // for users
   source: 'local' | 'entra';
   memberCount?: number; // for groups
+  idOnTheSource?: string; // Entra ID for users (maps to openidId) and groups (maps to idOnTheSource)
 };
 
 export type PrincipalSearchResponse = {
@@ -131,4 +132,8 @@ export type PrincipalSearchResponse = {
   type?: 'user' | 'group';
   results: PrincipalSearchResult[];
   count: number;
+  sources: {
+    local: number;
+    entra: number;
+  };
 };

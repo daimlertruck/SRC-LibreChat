@@ -335,11 +335,11 @@ describe('GraphApiService', () => {
       expect(result.people).toHaveLength(1);
       expect(result.groups).toHaveLength(0);
       expect(result.people[0]).toMatchObject({
-        id: 'user-1',
         type: 'user',
         displayName: 'John Doe',
         email: 'john@company.com',
-        source: 'graph',
+        source: 'entra',
+        openidId: 'user-1',
       });
     });
 
@@ -371,11 +371,11 @@ describe('GraphApiService', () => {
       expect(result.people).toHaveLength(0);
       expect(result.groups).toHaveLength(1);
       expect(result.groups[0]).toMatchObject({
-        id: 'group-1',
         type: 'group',
         displayName: 'Marketing Team',
         email: 'marketing@company.com',
-        source: 'graph',
+        source: 'entra',
+        idOnTheSource: 'group-1',
       });
     });
 
@@ -439,10 +439,10 @@ describe('GraphApiService', () => {
 
       expect(result).toHaveLength(1);
       expect(result[0]).toMatchObject({
-        id: 'group-1',
         type: 'group',
         displayName: 'Team A',
         email: 'team-a@company.com',
+        idOnTheSource: 'group-1',
       });
     });
 
@@ -474,7 +474,6 @@ describe('GraphApiService', () => {
         const result = GraphApiService.transformPersonToInternal(graphPerson);
 
         expect(result).toEqual({
-          id: 'user-123',
           type: 'user',
           displayName: 'Jane Smith',
           email: 'jane@company.com',
@@ -487,7 +486,8 @@ describe('GraphApiService', () => {
           personType: { class: 'Person', subclass: 'OrganizationUser' },
           relevanceScore: 0.95,
           phones: [{ number: '+1234567890' }],
-          source: 'graph',
+          source: 'entra',
+          openidId: 'user-123',
         });
       });
 
@@ -519,14 +519,14 @@ describe('GraphApiService', () => {
         const result = GraphApiService.transformGroupToInternal(graphGroup);
 
         expect(result).toEqual({
-          id: 'group-456',
           type: 'group',
           displayName: 'Development Team',
           email: 'dev-team@company.com',
           userPrincipalName: 'dev-team@company.com',
           personType: { class: 'Group', subclass: 'UnifiedGroup' },
           relevanceScore: 0.85,
-          source: 'graph',
+          source: 'entra',
+          idOnTheSource: 'group-456',
         });
       });
     });
@@ -563,9 +563,9 @@ describe('GraphApiService', () => {
       expect(Array.isArray(result)).toBe(true);
       expect(result).toHaveLength(1);
       expect(result[0]).toMatchObject({
-        id: 'user-1',
         type: 'user',
         displayName: 'John Doe',
+        openidId: 'user-1',
       });
     });
 
@@ -594,9 +594,9 @@ describe('GraphApiService', () => {
       expect(Array.isArray(result)).toBe(true);
       expect(result).toHaveLength(1);
       expect(result[0]).toMatchObject({
-        id: 'group-1',
         type: 'group',
         displayName: 'Marketing Team',
+        idOnTheSource: 'group-1',
       });
     });
 

@@ -8,6 +8,8 @@ const {
 } = require('~/server/services/PermissionService');
 const { AclEntry } = require('~/models/AclEntry');
 const { searchPrincipals: searchPrincipalsService } = require('~/models/userGroupMethods');
+const { searchEntraIdPrincipals } = require('~/server/services/GraphApiService');
+const { isEnabled } = require('~/server/utils');
 
 /**
  * Generic controller for resource permission endpoints
@@ -296,6 +298,7 @@ const getUserEffectivePermissions = async (req, res) => {
 
 /**
  * Search for users and groups to grant permissions
+ * Supports hybrid local database + Entra ID search when configured
  * @route GET /api/permissions/search-principals
  */
 const searchPrincipals = async (req, res) => {
@@ -317,14 +320,111 @@ const searchPrincipals = async (req, res) => {
     const searchLimit = Math.min(Math.max(1, parseInt(limit) || 10), 50);
     const typeFilter = ['user', 'group'].includes(type) ? type : null;
 
-    const principals = await searchPrincipalsService(
+    // Step 1: Search local database first for immediate results
+    const localResults = await searchPrincipalsService(
       query.trim(),
       searchLimit,
       typeFilter
     );
 
+    let allPrincipals = [...localResults];
+
+    // Step 2: Check if Entra ID integration is enabled and user has OpenID provider
+    const useEntraId = isEnabled(process.env.USE_ENTRA_ID_FOR_PEOPLE_SEARCH) &&
+                       isEnabled(process.env.OPENID_REUSE_TOKENS) &&
+                       req.user?.provider === 'openid' &&
+                       req.user?.openidId;
+
+    // Step 3: Enhance with Graph API results if enabled and local results are insufficient  
+    if (useEntraId && localResults.length < searchLimit) {
+      try {
+        const graphTypeMap = {
+          'user': 'users',
+          'group': 'groups',
+          null: 'all'
+        };
+        
+        // Reason: GraphApiService handles token exchange and caching internally
+        // We just need to pass the user's OpenID identifier for token lookup
+        // Extract access token from authorization header
+        const authHeader = req.headers.authorization;
+        const accessToken = authHeader && authHeader.startsWith('Bearer ') 
+          ? authHeader.substring(7) 
+          : null;
+          
+        if (accessToken) {
+          const graphResults = await searchEntraIdPrincipals(
+            accessToken,
+            req.user.openidId,
+            query.trim(),
+            graphTypeMap[typeFilter],
+            searchLimit - localResults.length
+          );
+          
+          // Step 4: Merge and deduplicate results
+          const localEmails = new Set(localResults.map(p => p.email).filter(Boolean));
+          const localOpenIdIds = new Set(localResults.map(p => p.openidId).filter(Boolean));
+          const localGroupSourceIds = new Set(localResults.map(p => p.idOnTheSource).filter(Boolean));
+          
+          // Add Graph API users (avoid duplicates by openidId and email)
+          for (const person of graphResults.people || []) {
+            if (!localOpenIdIds.has(person.openidId) && !localEmails.has(person.email)) {
+              allPrincipals.push({
+                _id: null, // Reason: Keep _id null, frontend will upsert based on idOnTheSource
+                type: 'user',
+                name: person.displayName,
+                email: person.email,
+                username: person.userPrincipalName,
+                userPrincipalName: person.userPrincipalName,
+                givenName: person.givenName,
+                surname: person.surname,
+                department: person.department,
+                jobTitle: person.jobTitle,
+                companyName: person.companyName,
+                source: person.source,
+                relevanceScore: person.relevanceScore,
+                openidId: person.openidId, // Reason: Use openidId from GraphApiService transformation
+                idOnTheSource: person.openidId // Reason: Store Entra ID for frontend mapping (users use same ID for both)
+              });
+            }
+          }
+          
+          // Add Graph API groups (avoid duplicates by idOnTheSource and email)
+          for (const group of graphResults.groups || []) {
+            if (!localGroupSourceIds.has(group.idOnTheSource) && !localEmails.has(group.email)) {
+              allPrincipals.push({
+                _id: null, // Reason: Keep _id null, frontend will upsert based on idOnTheSource
+                type: 'group',
+                name: group.displayName,
+                email: group.email,
+                userPrincipalName: group.userPrincipalName,
+                source: group.source,
+                relevanceScore: group.relevanceScore,
+                idOnTheSource: group.idOnTheSource // Reason: Use idOnTheSource from GraphApiService transformation
+              });
+            }
+          }
+          
+          // Step 5: Sort by relevance (local results first, then by relevance score)
+          allPrincipals = allPrincipals
+            .sort((a, b) => {
+              // Prioritize local results
+              if ((a.source || 'local') === 'local' && b.source === 'entra') return -1;
+              if (a.source === 'entra' && (b.source || 'local') === 'local') return 1;
+              // Within same source, sort by relevance score
+              return (b.relevanceScore || 0.5) - (a.relevanceScore || 0.5);
+            })
+            .slice(0, searchLimit);
+        }
+        
+      } catch (graphError) {
+        // Reason: Graceful degradation - if Graph API fails, return local results
+        logger.warn('Graph API search failed, falling back to local results:', graphError.message);
+      }
+    }
+
     // Format the results for frontend consumption
-    const formattedResults = principals.map(principal => {
+    const formattedResults = allPrincipals.map(principal => {
       if (principal.type === 'user') {
         return {
           id: principal._id,
@@ -332,17 +432,27 @@ const searchPrincipals = async (req, res) => {
           name: principal.name || principal.email,
           email: principal.email,
           username: principal.username,
+          userPrincipalName: principal.userPrincipalName,
           avatar: principal.avatar,
           provider: principal.provider,
-          source: 'local' // Users are always local
+          givenName: principal.givenName,
+          surname: principal.surname,
+          department: principal.department,
+          jobTitle: principal.jobTitle,
+          companyName: principal.companyName,
+          source: principal.source || 'local',
+          idOnTheSource: principal.idOnTheSource // Reason: Include Entra ID for frontend upsert logic
         };
       } else {
         return {
           id: principal._id,
           type: 'group',
           name: principal.name,
+          email: principal.email,
+          userPrincipalName: principal.userPrincipalName,
           source: principal.source || 'local',
-          memberCount: principal.memberIds ? principal.memberIds.length : 0
+          memberCount: principal.memberIds ? principal.memberIds.length : 0,
+          idOnTheSource: principal.idOnTheSource // Reason: Include Entra ID for frontend upsert logic
         };
       }
     });
@@ -352,7 +462,11 @@ const searchPrincipals = async (req, res) => {
       limit: searchLimit,
       type: typeFilter,
       results: formattedResults,
-      count: formattedResults.length
+      count: formattedResults.length,
+      sources: {
+        local: formattedResults.filter(r => r.source === 'local').length,
+        entra: formattedResults.filter(r => r.source === 'entra').length
+      }
     });
 
   } catch (error) {
