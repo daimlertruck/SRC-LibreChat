@@ -7,7 +7,7 @@ const {
   bulkUpdateResourcePermissions
 } = require('~/server/services/PermissionService');
 const { AclEntry } = require('~/models/AclEntry');
-const { searchPrincipals: searchPrincipalsService } = require('~/models/userGroupMethods');
+const { searchPrincipals: searchPrincipalsService, sortPrincipalsByRelevance, calculateRelevanceScore } = require('~/models/userGroupMethods');
 const { searchEntraIdPrincipals } = require('~/server/services/GraphApiService');
 const { isEnabled } = require('~/server/utils');
 
@@ -367,57 +367,40 @@ const searchPrincipals = async (req, res) => {
           const localEmails = new Set(localResults.map(p => p.email?.toLowerCase()).filter(Boolean));
           const localGroupSourceIds = new Set(localResults.map(p => p.idOnTheSource).filter(Boolean));
           
-          // Add Graph API users (avoid duplicates by email only for now)
-          for (const person of graphResults.people || []) {
-            const isDuplicateByEmail = person.email && localEmails.has(person.email.toLowerCase());
+          // Add Graph API results (avoid duplicates by email and idOnTheSource)
+          for (const principal of graphResults) {
+            const isDuplicateByEmail = principal.email && localEmails.has(principal.email.toLowerCase());
+            const isDuplicateBySourceId = principal.idOnTheSource && localGroupSourceIds.has(principal.idOnTheSource);
             
-            if (!isDuplicateByEmail) {
+            if (!isDuplicateByEmail && !isDuplicateBySourceId) {
               allPrincipals.push({
                 _id: null, // Reason: Keep _id null, frontend will upsert based on idOnTheSource
-                type: 'user',
-                name: person.displayName,
-                email: person.email,
-                username: person.userPrincipalName,
-                userPrincipalName: person.userPrincipalName,
-                givenName: person.givenName,
-                surname: person.surname,
-                department: person.department,
-                jobTitle: person.jobTitle,
-                companyName: person.companyName,
-                source: person.source,
-                relevanceScore: person.relevanceScore,
-                openidId: person.openidId, // Reason: Use openidId from GraphApiService transformation
-                idOnTheSource: person.openidId // Reason: Store Entra ID for frontend mapping (users use same ID for both)
+                type: principal.type,
+                name: principal.name,
+                email: principal.email,
+                username: principal.username,
+                userPrincipalName: principal.username, // Map username to userPrincipalName for consistency
+                source: principal.source,
+                relevanceScore: 0.8, // Default relevance score for Graph results
+                idOnTheSource: principal.idOnTheSource
               });
             }
           }
           
-          // Add Graph API groups (avoid duplicates by idOnTheSource and email)
-          for (const group of graphResults.groups || []) {
-            if (!localGroupSourceIds.has(group.idOnTheSource) && !localEmails.has(group.email)) {
-              allPrincipals.push({
-                _id: null, // Reason: Keep _id null, frontend will upsert based on idOnTheSource
-                type: 'group',
-                name: group.displayName,
-                email: group.email,
-                userPrincipalName: group.userPrincipalName,
-                source: group.source,
-                relevanceScore: group.relevanceScore,
-                idOnTheSource: group.idOnTheSource // Reason: Use idOnTheSource from GraphApiService transformation
-              });
-            }
-          }
+          // Step 5: Calculate relevance scores and sort by relevance 
+          const scoredResults = allPrincipals.map(item => ({
+            ...item,
+            _searchScore: calculateRelevanceScore(item, query.trim())
+          }));
           
-          // Step 5: Sort by relevance (local results first, then by relevance score)
-          allPrincipals = allPrincipals
-            .sort((a, b) => {
-              // Prioritize local results
-              if ((a.source || 'local') === 'local' && b.source === 'entra') return -1;
-              if (a.source === 'entra' && (b.source || 'local') === 'local') return 1;
-              // Within same source, sort by relevance score
-              return (b.relevanceScore || 0.5) - (a.relevanceScore || 0.5);
-            })
-            .slice(0, searchLimit);
+          // Sort using the helper function and apply limit
+          allPrincipals = sortPrincipalsByRelevance(scoredResults)
+            .slice(0, searchLimit)
+            .map(result => {
+              // Remove the search score from final results
+              const { _searchScore, ...resultWithoutScore } = result;
+              return resultWithoutScore;
+            });
         }
         
       } catch (graphError) {

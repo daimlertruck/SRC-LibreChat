@@ -3,7 +3,11 @@ const User = require('./User');
 const Group = require('./Group');
 const { searchUsers } = require('./userMethods');
 const { logger } = require('~/config');
-
+/**
+ * @import { TPrincipalSearchResult } from 'librechat-data-provider'
+ * @import { TUser } from 'librechat-data-provider'
+ * @import { IGroup } from '@librechat/data-schemas'
+ */
 /**
  * Find a group by its ID
  * @param {string|mongoose.Types.ObjectId} groupId - The group ID
@@ -310,14 +314,118 @@ const syncUserEntraGroups = async function (userId, entraGroups, session = null)
   };
 };
 
+
+
+/**
+ * Calculate relevance score for a search result
+ * @param {TPrincipalSearchResult} item - The search result item
+ * @param {string} searchPattern - The search pattern
+ * @returns {number} Relevance score (0-100)
+ */
+const calculateRelevanceScore = (item, searchPattern) => {
+  const exactRegex = new RegExp(`^${searchPattern}$`, 'i');
+  const startsWithPattern = searchPattern.toLowerCase();
+  
+  // Get searchable text based on type
+  const searchableFields = item.type === 'user' 
+    ? [item.name, item.email, item.username].filter(Boolean)
+    : [item.name].filter(Boolean);
+  
+  let maxScore = 0;
+  
+  for (const field of searchableFields) {
+    const fieldLower = field.toLowerCase();
+    let score = 0;
+    
+    // Exact match gets highest score
+    if (exactRegex.test(field)) {
+      score = 100;
+    }
+    // Starts with query gets high score
+    else if (fieldLower.startsWith(startsWithPattern)) {
+      score = 80;
+    }
+    // Contains query gets medium score
+    else if (fieldLower.includes(startsWithPattern)) {
+      score = 50;
+    }
+    // Default score for regex match
+    else {
+      score = 10;
+    }
+    
+    maxScore = Math.max(maxScore, score);
+  }
+  
+  return maxScore;
+};
+
+/**
+ * Sort principals by relevance score and type priority
+ * @param {Array} results - Array of results with _searchScore property
+ * @returns {Array} Sorted array
+ */
+const sortPrincipalsByRelevance = (results) => {
+  return results.sort((a, b) => {
+    // First sort by score (descending)
+    if (b._searchScore !== a._searchScore) {
+      return b._searchScore - a._searchScore;
+    }
+    // If scores are equal, prioritize users over groups
+    if (a.type !== b.type) {
+      return a.type === 'user' ? -1 : 1;
+    }
+    // Finally sort alphabetically
+    const aName = a.name || a.email || '';
+    const bName = b.name || b.email || '';
+    return aName.localeCompare(bName);
+  });
+};
+
+/**
+ * Transform user object to TPrincipalSearchResult format
+ * @param {TUser} user - User object from database
+ * @returns {TPrincipalSearchResult} Transformed user result
+ */
+const transformUserToTPrincipalSearchResult = (user) => {
+  return {
+    id: user._id?.toString(),
+    type: 'user',
+    name: user.name || user.email,
+    email: user.email,
+    username: user.username,
+    avatar: user.avatar,
+    provider: user.provider,
+    source: 'local',
+    idOnTheSource: user.openidId
+  };
+};
+
+/**
+ * Transform group object to TPrincipalSearchResult format
+ * @param {IGroup} group - Group object from database
+ * @returns {TPrincipalSearchResult} Transformed group result
+ */
+const transformGroupToTPrincipalSearchResult = (group) => {
+  return {
+    id: group._id?.toString(),
+    type: 'group',
+    name: group.name,
+    email: group.email,
+    source: group.source || 'local',
+    memberCount: group.memberIds ? group.memberIds.length : 0,
+    idOnTheSource: group.idOnTheSource
+  };
+};
+
 /**
  * Search for principals (users and groups) by pattern matching on name/email
- * Returns combined results sorted by relevance
+ * Returns combined results in TPrincipalSearchResult format without sorting
  * @param {string} searchPattern - The pattern to search for
  * @param {number} [limit=10] - Maximum number of results to return
  * @param {string} [typeFilter] - Optional filter: 'user', 'group', or null for all
  * @param {mongoose.ClientSession} [session] - Optional MongoDB session for transactions
- * @returns {Promise<Array>} Array of principals with type field and relevance sorting
+ * @returns {Promise<TPrincipalSearchResult[]>} Array of principals in TPrincipalSearchResult format
  */
 const searchPrincipals = async function (searchPattern, limit = 10, typeFilter = null, session = null) {
   if (!searchPattern || searchPattern.trim().length === 0) {
@@ -332,7 +440,7 @@ const searchPrincipals = async function (searchPattern, limit = 10, typeFilter =
     const userFields = 'name email username avatar provider openidId';
     promises.push(
       searchUsers(trimmedPattern, limit * 2, userFields)
-        .then(users => users.map(user => ({ ...user, type: 'user' })))
+        .then(users => users.map(transformUserToTPrincipalSearchResult))
     );
   } else {
     promises.push(Promise.resolve([]));
@@ -342,7 +450,7 @@ const searchPrincipals = async function (searchPattern, limit = 10, typeFilter =
   if (!typeFilter || typeFilter === 'group') {
     promises.push(
       findGroupsByNamePattern(trimmedPattern, null, limit * 2, session)
-        .then(groups => groups.map(group => ({ ...group, type: 'group' })))
+        .then(groups => groups.map(transformGroupToTPrincipalSearchResult))
     );
   } else {
     promises.push(Promise.resolve([]));
@@ -350,70 +458,9 @@ const searchPrincipals = async function (searchPattern, limit = 10, typeFilter =
 
   const [users, groups] = await Promise.all(promises);
 
-  // Combine all results
+  // Combine all results and apply limit
   const combined = [...users, ...groups];
-
-  // Score all results for relevance
-  const exactRegex = new RegExp(`^${trimmedPattern}$`, 'i');
-  const startsWithPattern = trimmedPattern.toLowerCase();
-
-  const scoredResults = combined.map(item => {
-    // Get searchable text based on type
-    const searchableFields = item.type === 'user' 
-      ? [item.name, item.email, item.username].filter(Boolean)
-      : [item.name].filter(Boolean);
-    
-    let maxScore = 0;
-    
-    for (const field of searchableFields) {
-      const fieldLower = field.toLowerCase();
-      let score = 0;
-      
-      // Exact match gets highest score
-      if (exactRegex.test(field)) {
-        score = 100;
-      }
-      // Starts with query gets high score
-      else if (fieldLower.startsWith(startsWithPattern)) {
-        score = 80;
-      }
-      // Contains query gets medium score
-      else if (fieldLower.includes(startsWithPattern)) {
-        score = 50;
-      }
-      // Default score for regex match
-      else {
-        score = 10;
-      }
-      
-      maxScore = Math.max(maxScore, score);
-    }
-    
-    return { ...item, _searchScore: maxScore };
-  });
-
-  // Sort by relevance and return top results
-  return scoredResults
-    .sort((a, b) => {
-      // First sort by score (descending)
-      if (b._searchScore !== a._searchScore) {
-        return b._searchScore - a._searchScore;
-      }
-      // If scores are equal, prioritize users over groups
-      if (a.type !== b.type) {
-        return a.type === 'user' ? -1 : 1;
-      }
-      // Finally sort alphabetically
-      const aName = a.name || a.email || '';
-      const bName = b.name || b.email || '';
-      return aName.localeCompare(bName);
-    })
-    .slice(0, limit)
-    .map(result => {
-      // Remove the search score from final results
-      const { _searchScore, ...resultWithoutScore } = result;
-      return resultWithoutScore;
-    });
+  return combined.slice(0, limit);
 };
 
 module.exports = {
@@ -433,5 +480,9 @@ module.exports = {
   syncUserEntraGroups,
   
   // Search functions
-  searchPrincipals
+  searchPrincipals,
+  
+  // Helper functions
+  calculateRelevanceScore,
+  sortPrincipalsByRelevance
 };
