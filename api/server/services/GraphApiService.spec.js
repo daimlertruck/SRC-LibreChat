@@ -263,28 +263,70 @@ describe('GraphApiService', () => {
   });
 
   describe('searchEntraIdPrincipals', () => {
-    const mockResponse = {
+    // Mock data used by multiple tests
+    const mockContactsResponse = {
       value: [
         {
-          id: 'user-1',
+          id: 'contact-user-1',
           displayName: 'John Doe',
           userPrincipalName: 'john@company.com',
+          mail: 'john@company.com',
           personType: { class: 'Person', subclass: 'OrganizationUser' },
           scoredEmailAddresses: [{ address: 'john@company.com', relevanceScore: 0.9 }],
         },
         {
-          id: 'group-1',
+          id: 'contact-group-1',
           displayName: 'Marketing Team',
-          userPrincipalName: 'marketing@company.com',
+          mail: 'marketing@company.com',
           personType: { class: 'Group', subclass: 'UnifiedGroup' },
           scoredEmailAddresses: [{ address: 'marketing@company.com', relevanceScore: 0.8 }],
         },
       ],
     };
 
+    const mockUsersResponse = {
+      value: [
+        {
+          id: 'dir-user-1',
+          displayName: 'Jane Smith',
+          userPrincipalName: 'jane@company.com',
+          mail: 'jane@company.com',
+        },
+      ],
+    };
+
+    const mockGroupsResponse = {
+      value: [
+        {
+          id: 'dir-group-1',
+          displayName: 'Development Team',
+          mail: 'dev@company.com',
+        },
+      ],
+    };
+
     beforeEach(() => {
-      mockGraphClient.get.mockResolvedValue(mockResponse);
+      // Reset mock call history for each test
+      jest.clearAllMocks();
+      
+      // Re-apply the Client.init mock after clearAllMocks
+      Client.init.mockReturnValue(mockGraphClient);
+      
+      // Re-apply openid-client mock
+      if (client.genericGrantRequest) {
+        client.genericGrantRequest.mockResolvedValue({
+          access_token: 'mocked-graph-token',
+          expires_in: 3600,
+        });
+      }
+      
+      // Re-apply cache mock
+      mockTokensCache.get.mockResolvedValue(null); // Force token exchange
+      mockTokensCache.set.mockResolvedValue();
+      getLogStores.mockReturnValue(mockTokensCache);
+      getOpenIdConfig.mockReturnValue(mockOpenIdConfig);
     });
+
 
     it('should return empty results for short queries', async () => {
       const result = await GraphApiService.searchEntraIdPrincipals(
@@ -295,29 +337,28 @@ describe('GraphApiService', () => {
         10
       );
 
-      expect(result).toEqual({
-        people: [],
-        groups: [],
-        totalCount: 0,
-      });
-
+      expect(result).toEqual([]);
       expect(mockGraphClient.api).not.toHaveBeenCalled();
     });
 
-    it('should search for users only with correct filter', async () => {
-      // Mock response with only user (simulating server-side filtering)
-      const userOnlyResponse = {
+    it('should search contacts first and additional users for users type', async () => {
+      // Mock responses for this specific test
+      const contactsFilteredResponse = {
         value: [
           {
-            id: 'user-1',
+            id: 'contact-user-1',
             displayName: 'John Doe',
             userPrincipalName: 'john@company.com',
+            mail: 'john@company.com',
             personType: { class: 'Person', subclass: 'OrganizationUser' },
             scoredEmailAddresses: [{ address: 'john@company.com', relevanceScore: 0.9 }],
           },
         ],
       };
-      mockGraphClient.get.mockResolvedValueOnce(userOnlyResponse);
+      
+      mockGraphClient.get
+        .mockResolvedValueOnce(contactsFilteredResponse) // contacts call
+        .mockResolvedValueOnce(mockUsersResponse);       // users call
 
       const result = await GraphApiService.searchEntraIdPrincipals(
         'token',
@@ -327,59 +368,71 @@ describe('GraphApiService', () => {
         10
       );
 
+      // Should call contacts first with user filter
       expect(mockGraphClient.api).toHaveBeenCalledWith('/me/people');
-      expect(mockGraphClient.search).toHaveBeenCalledWith('"john"');
       expect(mockGraphClient.filter).toHaveBeenCalledWith("personType/subclass eq 'OrganizationUser'");
-      expect(mockGraphClient.top).toHaveBeenCalledWith(10);
+      
+      // Should call users endpoint for additional results
+      expect(mockGraphClient.api).toHaveBeenCalledWith('/users');
+      expect(mockGraphClient.search).toHaveBeenCalledWith('"displayName:john" OR "userPrincipalName:john" OR "mail:john" OR "givenName:john" OR "surname:john"');
 
-      expect(result.people).toHaveLength(1);
-      expect(result.groups).toHaveLength(0);
-      expect(result.people[0]).toMatchObject({
+      // Should return TPrincipalSearchResult array
+      expect(Array.isArray(result)).toBe(true);
+      expect(result).toHaveLength(2); // 1 from contacts + 1 from users
+      expect(result[0]).toMatchObject({
+        id: null,
         type: 'user',
-        displayName: 'John Doe',
+        name: 'John Doe',
         email: 'john@company.com',
         source: 'entra',
-        openidId: 'user-1',
+        idOnTheSource: 'contact-user-1',
       });
     });
 
-    it('should search for groups only with correct filter', async () => {
-      // Mock response with only group (simulating server-side filtering)
-      const groupOnlyResponse = {
+    it('should search contacts first and additional groups for groups type', async () => {
+      // Mock responses for this specific test
+      const contactsGroupFilteredResponse = {
         value: [
           {
-            id: 'group-1',
+            id: 'contact-group-1',
             displayName: 'Marketing Team',
-            userPrincipalName: 'marketing@company.com',
+            mail: 'marketing@company.com',
             personType: { class: 'Group', subclass: 'UnifiedGroup' },
             scoredEmailAddresses: [{ address: 'marketing@company.com', relevanceScore: 0.8 }],
           },
         ],
       };
-      mockGraphClient.get.mockResolvedValueOnce(groupOnlyResponse);
+      
+      mockGraphClient.get
+        .mockResolvedValueOnce(contactsGroupFilteredResponse) // contacts call
+        .mockResolvedValueOnce(mockGroupsResponse);           // groups call
 
       const result = await GraphApiService.searchEntraIdPrincipals(
         'token',
         'user',
-        'marketing',
+        'team',
         'groups',
         10
       );
 
-      expect(mockGraphClient.filter).toHaveBeenCalledWith("personType/subclass eq 'UnifiedGroup'");
+      // Should call contacts first with group filter
+      expect(mockGraphClient.filter).toHaveBeenCalledWith("personType/class eq 'Group'");
+      
+      // Should call groups endpoint for additional results
+      expect(mockGraphClient.api).toHaveBeenCalledWith('/groups');
+      expect(mockGraphClient.search).toHaveBeenCalledWith('"displayName:team" OR "mail:team" OR "mailNickname:team"');
 
-      expect(result.people).toHaveLength(0);
-      expect(result.groups).toHaveLength(1);
-      expect(result.groups[0]).toMatchObject({
-        type: 'group',
-        displayName: 'Marketing Team',
-        email: 'marketing@company.com',
-        source: 'entra',
-        idOnTheSource: 'group-1',
-      });
+      expect(Array.isArray(result)).toBe(true);
+      expect(result).toHaveLength(2); // 1 from contacts + 1 from groups
     });
 
-    it('should search for all with combined filter', async () => {
+    it('should search all endpoints for all type', async () => {
+      // Mock responses for this specific test
+      mockGraphClient.get
+        .mockResolvedValueOnce(mockContactsResponse) // contacts call (both user and group)
+        .mockResolvedValueOnce(mockUsersResponse)    // users call
+        .mockResolvedValueOnce(mockGroupsResponse);  // groups call
+
       const result = await GraphApiService.searchEntraIdPrincipals(
         'token',
         'user',
@@ -388,13 +441,85 @@ describe('GraphApiService', () => {
         10
       );
 
+      // Should call contacts with all filter
       expect(mockGraphClient.filter).toHaveBeenCalledWith(
-        "personType/subclass eq 'OrganizationUser' or personType/subclass eq 'UnifiedGroup'"
+        "(personType/subclass eq 'OrganizationUser') or (personType/class eq 'Group')"
+      );
+      
+      // Should call both users and groups endpoints
+      expect(mockGraphClient.api).toHaveBeenCalledWith('/users');
+      expect(mockGraphClient.api).toHaveBeenCalledWith('/groups');
+
+      expect(Array.isArray(result)).toBe(true);
+      expect(result).toHaveLength(4); // 2 from contacts + 1 from users + 1 from groups
+    });
+
+    it('should early exit if contacts reach limit', async () => {
+      // Mock contacts to return exactly the limit
+      const limitedContactsResponse = {
+        value: Array(10).fill({
+          id: 'contact-1',
+          displayName: 'Contact User',
+          mail: 'contact@company.com',
+          personType: { class: 'Person', subclass: 'OrganizationUser' },
+        }),
+      };
+      
+      mockGraphClient.get.mockResolvedValueOnce(limitedContactsResponse);
+
+      const result = await GraphApiService.searchEntraIdPrincipals(
+        'token',
+        'user',
+        'test',
+        'all',
+        10
       );
 
-      expect(result.people).toHaveLength(1);
-      expect(result.groups).toHaveLength(1);
-      expect(result.totalCount).toBe(2);
+      // Should only call contacts, not users or groups endpoints
+      expect(mockGraphClient.api).toHaveBeenCalledTimes(1);
+      expect(mockGraphClient.api).toHaveBeenCalledWith('/me/people');
+      
+      expect(result).toHaveLength(10);
+    });
+
+    it('should deduplicate results based on idOnTheSource', async () => {
+      // Mock responses with duplicate IDs
+      const duplicateContactsResponse = {
+        value: [
+          {
+            id: 'duplicate-id',
+            displayName: 'John Doe',
+            mail: 'john@company.com',
+            personType: { class: 'Person', subclass: 'OrganizationUser' },
+          },
+        ],
+      };
+      
+      const duplicateUsersResponse = {
+        value: [
+          {
+            id: 'duplicate-id', // Same ID as contact
+            displayName: 'John Doe',
+            mail: 'john@company.com',
+          },
+        ],
+      };
+
+      mockGraphClient.get
+        .mockResolvedValueOnce(duplicateContactsResponse)
+        .mockResolvedValueOnce(duplicateUsersResponse);
+
+      const result = await GraphApiService.searchEntraIdPrincipals(
+        'token',
+        'user',
+        'john',
+        'users',
+        10
+      );
+
+      // Should only return one result despite duplicate IDs
+      expect(result).toHaveLength(1);
+      expect(result[0].idOnTheSource).toBe('duplicate-id');
     });
 
     it('should handle Graph API errors gracefully', async () => {
@@ -408,11 +533,7 @@ describe('GraphApiService', () => {
         10
       );
 
-      expect(result).toEqual({
-        people: [],
-        groups: [],
-        totalCount: 0,
-      });
+      expect(result).toEqual([]);
     });
   });
 
@@ -532,88 +653,153 @@ describe('GraphApiService', () => {
     });
   });
 
-  describe('Helper Functions', () => {
+  describe('testGraphApiAccess', () => {
     beforeEach(() => {
-      // Reset all mocks for helper function tests
       jest.clearAllMocks();
     });
 
-    it('searchPeople should search for users only', async () => {
-      // Mock response with user data
-      const userResponse = {
-        value: [
-          {
-            id: 'user-1',
-            displayName: 'John Doe',
-            userPrincipalName: 'john@company.com',
-            personType: { class: 'Person', subclass: 'OrganizationUser' },
-            scoredEmailAddresses: [{ address: 'john@company.com', relevanceScore: 0.9 }],
-          },
-        ],
-      };
-      mockGraphClient.get.mockResolvedValue(userResponse);
+    it('should test all permissions and return success results', async () => {
+      // Mock successful responses for all tests
+      mockGraphClient.get
+        .mockResolvedValueOnce({ id: 'user-123', displayName: 'Test User' }) // /me test
+        .mockResolvedValueOnce({ value: [] }) // people OrganizationUser test
+        .mockResolvedValueOnce({ value: [] }) // people UnifiedGroup test
+        .mockResolvedValueOnce({ value: [] }) // /users endpoint test
+        .mockResolvedValueOnce({ value: [] }); // /groups endpoint test
 
-      const result = await GraphApiService.searchPeople('token', 'user', 'john', 5);
+      const result = await GraphApiService.testGraphApiAccess('token', 'user');
 
-      // Should use users filter
+      expect(result).toEqual({
+        userAccess: true,
+        peopleAccess: true,
+        groupsAccess: true,
+        usersEndpointAccess: true,
+        groupsEndpointAccess: true,
+        errors: [],
+      });
+
+      // Verify all endpoints were tested
+      expect(mockGraphClient.api).toHaveBeenCalledWith('/me');
+      expect(mockGraphClient.api).toHaveBeenCalledWith('/me/people');
+      expect(mockGraphClient.api).toHaveBeenCalledWith('/users');
+      expect(mockGraphClient.api).toHaveBeenCalledWith('/groups');
       expect(mockGraphClient.filter).toHaveBeenCalledWith("personType/subclass eq 'OrganizationUser'");
-      expect(mockGraphClient.top).toHaveBeenCalledWith(5);
-
-      // Should return only people array
-      expect(Array.isArray(result)).toBe(true);
-      expect(result).toHaveLength(1);
-      expect(result[0]).toMatchObject({
-        type: 'user',
-        displayName: 'John Doe',
-        openidId: 'user-1',
-      });
-    });
-
-    it('searchGroups should search for groups only', async () => {
-      // Mock response with group data
-      const groupResponse = {
-        value: [
-          {
-            id: 'group-1',
-            displayName: 'Marketing Team',
-            userPrincipalName: 'marketing@company.com',
-            personType: { class: 'Group', subclass: 'UnifiedGroup' },
-            scoredEmailAddresses: [{ address: 'marketing@company.com', relevanceScore: 0.8 }],
-          },
-        ],
-      };
-      mockGraphClient.get.mockResolvedValue(groupResponse);
-
-      const result = await GraphApiService.searchGroups('token', 'user', 'team', 5);
-
-      // Should use groups filter
       expect(mockGraphClient.filter).toHaveBeenCalledWith("personType/subclass eq 'UnifiedGroup'");
-      expect(mockGraphClient.top).toHaveBeenCalledWith(5);
+      expect(mockGraphClient.search).toHaveBeenCalledWith('"displayName:test"');
+    });
 
-      // Should return only groups array
-      expect(Array.isArray(result)).toBe(true);
-      expect(result).toHaveLength(1);
-      expect(result[0]).toMatchObject({
-        type: 'group',
-        displayName: 'Marketing Team',
-        idOnTheSource: 'group-1',
+    it('should handle partial failures and record errors', async () => {
+      // Mock mixed success/failure responses
+      mockGraphClient.get
+        .mockResolvedValueOnce({ id: 'user-123', displayName: 'Test User' }) // /me success
+        .mockRejectedValueOnce(new Error('People access denied'))              // people OrganizationUser fail
+        .mockResolvedValueOnce({ value: [] })                                 // people UnifiedGroup success
+        .mockRejectedValueOnce(new Error('Users endpoint access denied'))     // /users fail
+        .mockResolvedValueOnce({ value: [] });                               // /groups success
+
+      const result = await GraphApiService.testGraphApiAccess('token', 'user');
+
+      expect(result).toEqual({
+        userAccess: true,
+        peopleAccess: false,
+        groupsAccess: true,
+        usersEndpointAccess: false,
+        groupsEndpointAccess: true,
+        errors: [
+          'People.Read (OrganizationUser): People access denied',
+          'Users endpoint: Users endpoint access denied',
+        ],
       });
     });
 
-    it('searchPeople should handle errors gracefully', async () => {
-      mockGraphClient.get.mockRejectedValue(new Error('API error'));
+    it('should handle complete Graph client creation failure', async () => {
+      // Mock token exchange failure to test error handling
+      if (client.genericGrantRequest) {
+        client.genericGrantRequest.mockRejectedValue(new Error('Token exchange failed'));
+      }
 
-      const result = await GraphApiService.searchPeople('token', 'user', 'john', 5);
+      const result = await GraphApiService.testGraphApiAccess('invalid-token', 'user');
 
-      expect(result).toEqual([]);
+      expect(result).toEqual({
+        userAccess: false,
+        peopleAccess: false,
+        groupsAccess: false,
+        usersEndpointAccess: false,
+        groupsEndpointAccess: false,
+        errors: ['Token exchange failed'],
+      });
     });
 
-    it('searchGroups should handle errors gracefully', async () => {
-      mockGraphClient.get.mockRejectedValue(new Error('API error'));
+    it('should record all permission errors', async () => {
+      // Mock all requests to fail
+      mockGraphClient.get
+        .mockRejectedValueOnce(new Error('User.Read denied'))
+        .mockRejectedValueOnce(new Error('People.Read OrganizationUser denied'))
+        .mockRejectedValueOnce(new Error('People.Read UnifiedGroup denied'))
+        .mockRejectedValueOnce(new Error('Users directory access denied'))
+        .mockRejectedValueOnce(new Error('Groups directory access denied'));
 
-      const result = await GraphApiService.searchGroups('token', 'user', 'team', 5);
+      const result = await GraphApiService.testGraphApiAccess('token', 'user');
 
-      expect(result).toEqual([]);
+      expect(result).toEqual({
+        userAccess: false,
+        peopleAccess: false,
+        groupsAccess: false,
+        usersEndpointAccess: false,
+        groupsEndpointAccess: false,
+        errors: [
+          'User.Read: User.Read denied',
+          'People.Read (OrganizationUser): People.Read OrganizationUser denied',
+          'People.Read (UnifiedGroup): People.Read UnifiedGroup denied',
+          'Users endpoint: Users directory access denied',
+          'Groups endpoint: Groups directory access denied',
+        ],
+      });
+    });
+
+    it('should test new endpoints with correct search patterns', async () => {
+      // Mock successful responses for endpoint testing
+      mockGraphClient.get
+        .mockResolvedValueOnce({ id: 'user-123', displayName: 'Test User' }) // /me
+        .mockResolvedValueOnce({ value: [] }) // people OrganizationUser
+        .mockResolvedValueOnce({ value: [] }) // people UnifiedGroup
+        .mockResolvedValueOnce({ value: [] }) // /users
+        .mockResolvedValueOnce({ value: [] }); // /groups
+
+      await GraphApiService.testGraphApiAccess('token', 'user');
+
+      // Verify /users endpoint test
+      expect(mockGraphClient.api).toHaveBeenCalledWith('/users');
+      expect(mockGraphClient.search).toHaveBeenCalledWith('"displayName:test"');
+      expect(mockGraphClient.select).toHaveBeenCalledWith('id,displayName,userPrincipalName');
+
+      // Verify /groups endpoint test
+      expect(mockGraphClient.api).toHaveBeenCalledWith('/groups');
+      expect(mockGraphClient.select).toHaveBeenCalledWith('id,displayName,mail');
+    });
+
+    it('should handle endpoint-specific permission failures', async () => {
+      // Mock specific endpoint failures
+      mockGraphClient.get
+        .mockResolvedValueOnce({ id: 'user-123', displayName: 'Test User' }) // /me success
+        .mockResolvedValueOnce({ value: [] })                                // people OrganizationUser success
+        .mockResolvedValueOnce({ value: [] })                                // people UnifiedGroup success
+        .mockRejectedValueOnce(new Error('Insufficient privileges'))         // /users fail (User.Read.All needed)
+        .mockRejectedValueOnce(new Error('Access denied to groups'));        // /groups fail (Group.Read.All needed)
+
+      const result = await GraphApiService.testGraphApiAccess('token', 'user');
+
+      expect(result).toEqual({
+        userAccess: true,
+        peopleAccess: true,
+        groupsAccess: true,
+        usersEndpointAccess: false,
+        groupsEndpointAccess: false,
+        errors: [
+          'Users endpoint: Insufficient privileges',
+          'Groups endpoint: Access denied to groups',
+        ],
+      });
     });
   });
 });

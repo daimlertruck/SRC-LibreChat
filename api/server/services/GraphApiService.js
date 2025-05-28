@@ -6,6 +6,10 @@ const { logger } = require('~/config');
 const client = require('openid-client');
 
 /**
+ * @import { TPrincipalSearchResult } from 'librechat-data-provider'
+ */
+
+/**
  * Creates a Microsoft Graph client with on-behalf-of token exchange
  * @param {string} accessToken - OpenID Connect access token from user
  * @param {string} sub - Subject identifier from token claims
@@ -82,75 +86,68 @@ const exchangeTokenForGraphAccess = async (config, accessToken, sub) => {
 };
 
 /**
- * Search for principals (people and groups) using Microsoft Graph People API
- * Uses single /me/people endpoint with server-side filtering by personType subclass
+ * Search for principals (people and groups) using Microsoft Graph API
+ * Uses searchContacts first, then searchUsers and searchGroups to fill remaining slots
  * @param {string} accessToken - OpenID Connect access token
  * @param {string} sub - Subject identifier
  * @param {string} query - Search query string
  * @param {string} type - Type filter ('users', 'groups', or 'all')
  * @param {number} limit - Maximum number of results
- * @returns {Promise<Object>} Object containing people and groups arrays
+ * @returns {Promise<TPrincipalSearchResult[]>} Array of principal search results
  */
 const searchEntraIdPrincipals = async (accessToken, sub, query, type = 'all', limit = 10) => {
   try {
-    const results = {
-      people: [],
-      groups: [],
-      totalCount: 0,
-    };
-
     if (!query || query.trim().length < 2) {
-      return results;
+      return [];
     }
 
     const graphClient = await createGraphClient(accessToken, sub);
-    
-    // Reason: Use single /me/people endpoint for both users and groups with intelligent relevance ranking
-    let apiCall = graphClient
-      .api('/me/people')
-      .search(`"${query}"`)
-      .select('id,displayName,givenName,surname,userPrincipalName,jobTitle,department,companyName,scoredEmailAddresses,personType,phones');
+    let allResults = [];
 
-    // Reason: Apply dynamic OData filtering by subclass for better performance and specificity
-    let filter = '';
+    // Step 1: Search contacts first (most relevant results from /me/people)
+    // Reason: Map type parameter from 'users'/'groups' to 'user'/'group' for contacts function
+    const contactType = type === 'users' ? 'user' : type === 'groups' ? 'group' : 'all';
+    const contactResults = await searchContacts(graphClient, query, limit, contactType);
+    allResults.push(...contactResults);
+
+    // Step 2: If contacts already reach the limit, no need to call other functions
+    if (allResults.length >= limit) {
+      return allResults.slice(0, limit);
+    }
+
+    // Step 3: Search additional endpoints based on type filter
     if (type === 'users') {
-      // Filter for OrganizationUser subclass (users)
-      filter = "personType/subclass eq 'OrganizationUser'";
+      // Only search additional users from /users endpoint
+      const userResults = await searchUsers(graphClient, query, limit);
+      allResults.push(...userResults);
     } else if (type === 'groups') {
-      // Filter for UnifiedGroup subclass (groups)
-      filter = "personType/subclass eq 'UnifiedGroup'";
+      // Only search additional groups from /groups endpoint
+      const groupResults = await searchGroups(graphClient, query, limit);
+      allResults.push(...groupResults);
     } else if (type === 'all') {
-      // Combined filter for both users and groups
-      filter = "personType/subclass eq 'OrganizationUser' or personType/subclass eq 'UnifiedGroup'";
+      // Search both users and groups with full limit, then merge
+      const [userResults, groupResults] = await Promise.all([
+        searchUsers(graphClient, query, limit),
+        searchGroups(graphClient, query, limit)
+      ]);
+      
+      allResults.push(...userResults, ...groupResults);
     }
 
-    if (filter) {
-      apiCall = apiCall.filter(filter);
-    }
-
-    apiCall = apiCall.top(limit);
-
-    const searchResponse = await apiCall.get();
-    const allResults = searchResponse.value || [];
-
-    // Reason: Process results based on personType for consistent API response format
-    for (const item of allResults) {
-      if (item.personType?.subclass === 'OrganizationUser') {
-        results.people.push(transformPersonToInternal(item));
-      } else if (item.personType?.subclass === 'UnifiedGroup') {
-        results.groups.push(transformGroupToInternal(item));
+    // Step 4: Remove duplicates based on idOnTheSource and apply final limit
+    const seenIds = new Set();
+    const uniqueResults = allResults.filter(result => {
+      if (seenIds.has(result.idOnTheSource)) {
+        return false;
       }
-    }
+      seenIds.add(result.idOnTheSource);
+      return true;
+    });
 
-    results.totalCount = results.people.length + results.groups.length;
-    return results;
+    return uniqueResults.slice(0, limit);
   } catch (error) {
     logger.error('[searchEntraIdPrincipals] Error searching principals:', error);
-    return {
-      people: [],
-      groups: [],
-      totalCount: 0,
-    };
+    return [];
   }
 };
 
@@ -234,36 +231,104 @@ const transformGroupToInternal = (group) => {
   };
 };
 
+
+
 /**
- * Search for people only using Microsoft Graph People API
- * @param {string} accessToken - OpenID Connect access token
- * @param {string} sub - Subject identifier
+ * Search for contacts (users and groups) using Microsoft Graph /me/people endpoint
+ * Returns mapped TPrincipalSearchResult objects
+ * @param {Client} graphClient - Authenticated Microsoft Graph client
  * @param {string} query - Search query string
- * @param {number} limit - Maximum number of results
- * @returns {Promise<Array>} Array of people matching the search query
+ * @param {number} limit - Maximum number of results (default: 10)
+ * @param {string} type - Type filter ('user', 'group', or 'all') (default: 'all')
+ * @returns {Promise<TPrincipalSearchResult[]>} Array of mapped contact results
  */
-const searchPeople = async (accessToken, sub, query, limit = 10) => {
+const searchContacts = async (graphClient, query, limit = 10, type = 'all') => {
   try {
-    const result = await searchEntraIdPrincipals(accessToken, sub, query, 'users', limit);
-    return result.people;
+    if (!query || query.trim().length < 2) {
+      return [];
+    }
+
+    // Reason: Build dynamic filter based on type parameter
+    let filter = '';
+    if (type === 'user') {
+      filter = "personType/subclass eq 'OrganizationUser'";
+    } else if (type === 'group') {
+      filter = "personType/class eq 'Group'";
+    } else if (type === 'all') {
+      filter = "(personType/subclass eq 'OrganizationUser') or (personType/class eq 'Group')";
+    }
+
+    let apiCall = graphClient
+      .api('/me/people')
+      .search(`"${query}"`)
+      .select('id,displayName,givenName,surname,userPrincipalName,jobTitle,department,companyName,scoredEmailAddresses,personType,phones,mail')
+      .top(limit);
+
+    // Apply filter if specified
+    if (filter) {
+      apiCall = apiCall.filter(filter);
+    }
+
+    const contactsResponse = await apiCall.get();
+    return (contactsResponse.value || []).map(mapContactToTPrincipalSearchResult);
   } catch (error) {
-    logger.error('[searchPeople] Error searching people:', error);
+    logger.error('[searchContacts] Error searching contacts:', error);
     return [];
   }
 };
 
 /**
- * Search for groups only using Microsoft Graph People API
- * @param {string} accessToken - OpenID Connect access token
- * @param {string} sub - Subject identifier
+ * Search for users using Microsoft Graph /users endpoint
+ * Returns mapped TPrincipalSearchResult objects
+ * @param {Client} graphClient - Authenticated Microsoft Graph client
  * @param {string} query - Search query string
- * @param {number} limit - Maximum number of results
- * @returns {Promise<Array>} Array of groups matching the search query
+ * @param {number} limit - Maximum number of results (default: 10)
+ * @returns {Promise<TPrincipalSearchResult[]>} Array of mapped user results
  */
-const searchGroups = async (accessToken, sub, query, limit = 10) => {
+const searchUsers = async (graphClient, query, limit = 10) => {
   try {
-    const result = await searchEntraIdPrincipals(accessToken, sub, query, 'groups', limit);
-    return result.groups;
+    if (!query || query.trim().length < 2) {
+      return [];
+    }
+
+    // Reason: Search users by display name, email, and user principal name
+    const usersResponse = await graphClient
+      .api('/users')
+      .search(`"displayName:${query}" OR "userPrincipalName:${query}" OR "mail:${query}" OR "givenName:${query}" OR "surname:${query}"`)
+      .select('id,displayName,givenName,surname,userPrincipalName,jobTitle,department,companyName,mail,phones')
+      .top(limit)
+      .get();
+
+    return (usersResponse.value || []).map(mapUserToTPrincipalSearchResult);
+  } catch (error) {
+    logger.error('[searchUsers] Error searching users:', error);
+    return [];
+  }
+};
+
+/**
+ * Search for groups using Microsoft Graph /groups endpoint
+ * Returns mapped TPrincipalSearchResult objects, includes all group types
+ * @param {Client} graphClient - Authenticated Microsoft Graph client
+ * @param {string} query - Search query string
+ * @param {number} limit - Maximum number of results (default: 10)
+ * @returns {Promise<TPrincipalSearchResult[]>} Array of mapped group results
+ */
+const searchGroups = async (graphClient, query, limit = 10) => {
+  try {
+    if (!query || query.trim().length < 2) {
+      return [];
+    }
+
+    // Reason: Search all groups by display name and email without filtering group types
+    const groupsResponse = await graphClient
+      .api('/groups')
+      .search(`"displayName:${query}" OR "mail:${query}" OR "mailNickname:${query}"`)
+      .select('id,displayName,mail,mailNickname,description,groupTypes,resourceProvisioningOptions')
+      .top(limit)
+      .get();
+
+    return (groupsResponse.value || []).map(mapGroupToTPrincipalSearchResult);
   } catch (error) {
     logger.error('[searchGroups] Error searching groups:', error);
     return [];
@@ -283,6 +348,8 @@ const testGraphApiAccess = async (accessToken, sub) => {
       userAccess: false,
       peopleAccess: false,
       groupsAccess: false,
+      usersEndpointAccess: false,
+      groupsEndpointAccess: false,
       errors: [],
     };
 
@@ -316,6 +383,30 @@ const testGraphApiAccess = async (accessToken, sub) => {
       results.errors.push(`People.Read (UnifiedGroup): ${error.message}`);
     }
 
+    // Test /users endpoint access (requires User.Read.All or similar)
+    try {
+      await graphClient.api('/users')
+        .search('"displayName:test"')
+        .select('id,displayName,userPrincipalName')
+        .top(1)
+        .get();
+      results.usersEndpointAccess = true;
+    } catch (error) {
+      results.errors.push(`Users endpoint: ${error.message}`);
+    }
+
+    // Test /groups endpoint access (requires Group.Read.All or similar)
+    try {
+      await graphClient.api('/groups')
+        .search('"displayName:test"')
+        .select('id,displayName,mail')
+        .top(1)
+        .get();
+      results.groupsEndpointAccess = true;
+    } catch (error) {
+      results.errors.push(`Groups endpoint: ${error.message}`);
+    }
+
     return results;
   } catch (error) {
     logger.error('[testGraphApiAccess] Error testing Graph API access:', error);
@@ -323,16 +414,70 @@ const testGraphApiAccess = async (accessToken, sub) => {
       userAccess: false,
       peopleAccess: false,
       groupsAccess: false,
+      usersEndpointAccess: false,
+      groupsEndpointAccess: false,
       errors: [error.message],
     };
   }
 };
 
+/**
+ * Map Graph API user object to TPrincipalSearchResult format
+ * @param {Object} user - Raw user object from Graph API
+ * @returns {TPrincipalSearchResult} Mapped user result
+ */
+const mapUserToTPrincipalSearchResult = (user) => {
+  return {
+    id: null,
+    type: 'user',
+    name: user.displayName,
+    email: user.mail,
+    username: user.userPrincipalName,
+    source: 'entra',
+    idOnTheSource: user.id,
+  };
+};
+
+/**
+ * Map Graph API group object to TPrincipalSearchResult format
+ * @param {Object} group - Raw group object from Graph API
+ * @returns {TPrincipalSearchResult} Mapped group result
+ */
+const mapGroupToTPrincipalSearchResult = (group) => {
+  return {
+    id: null,
+    type: 'group',
+    name: group.displayName,
+    email: group.mail,
+    source: 'entra',
+    idOnTheSource: group.id,
+  };
+};
+
+/**
+ * Map Graph API /me/people contact object to TPrincipalSearchResult format
+ * Handles both user and group contacts from the people endpoint
+ * @param {Object} contact - Raw contact object from Graph API /me/people
+ * @returns {TPrincipalSearchResult} Mapped contact result
+ */
+const mapContactToTPrincipalSearchResult = (contact) => {
+  const isGroup = contact.personType?.class === 'Group';
+  const primaryEmail = contact.scoredEmailAddresses?.[0]?.address || contact.mail;
+
+  return {
+    id: null,
+    type: isGroup ? 'group' : 'user',
+    name: contact.displayName,
+    email: primaryEmail,
+    username: !isGroup ? contact.userPrincipalName : undefined,
+    source: 'entra',
+    idOnTheSource: contact.id,
+  };
+};
+
 module.exports = {
   createGraphClient,
   searchEntraIdPrincipals,
-  searchPeople,
-  searchGroups,
   getCurrentUserGroups,
   transformPersonToInternal,
   transformGroupToInternal,
