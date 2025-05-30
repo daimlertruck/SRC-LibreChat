@@ -159,7 +159,8 @@ export default function GrantAccessDialog({
 
   // Calculate total share count for badge display
   const totalCurrentShares = currentShares.length + (currentIsPublic ? 1 : 0);
-  const submitButtonActive = newShares.length > 0 || isPublic !== currentIsPublic;
+  const submitButtonActive =
+    newShares.length > 0 || isPublic !== currentIsPublic || publicRole !== currentPublicRole;
   return (
     <OGDialog open={isModalOpen} onOpenChange={setIsModalOpen} modal>
       <OGDialogTrigger asChild>

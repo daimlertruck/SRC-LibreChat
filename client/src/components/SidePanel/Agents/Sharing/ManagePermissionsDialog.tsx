@@ -86,14 +86,14 @@ export default function ManagePermissionsDialog({
   });
 
   // // Update internal state when API data changes
-  // useEffect(() => {
-  //   if (permissionsData) {
-  //     setManagedShares(currentShares);
-  //     setManagedIsPublic(isPublic);
-  //     setManagedPublicRole(publicRole);
-  //     setHasChanges(false);
-  //   }
-  // }, [permissionsData, isModalOpen, currentShares, isPublic, publicRole]);
+  useEffect(() => {
+    if (permissionsData) {
+      setManagedShares(currentShares);
+      setManagedIsPublic(isPublic);
+      setManagedPublicRole(publicRole);
+      setHasChanges(false);
+    }
+  }, [permissionsData, isModalOpen]);
 
   // // Track changes to enable/disable save button
   // useEffect(() => {
