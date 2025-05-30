@@ -1,14 +1,7 @@
 import React from 'react';
-import { Globe, Eye, Edit } from 'lucide-react';
-import type { AccessRole } from 'librechat-data-provider';
+import { Globe } from 'lucide-react';
 import { Switch } from '~/components/ui';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '~/components/ui/Select';
+import AccessRolesPicker from './AccessRolesPicker';
 
 interface PublicSharingToggleProps {
   isPublic: boolean;
@@ -16,7 +9,7 @@ interface PublicSharingToggleProps {
   onPublicToggle: (isPublic: boolean) => void;
   onPublicRoleChange: (role: string) => void;
   className?: string;
-  accessRoles?: AccessRole[];
+  resourceType?: string;
 }
 
 export default function PublicSharingToggle({
@@ -25,12 +18,8 @@ export default function PublicSharingToggle({
   onPublicToggle,
   onPublicRoleChange,
   className = '',
-  accessRoles = [],
+  resourceType = 'agent',
 }: PublicSharingToggleProps) {
-  const getRoleIcon = (roleId: string) => {
-    // Reason: Consistent role visualization across all sharing components
-    return roleId.includes('editor') ? <Edit className="h-3 w-3" /> : <Eye className="h-3 w-3" />;
-  };
 
   return (
     <div className={`space-y-3 border-t pt-4 ${className}`}>
@@ -54,24 +43,11 @@ export default function PublicSharingToggle({
       {isPublic && (
         <div>
           <label className="mb-2 block text-sm font-medium">Public access level</label>
-          <Select value={publicRole} onValueChange={onPublicRoleChange}>
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {accessRoles.map((role: AccessRole) => (
-                <SelectItem key={role.accessRoleId} value={role.accessRoleId}>
-                  <div className="flex items-center gap-2">
-                    {getRoleIcon(role.accessRoleId)}
-                    <div>
-                      <div>{role.name}</div>
-                      <div className="text-xs text-muted-foreground">{role.description}</div>
-                    </div>
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <AccessRolesPicker
+            resourceType={resourceType}
+            selectedRoleId={publicRole}
+            onRoleChange={onPublicRoleChange}
+          />
         </div>
       )}
     </div>

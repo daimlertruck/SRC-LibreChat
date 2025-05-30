@@ -10,7 +10,6 @@ import {
   OGDialogClose,
   OGDialogContent,
   OGDialogTrigger,
-  Dropdown,
 } from '~/components/ui';
 import { cn, removeFocusOutlines } from '~/utils';
 import { useToastContext } from '~/Providers';
@@ -19,7 +18,7 @@ import { useLocalize } from '~/hooks';
 import PeoplePicker from './PeoplePicker/PeoplePicker';
 import PublicSharingToggle from './PublicSharingToggle';
 import ManagePermissionsDialog from './ManagePermissionsDialog';
-import { useGetAccessRolesQuery } from 'librechat-data-provider/react-query';
+import AccessRolesPicker from './AccessRolesPicker';
 
 export default function GrantAccessDialog({
   agent_id = '',
@@ -43,12 +42,11 @@ export default function GrantAccessDialog({
   const localize = useLocalize();
   const { showToast } = useToastContext();
 
-  // Fetch access roles from API
-  const { data: accessRoles, isLoading: rolesLoading } = useGetAccessRolesQuery(resourceType);
-
   // State for new shares being added
   const [newShares, setNewShares] = useState<TPrincipal[]>([]);
-  const [defaultPermission, setDefaultPermission] = useState<string>(ACCESS_ROLE_IDS.AGENT_VIEWER);
+  const [defaultPermissionId, setDefaultPermissionId] = useState<string>(
+    ACCESS_ROLE_IDS.AGENT_VIEWER,
+  );
   const [isPublic, setIsPublic] = useState(false);
   const [publicRole, setPublicRole] = useState<string>(ACCESS_ROLE_IDS.AGENT_VIEWER);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -96,7 +94,7 @@ export default function GrantAccessDialog({
 
       // Reset form and close
       setNewShares([]);
-      setDefaultPermission(ACCESS_ROLE_IDS.AGENT_VIEWER);
+      setDefaultPermissionId(ACCESS_ROLE_IDS.AGENT_VIEWER);
       setIsPublic(false);
       setPublicRole(ACCESS_ROLE_IDS.AGENT_VIEWER);
       setIsModalOpen(false);
@@ -112,7 +110,7 @@ export default function GrantAccessDialog({
 
   const handleCancel = () => {
     setNewShares([]);
-    setDefaultPermission(ACCESS_ROLE_IDS.AGENT_VIEWER);
+    setDefaultPermissionId(ACCESS_ROLE_IDS.AGENT_VIEWER);
     setIsPublic(false);
     setPublicRole(ACCESS_ROLE_IDS.AGENT_VIEWER);
     setIsModalOpen(false);
@@ -175,33 +173,18 @@ export default function GrantAccessDialog({
                 <label className="text-sm font-medium text-text-primary">Permission Level</label>
               </div>
             </div>
-            <Dropdown
-              value={defaultPermission}
-              onChange={setDefaultPermission}
-              options={
-                accessRoles?.map((role: any) => ({
-                  value: role.accessRoleId,
-                  label: role.name,
-                })) || []
-              }
-              sizeClasses="w-[180px]"
-              testId="DefaultPermissionDropdown"
-              className="z-50"
-              portal={false}
+            <AccessRolesPicker
+              resourceType={resourceType}
+              selectedRoleId={defaultPermissionId}
+              onRoleChange={setDefaultPermissionId}
             />
-            {accessRoles && (
-              <p className="text-xs text-text-secondary">
-                {accessRoles.find((role) => role.accessRoleId === defaultPermission)?.description ||
-                  'Select a permission level'}
-              </p>
-            )}
           </div>
           <PublicSharingToggle
             isPublic={isPublic}
             publicRole={publicRole}
             onPublicToggle={setIsPublic}
             onPublicRoleChange={setPublicRole}
-            accessRoles={accessRoles}
+            resourceType={resourceType}
           />
           <div className="flex justify-between border-t pt-4">
             <ManagePermissionsDialog
