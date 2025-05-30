@@ -296,3 +296,9 @@ export const searchPrincipals = (params: q.PrincipalSearchParams) => {
 
 export const getAccessRoles = (resourceType: string) => 
   `/api/permissions/${resourceType}/roles`;
+
+export const getResourcePermissions = (resourceType: string, resourceId: string) =>
+  `/api/permissions/${resourceType}/${resourceId}`;
+
+export const updateResourcePermissions = (resourceType: string, resourceId: string) =>
+  `/api/permissions/${resourceType}/${resourceId}`;

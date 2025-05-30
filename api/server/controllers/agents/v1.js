@@ -121,6 +121,7 @@ const getAgentHandler = async (req, res) => {
 
     if (!agent.isCollaborative && agent.author !== author && req.user.role !== SystemRoles.ADMIN) {
       return res.status(200).json({
+        _id: agent._id,
         id: agent.id,
         name: agent.name,
         avatar: agent.avatar,
@@ -148,7 +149,7 @@ const getAgentHandler = async (req, res) => {
 const updateAgentHandler = async (req, res) => {
   try {
     const id = req.params.id;
-    const { projectIds, removeProjectIds, ...updateData } = req.body;
+    const { projectIds, removeProjectIds, _id, ...updateData } = req.body;
     const isAdmin = req.user.role === SystemRoles.ADMIN;
     const existingAgent = await getAgent({ id });
     const isAuthor = existingAgent.author.toString() === req.user.id;

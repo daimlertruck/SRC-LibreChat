@@ -6,7 +6,9 @@ const { AccessRole, findRoleByIdentifier, getRoleForPermissions } = require('~/m
 const { getUserPrincipals } = require('~/models/userGroupMethods');
 const { getTransactionSupport } = require('~/lib/db/dbUtils');
 const { logger } = require('~/config');
-
+/**
+ * @import { TPrincipal } from 'librechat-data-provider'
+ */
 /**
  * Grant a permission to a principal for a resource using a role
  * @param {Object} params - Parameters for granting role-based permission
@@ -26,7 +28,7 @@ const grantPermission = async ({
   resourceId,
   accessRoleId,
   grantedBy,
-  session
+  session,
 }) => {
   try {
     // Validate principal type
@@ -57,35 +59,37 @@ const grantPermission = async ({
 
     // Ensure the role is for the correct resource type
     if (role.resourceType !== resourceType) {
-      throw new Error(`Role ${accessRoleId} is for ${role.resourceType} resources, not ${resourceType}`);
+      throw new Error(
+        `Role ${accessRoleId} is for ${role.resourceType} resources, not ${resourceType}`,
+      );
     }
 
     const query = {
       principalType,
       resourceType,
-      resourceId
+      resourceId,
     };
-    
+
     if (principalType !== 'public') {
       query.principalId = principalId;
       query.principalModel = principalType === 'user' ? 'User' : 'Group';
     }
-    
+
     const update = {
       $set: {
         permBits: role.permBits,
         roleId: role._id,
         grantedBy,
-        grantedAt: new Date()
-      }
+        grantedAt: new Date(),
+      },
     };
-    
+
     const options = {
       upsert: true,
       new: true,
-      ...(session ? { session } : {})
+      ...(session ? { session } : {}),
     };
-    
+
     return await AclEntry.findOneAndUpdate(query, update, options);
   } catch (error) {
     logger.error(`[PermissionService.grantPermission] Error: ${error.message}`);
@@ -105,10 +109,10 @@ const grantPermission = async ({
  */
 const revokePermission = async ({
   principalType,
-  principalId, 
+  principalId,
   resourceType,
   resourceId,
-  session
+  session,
 }) => {
   // Validate principal type
   if (!['user', 'group', 'public'].includes(principalType)) {
@@ -124,15 +128,15 @@ const revokePermission = async ({
     const query = {
       principalType,
       resourceType,
-      resourceId
+      resourceId,
     };
-    
+
     if (principalType !== 'public') {
       query.principalId = principalId;
     }
-    
+
     const options = session ? { session } : {};
-    
+
     return await AclEntry.deleteOne(query, options);
   } catch (error) {
     logger.error(`[PermissionService.revokePermission] Error: ${error.message}`);
@@ -149,12 +153,7 @@ const revokePermission = async ({
  * @param {number} params.requiredPermissions - The permission bits required (e.g., 1 for VIEW, 3 for VIEW+EDIT)
  * @returns {Promise<boolean>} Whether the user has the required permission bits
  */
-const checkPermission = async ({
-  userId,
-  resourceType,
-  resourceId,
-  requiredPermissions
-}) => {
+const checkPermission = async ({ userId, resourceType, resourceId, requiredPermissions }) => {
   try {
     // Validate required permissions is a number
     if (typeof requiredPermissions !== 'number' || requiredPermissions < 1) {
@@ -163,22 +162,22 @@ const checkPermission = async ({
 
     // Get all principals for the user (user + groups + public)
     const principals = await getUserPrincipals(userId);
-    
+
     if (principals.length === 0) {
       return false;
     }
-    
+
     // Find any ACL entry matching the principals, resource, and check if it has all required permission bits
     const entry = await AclEntry.findOne({
-      $or: principals.map(p => ({
+      $or: principals.map((p) => ({
         principalType: p.principalType,
-        ...(p.principalType !== 'public' && { principalId: p.principalId })
+        ...(p.principalType !== 'public' && { principalId: p.principalId }),
       })),
       resourceType,
       resourceId,
-      permBits: { $bitsAllSet: requiredPermissions }
+      permBits: { $bitsAllSet: requiredPermissions },
     }).lean();
-    
+
     return !!entry;
   } catch (error) {
     logger.error(`[PermissionService.checkPermission] Error: ${error.message}`);
@@ -198,84 +197,82 @@ const checkPermission = async ({
  * @param {string|mongoose.Types.ObjectId} params.resourceId - The ID of the resource
  * @returns {Promise<Object>} Object with effective permission details and role information
  */
-const getEffectivePermissions = async ({
-  userId,
-  resourceType,
-  resourceId
-}) => {
+const getEffectivePermissions = async ({ userId, resourceType, resourceId }) => {
   try {
     // Get all principals for the user (user + groups + public)
     const principals = await getUserPrincipals(userId);
-    
+
     if (principals.length === 0) {
-      return { 
+      return {
         effectiveRole: null,
-        sources: [] 
+        sources: [],
       };
     }
-    
+
     // Find all matching ACL entries and populate role information
     const aclEntries = await AclEntry.find({
-      $or: principals.map(p => ({
+      $or: principals.map((p) => ({
         principalType: p.principalType,
-        ...(p.principalType !== 'public' && { principalId: p.principalId })
+        ...(p.principalType !== 'public' && { principalId: p.principalId }),
       })),
       resourceType,
-      resourceId
+      resourceId,
     })
-    .populate('roleId')
-    .populate('principalId', 'name')
-    .lean();
-    
+      .populate('roleId')
+      .populate('principalId', 'name')
+      .lean();
+
     if (aclEntries.length === 0) {
-      return { 
+      return {
         effectiveRole: null,
-        sources: [] 
+        sources: [],
       };
     }
-    
+
     // Calculate effective permissions
     let effectiveBits = 0;
-    const sources = aclEntries.map(entry => {
+    const sources = aclEntries.map((entry) => {
       effectiveBits |= entry.permBits;
-      
+
       const source = {
         from: entry.principalType,
         principalId: entry.principalId?._id,
         principalName: entry.principalId?.name,
         direct: !entry.inheritedFrom,
-        inheritedFrom: entry.inheritedFrom
+        inheritedFrom: entry.inheritedFrom,
       };
-      
+
       // Add role information if available
       if (entry.roleId) {
         source.role = {
           id: entry.roleId._id,
           name: entry.roleId.name,
-          accessRoleId: entry.roleId.accessRoleId
+          accessRoleId: entry.roleId.accessRoleId,
         };
       }
-      
+
       return source;
     });
-    
+
     // Find the matching role for the effective permission bits
     const effectiveRole = await getRoleForPermissions(resourceType, effectiveBits);
-    
-    return { 
-      effectiveRole: effectiveRole ? {
-        id: effectiveRole._id,
-        name: effectiveRole.name,
-        accessRoleId: effectiveRole.accessRoleId,
-        description: effectiveRole.description
-      } : null,
-      sources 
+
+    return {
+      effectiveRole: effectiveRole
+        ? {
+            id: effectiveRole._id,
+            name: effectiveRole.name,
+            accessRoleId: effectiveRole.accessRoleId,
+            description: effectiveRole.description,
+          }
+        : null,
+      sources,
     };
   } catch (error) {
     logger.error(`[PermissionService.getEffectivePermissions] Error: ${error.message}`);
-    return { 
-      effectiveRole: null, 
-      sources: [] 
+    return {
+      effectiveRole: null,
+      sources: [],
     };
   }
 };
@@ -288,11 +285,7 @@ const getEffectivePermissions = async ({
  * @param {number} params.requiredPermissions - The minimum permission bits required (e.g., 1 for VIEW, 3 for VIEW+EDIT)
  * @returns {Promise<Array>} Array of resource IDs
  */
-const findAccessibleResources = async ({
-  userId,
-  resourceType,
-  requiredPermissions
-}) => {
+const findAccessibleResources = async ({ userId, resourceType, requiredPermissions }) => {
   try {
     // Validate required permissions is a number
     if (typeof requiredPermissions !== 'number' || requiredPermissions < 1) {
@@ -301,21 +294,21 @@ const findAccessibleResources = async ({
 
     // Get all principals for the user (user + groups + public)
     const principals = await getUserPrincipals(userId);
-    
+
     if (principals.length === 0) {
       return [];
     }
-    
+
     // Find all matching ACL entries where user has at least the required permission bits
     const entries = await AclEntry.find({
-      $or: principals.map(p => ({
+      $or: principals.map((p) => ({
         principalType: p.principalType,
-        ...(p.principalType !== 'public' && { principalId: p.principalId })
+        ...(p.principalType !== 'public' && { principalId: p.principalId }),
       })),
       resourceType,
-      permBits: { $bitsAllSet: requiredPermissions }
+      permBits: { $bitsAllSet: requiredPermissions },
     }).distinct('resourceId');
-    
+
     return entries;
   } catch (error) {
     logger.error(`[PermissionService.findAccessibleResources] Error: ${error.message}`);
@@ -336,30 +329,26 @@ const findAccessibleResources = async ({
  * @param {mongoose.ClientSession} [params.session] - Optional MongoDB session for transactions
  * @returns {Promise<mongoose.Types.ObjectId>} The local ID of the synced principal
  */
-const syncEntraPrincipal = async ({
-  entraIdObject,
-  principalType,
-  session
-}) => {
+const syncEntraPrincipal = async ({ entraIdObject, principalType, session }) => {
   try {
     if (!entraIdObject || !entraIdObject.id) {
       throw new Error('Entra ID object with id is required');
     }
-    
+
     if (!entraIdObject.name) {
       throw new Error('Entra Display Name is required');
     }
-    
+
     if (!['user', 'group'].includes(principalType)) {
       throw new Error(`Invalid principal type: ${principalType}`);
     }
-    
+
     const options = session ? { session } : {};
-    
+
     if (principalType === 'user') {
       // Try to find existing user by Entra ID
       const existingUser = await User.findOne({ openidId: entraIdObject.id }, null, options);
-      
+
       if (existingUser) {
         // Update user information if it changed
         const updateFields = {};
@@ -372,66 +361,70 @@ const syncEntraPrincipal = async ({
         if (entraIdObject.username && existingUser.username !== entraIdObject.username) {
           updateFields.username = entraIdObject.username;
         }
-        
+
         if (Object.keys(updateFields).length > 0) {
-          await User.updateOne(
-            { _id: existingUser._id },
-            { $set: updateFields },
-            options
-          );
+          await User.updateOne({ _id: existingUser._id }, { $set: updateFields }, options);
         }
         return existingUser._id;
       }
-      
+
       // For new user creation, email is required
       if (!entraIdObject.email) {
         throw new Error('Email is required for user creation');
       }
-      
+
       // Create new user
       const newUser = await User.create(
-        [{
-          name: entraIdObject.name,
-          openidId: entraIdObject.id,
-          provider: 'openid',
-          email: entraIdObject.email,
-          username: entraIdObject.username || `entra-${entraIdObject.id}`,
-          avatar: '',
-          emailVerified: true,
-          createdAt: new Date(),
-          updatedAt: new Date()
-        }],
-        options
+        [
+          {
+            name: entraIdObject.name,
+            openidId: entraIdObject.id,
+            provider: 'openid',
+            email: entraIdObject.email,
+            username: entraIdObject.username || `entra-${entraIdObject.id}`,
+            avatar: '',
+            emailVerified: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+        options,
       );
-      
+
       return newUser[0]._id;
     } else {
       // Try to find existing group by Entra ID
-      const existingGroup = await Group.findOne({ idOnTheSource: entraIdObject.id, source: 'entra' }, null, options);
-      
+      const existingGroup = await Group.findOne(
+        { idOnTheSource: entraIdObject.id, source: 'entra' },
+        null,
+        options,
+      );
+
       if (existingGroup) {
         // Update name if it changed
         if (existingGroup.name !== entraIdObject.name) {
           await Group.updateOne(
             { _id: existingGroup._id },
             { $set: { name: entraIdObject.name } },
-            options
+            options,
           );
         }
         return existingGroup._id;
       }
-      
+
       // Create new group
       const newGroup = await Group.create(
-        [{
-          name: entraIdObject.name,
-          idOnTheSource: entraIdObject.id,
-          source: 'entra',
-          memberIds: []
-        }],
-        options
+        [
+          {
+            name: entraIdObject.name,
+            idOnTheSource: entraIdObject.id,
+            source: 'entra',
+            memberIds: [],
+          },
+        ],
+        options,
       );
-      
+
       return newGroup[0]._id;
     }
   } catch (error) {
@@ -442,10 +435,10 @@ const syncEntraPrincipal = async ({
 
 /**
  * Grant permission with inherited project fan-out
- * 
+ *
  * When granting access to a project, this will also grant the same permissions to all
  * child resources (e.g. agents) within that project with inheritedFrom marker
- * 
+ *
  * @param {Object} params - Parameters for project permission grant by role
  * @param {string} params.principalType - 'user', 'group', or 'public'
  * @param {string|mongoose.Types.ObjectId|null} params.principalId - The ID of the principal (null for 'public')
@@ -459,13 +452,13 @@ const grantProjectPermissionWithFanout = async ({
   principalId,
   projectId,
   accessRoleId,
-  grantedBy
+  grantedBy,
 }) => {
   // Check if transactions are supported
   const supportsTransactions = await getTransactionSupport();
   let session = null;
   let result = null;
-  
+
   try {
     // Get the role to determine permission bits
     const role = await findRoleByIdentifier(accessRoleId);
@@ -482,7 +475,7 @@ const grantProjectPermissionWithFanout = async ({
       session = await mongoose.startSession();
       session.startTransaction();
     }
-    
+
     // 1. Grant permission on the project itself
     const projectAcl = await grantPermission({
       principalType,
@@ -491,45 +484,41 @@ const grantProjectPermissionWithFanout = async ({
       resourceId: projectId,
       accessRoleId,
       grantedBy,
-      session
+      session,
     });
-    
+
     // 2. Query for all agents in this project
     const Agent = mongoose.model('Agent');
     const queryOptions = session ? { session } : {};
-    const agentsInProject = await Agent.find(
-      { projectId },
-      { _id: 1 },
-      queryOptions
-    ).lean();
-    
+    const agentsInProject = await Agent.find({ projectId }, { _id: 1 }, queryOptions).lean();
+
     // 3. Fan-out the permission to all agents in the project
     const childPermissions = [];
-    
+
     // Find the agent_viewer role for the agent resources
     // We need to map project roles to agent roles
     const agentRoleMapping = {
-      'project_viewer': 'agent_viewer',
-      'project_editor': 'agent_editor',
-      'project_manager': 'agent_manager',
-      'project_owner': 'agent_owner'
+      project_viewer: 'agent_viewer',
+      project_editor: 'agent_editor',
+      project_manager: 'agent_manager',
+      project_owner: 'agent_owner',
     };
-    
+
     // Default to agent_viewer if no explicit mapping
     const agentRoleId = agentRoleMapping[accessRoleId] || 'agent_viewer';
     const agentRole = await findRoleByIdentifier(agentRoleId);
-    
+
     if (!agentRole) {
       throw new Error(`Corresponding agent role ${agentRoleId} not found`);
     }
-    
+
     for (const agent of agentsInProject) {
       // Create an ACL entry for this agent with inheritedFrom marker
       const aclEntry = new AclEntry({
         principalType,
-        ...(principalType !== 'public' && { 
+        ...(principalType !== 'public' && {
           principalId,
-          principalModel: principalType === 'user' ? 'User' : 'Group'
+          principalModel: principalType === 'user' ? 'User' : 'Group',
         }),
         resourceType: 'agent',
         resourceId: agent._id,
@@ -537,9 +526,9 @@ const grantProjectPermissionWithFanout = async ({
         roleId: agentRole._id,
         grantedBy,
         grantedAt: new Date(),
-        inheritedFrom: projectId
+        inheritedFrom: projectId,
       });
-      
+
       if (session) {
         await aclEntry.save({ session });
       } else {
@@ -547,17 +536,17 @@ const grantProjectPermissionWithFanout = async ({
       }
       childPermissions.push(aclEntry);
     }
-    
+
     result = {
       projectPermission: projectAcl,
       childPermissions,
-      agentCount: agentsInProject.length
+      agentCount: agentsInProject.length,
     };
-    
+
     if (session && supportsTransactions) {
       await session.commitTransaction();
     }
-    
+
     return result;
   } catch (error) {
     if (session && supportsTransactions) {
@@ -574,62 +563,58 @@ const grantProjectPermissionWithFanout = async ({
 
 /**
  * Revoke project permission with inherited cleanup
- * 
+ *
  * Removes the project permission and all child permissions that were inherited from it
- * 
+ *
  * @param {Object} params - Parameters for project permission revocation
  * @param {string} params.principalType - 'user', 'group', or 'public'
  * @param {string|mongoose.Types.ObjectId|null} params.principalId - The ID of the principal (null for 'public')
  * @param {string|mongoose.Types.ObjectId} params.projectId - The ID of the project
  * @returns {Promise<Object>} Result with counts of deleted permissions
  */
-const revokeProjectPermissionWithCleanup = async ({
-  principalType,
-  principalId,
-  projectId
-}) => {
+const revokeProjectPermissionWithCleanup = async ({ principalType, principalId, projectId }) => {
   // Check if transactions are supported
   const supportsTransactions = await getTransactionSupport();
   let session = null;
   let result = null;
-  
+
   try {
     if (supportsTransactions) {
       session = await mongoose.startSession();
       session.startTransaction();
     }
-    
+
     // 1. Revoke the project permission itself
     const projectResult = await revokePermission({
       principalType,
       principalId,
       resourceType: 'project',
       resourceId: projectId,
-      session
+      session,
     });
-    
+
     // 2. Delete all inherited child permissions
     const query = {
       principalType,
-      inheritedFrom: projectId
+      inheritedFrom: projectId,
     };
-    
+
     if (principalType !== 'public') {
       query.principalId = principalId;
     }
-    
+
     const options = session ? { session } : {};
     const childResult = await AclEntry.deleteMany(query, options);
-    
+
     result = {
       projectPermission: projectResult.deletedCount,
-      childPermissions: childResult.deletedCount
+      childPermissions: childResult.deletedCount,
     };
-    
+
     if (session && supportsTransactions) {
       await session.commitTransaction();
     }
-    
+
     return result;
   } catch (error) {
     if (session && supportsTransactions) {
@@ -646,28 +631,25 @@ const revokeProjectPermissionWithCleanup = async ({
 
 /**
  * Reset all permissions for a resource
- * 
+ *
  * Removes all ACL entries for the specified resource
- * 
+ *
  * @param {Object} params - Parameters for resetting resource permissions
  * @param {string} params.resourceType - Type of resource (e.g., 'agent')
  * @param {string|mongoose.Types.ObjectId} params.resourceId - The ID of the resource
  * @returns {Promise<number>} Count of deleted permissions
  */
-const resetResourcePermissions = async ({
-  resourceType,
-  resourceId
-}) => {
+const resetResourcePermissions = async ({ resourceType, resourceId }) => {
   try {
     if (!resourceId || !mongoose.Types.ObjectId.isValid(resourceId)) {
       throw new Error(`Invalid resource ID: ${resourceId}`);
     }
-    
+
     const result = await AclEntry.deleteMany({
       resourceType,
-      resourceId
+      resourceId,
     });
-    
+
     return result.deletedCount;
   } catch (error) {
     logger.error(`[PermissionService.resetResourcePermissions] Error: ${error.message}`);
@@ -677,32 +659,29 @@ const resetResourcePermissions = async ({
 
 /**
  * Check if a user is the author/owner of a resource
- * 
+ *
  * This is useful for checking "ownership" permissions in addition to ACL
- * 
+ *
  * @param {Object} params - Parameters for checking resource authorship
  * @param {string|mongoose.Types.ObjectId} params.userId - The ID of the user
  * @param {Object} params.resource - The resource document with author/authorId field
  * @returns {boolean} Whether the user is the author
  */
-const isResourceAuthor = ({
-  userId,
-  resource
-}) => {
+const isResourceAuthor = ({ userId, resource }) => {
   if (!userId || !resource) {
     return false;
   }
-  
+
   // Convert to string for comparison
   const userIdStr = userId.toString();
-  
+
   // Check possible author field variations
   const author = resource.author || resource.authorId || resource.userId || resource.ownerId;
-  
+
   if (!author) {
     return false;
   }
-  
+
   return author.toString() === userIdStr;
 };
 
@@ -712,9 +691,7 @@ const isResourceAuthor = ({
  * @param {string} params.resourceType - Type of resource (e.g., 'agent')
  * @returns {Promise<Array>} Array of role definitions
  */
-const getAvailableRoles = async ({
-  resourceType
-}) => {
+const getAvailableRoles = async ({ resourceType }) => {
   try {
     return await AccessRole.find({ resourceType }).lean();
   } catch (error) {
@@ -726,11 +703,12 @@ const getAvailableRoles = async ({
 /**
  * Bulk update permissions for a resource (grant, update, revoke)
  * Efficiently handles multiple permission changes in a single transaction
- * 
+ *
  * @param {Object} params - Parameters for bulk permission update
  * @param {string} params.resourceType - Type of resource (e.g., 'agent')
  * @param {string|mongoose.Types.ObjectId} params.resourceId - The ID of the resource
- * @param {Array} params.permissions - Array of permission DTOs with {principalType, principalId, accessRoleId}
+ * @param {Array<TPrincipal>} params.updatedPrincipals - Array of principals to grant/update permissions for
+ * @param {Array<TPrincipal>} params.revokedPrincipals - Array of principals to revoke permissions from
  * @param {string|mongoose.Types.ObjectId} params.grantedBy - User ID making the changes
  * @param {mongoose.ClientSession} [params.session] - Optional MongoDB session for transactions
  * @returns {Promise<Object>} Results object with granted, updated, revoked arrays and error details
@@ -738,19 +716,24 @@ const getAvailableRoles = async ({
 const bulkUpdateResourcePermissions = async ({
   resourceType,
   resourceId,
-  permissions,
+  updatedPrincipals = [],
+  revokedPrincipals = [],
   grantedBy,
-  session
+  session,
 }) => {
   // Check if transactions are supported
   const supportsTransactions = await getTransactionSupport();
   let localSession = session;
   let shouldEndSession = false;
-  
+
   try {
     // Validate inputs
-    if (!Array.isArray(permissions)) {
-      throw new Error('permissions must be an array');
+    if (!Array.isArray(updatedPrincipals)) {
+      throw new Error('updatedPrincipals must be an array');
+    }
+
+    if (!Array.isArray(revokedPrincipals)) {
+      throw new Error('revokedPrincipals must be an array');
     }
 
     if (!resourceId || !mongoose.Types.ObjectId.isValid(resourceId)) {
@@ -766,69 +749,54 @@ const bulkUpdateResourcePermissions = async ({
 
     const sessionOptions = localSession ? { session: localSession } : {};
 
-    // Get current permissions for the resource
-    const currentPermissions = await AclEntry.find({
-      resourceType,
-      resourceId
-    }, null, sessionOptions).populate('roleId', 'accessRoleId').lean();
-
-    // Create maps for efficient comparison
-    const currentPermMap = new Map();
-    currentPermissions.forEach(perm => {
-      const key = `${perm.principalType}-${perm.principalId || 'public'}`;
-      currentPermMap.set(key, perm);
-    });
-
-    const newPermMap = new Map();
-    permissions.forEach(perm => {
-      const key = `${perm.principalType}-${perm.principalId || 'public'}`;
-      newPermMap.set(key, perm);
+    // Pre-fetch all roles for this resource type for quick access
+    const roles = await AccessRole.find({ resourceType }).lean();
+    const rolesMap = new Map();
+    roles.forEach(role => {
+      rolesMap.set(role.accessRoleId, role);
     });
 
     const results = {
       granted: [],
       updated: [],
       revoked: [],
-      errors: []
+      errors: [],
     };
 
-    // Prepare bulk operations
+    // Prepare bulk operations for upserts
     const bulkWrites = [];
-    const newAclEntries = [];
 
-    // Process new permissions (grant or update)
-    for (const newPerm of permissions) {
+    // Process updated principals (grant or update permissions using upsert)
+    for (const principal of updatedPrincipals) {
       try {
-        const key = `${newPerm.principalType}-${newPerm.principalId || 'public'}`;
-        const currentPerm = currentPermMap.get(key);
+        // Validate principal has required accessRoleId
+        if (!principal.accessRoleId) {
+          results.errors.push({
+            principal,
+            error: 'accessRoleId is required for updated principals',
+          });
+          continue;
+        }
 
-        // Get the role to validate and get permission bits
-        const role = await findRoleByIdentifier(newPerm.accessRoleId);
+        // Get the role from pre-fetched map
+        const role = rolesMap.get(principal.accessRoleId);
         if (!role) {
           results.errors.push({
-            permission: newPerm,
-            error: `Role ${newPerm.accessRoleId} not found`
+            principal,
+            error: `Role ${principal.accessRoleId} not found`,
           });
           continue;
         }
 
-        if (role.resourceType !== resourceType) {
-          results.errors.push({
-            permission: newPerm,
-            error: `Role ${newPerm.accessRoleId} is for ${role.resourceType} resources, not ${resourceType}`
-          });
-          continue;
-        }
-
+        // Convert principal to ACL query format
         const query = {
-          principalType: newPerm.principalType,
+          principalType: principal.type,
           resourceType,
-          resourceId
+          resourceId,
         };
         
-        if (newPerm.principalType !== 'public') {
-          query.principalId = newPerm.principalId;
-          query.principalModel = newPerm.principalType === 'user' ? 'User' : 'Group';
+        if (principal.type !== 'public') {
+          query.principalId = principal.id;
         }
 
         const update = {
@@ -836,86 +804,86 @@ const bulkUpdateResourcePermissions = async ({
             permBits: role.permBits,
             roleId: role._id,
             grantedBy,
-            grantedAt: new Date()
-          }
+            grantedAt: new Date(),
+          },
+          $setOnInsert: {
+            principalType: principal.type,
+            resourceType,
+            resourceId,
+            ...(principal.type !== 'public' && {
+              principalId: principal.id,
+              principalModel: principal.type === 'user' ? 'User' : 'Group',
+            }),
+          },
         };
 
-        if (!currentPerm) {
-          // New permission - use upsert
-          bulkWrites.push({
-            updateOne: {
-              filter: query,
-              update: update,
-              upsert: true
-            }
-          });
-          
-          results.granted.push({
-            principalType: newPerm.principalType,
-            principalId: newPerm.principalId,
-            accessRoleId: newPerm.accessRoleId
-          });
-        } else {
-          // Check if role needs to be updated
-          if (currentPerm.roleId.accessRoleId !== newPerm.accessRoleId) {
-            bulkWrites.push({
-              updateOne: {
-                filter: query,
-                update: update
-              }
-            });
+        // Use upsert for both creation and update
+        bulkWrites.push({
+          updateOne: {
+            filter: query,
+            update: update,
+            upsert: true,
+          },
+        });
 
-            results.updated.push({
-              principalType: newPerm.principalType,
-              principalId: newPerm.principalId,
-              oldAccessRoleId: currentPerm.roleId.accessRoleId,
-              newAccessRoleId: newPerm.accessRoleId,
-              id: currentPerm._id
-            });
-          }
-        }
+        // We'll mark as granted for now (could be either granted or updated)
+        results.granted.push({
+          principalType: principal.type,
+          principalId: principal.id,
+          accessRoleId: principal.accessRoleId,
+          principal,
+        });
+
       } catch (error) {
         results.errors.push({
-          permission: newPerm,
-          error: error.message
+          principal,
+          error: error.message,
         });
       }
     }
 
-    // Process permissions to revoke (in current but not in new)
-    const deleteQueries = [];
-    for (const [key, currentPerm] of currentPermMap) {
-      if (!newPermMap.has(key)) {
-        const deleteQuery = {
-          principalType: currentPerm.principalType,
-          resourceType,
-          resourceId
-        };
-        
-        if (currentPerm.principalType !== 'public') {
-          deleteQuery.principalId = currentPerm.principalId;
-        }
-
-        deleteQueries.push(deleteQuery);
-        
-        results.revoked.push({
-          principalType: currentPerm.principalType,
-          principalId: currentPerm.principalId,
-          id: currentPerm._id
-        });
-      }
-    }
-
-    // Execute bulk operations
+    // Execute bulk upsert operations
     if (bulkWrites.length > 0) {
       await AclEntry.bulkWrite(bulkWrites, sessionOptions);
     }
 
-    // Execute deletions
+    // Process revoked principals (remove permissions)
+    const deleteQueries = [];
+    for (const principal of revokedPrincipals) {
+      try {
+        const query = {
+          principalType: principal.type,
+          resourceType,
+          resourceId,
+        };
+        
+        if (principal.type !== 'public') {
+          query.principalId = principal.id;
+        }
+
+        deleteQueries.push(query);
+        
+        results.revoked.push({
+          principalType: principal.type,
+          principalId: principal.id,
+          principal,
+        });
+      } catch (error) {
+        results.errors.push({
+          principal,
+          error: error.message,
+        });
+      }
+    }
+
+    // Execute bulk deletions
     if (deleteQueries.length > 0) {
-      await AclEntry.deleteMany({
-        $or: deleteQueries
-      }, sessionOptions);
+      await AclEntry.deleteMany(
+        {
+          $or: deleteQueries,
+        },
+        sessionOptions,
+      );
     }
 
     // Commit transaction if we started it
@@ -924,7 +892,6 @@ const bulkUpdateResourcePermissions = async ({
     }
 
     return results;
-
   } catch (error) {
     // Abort transaction if we started it
     if (shouldEndSession && supportsTransactions) {
@@ -951,5 +918,5 @@ module.exports = {
   resetResourcePermissions,
   isResourceAuthor,
   getAvailableRoles,
-  bulkUpdateResourcePermissions
+  bulkUpdateResourcePermissions,
 };

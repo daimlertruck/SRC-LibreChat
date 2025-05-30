@@ -9,6 +9,7 @@ import * as config from './config';
 import request from './request';
 import * as s from './schemas';
 import * as r from './roles';
+import * as permissions from './accessPermissions';
 
 export function abortRequestWithMessage(
   endpoint: string,
@@ -795,4 +796,21 @@ export function getAccessRoles(
   resourceType: string,
 ): Promise<q.AccessRolesResponse> {
   return request.get(endpoints.getAccessRoles(resourceType));
+}
+
+/* Get Resource Permissions */
+export function getResourcePermissions(
+  resourceType: string,
+  resourceId: string,
+): Promise<permissions.TGetResourcePermissionsResponse> {
+  return request.get(endpoints.getResourcePermissions(resourceType, resourceId));
+}
+
+/* Update Resource Permissions */
+export function updateResourcePermissions(
+  resourceType: string,
+  resourceId: string,
+  data: permissions.TUpdateResourcePermissionsRequest,
+): Promise<permissions.TUpdateResourcePermissionsResponse> {
+  return request.put(endpoints.updateResourcePermissions(resourceType, resourceId), data);
 }

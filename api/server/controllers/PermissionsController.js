@@ -1,4 +1,9 @@
+/**
+ * @import { TPrincipalSearchResult, TUpdateResourcePermissionsRequest, TUpdateResourcePermissionsResponse } from 'librechat-data-provider'
+ */
+
 const { logger } = require('~/config');
+const mongoose = require('mongoose');
 const {
   grantPermission,
   revokePermission,
@@ -64,24 +69,77 @@ const createResourcePermission = async (req, res) => {
 /**
  * Bulk update permissions for a resource (grant, update, remove)
  * @route PUT /api/{resourceType}/{resourceId}/permissions
+ * @param {Object} req - Express request object
+ * @param {Object} req.params - Route parameters
+ * @param {string} req.params.resourceType - Resource type (e.g., 'agent')
+ * @param {string} req.params.resourceId - Resource ID
+ * @param {TUpdateResourcePermissionsRequest} req.body - Request body
+ * @param {Object} res - Express response object
+ * @returns {Promise<TUpdateResourcePermissionsResponse>} Updated permissions response
  */
 const updateResourcePermissions = async (req, res) => {
   try {
     const { resourceType, resourceId } = req.params;
-    const { permissions } = req.body; // Array of permission DTOs
+    /** @type {TUpdateResourcePermissionsRequest} */
+    const { updated, removed, public: isPublic, publicAccessRoleId } = req.body;
     const { id: userId } = req.user;
+
+    // Prepare principals for the service call
+    const updatedPrincipals = [];
+    const revokedPrincipals = [];
+
+    // Add updated principals
+    if (updated && Array.isArray(updated)) {
+      updatedPrincipals.push(...updated);
+    }
+
+    // Add public permission if enabled
+    if (isPublic && publicAccessRoleId) {
+      updatedPrincipals.push({
+        type: 'public',
+        id: null,
+        accessRoleId: publicAccessRoleId
+      });
+    }
+
+    // Add removed principals
+    if (removed && Array.isArray(removed)) {
+      revokedPrincipals.push(...removed);
+    }
+
+    // If public is disabled, add public to revoked list
+    if (!isPublic) {
+      revokedPrincipals.push({
+        type: 'public',
+        id: null
+      });
+    }
 
     const results = await bulkUpdateResourcePermissions({
       resourceType,
       resourceId,
-      permissions,
+      updatedPrincipals,
+      revokedPrincipals,
       grantedBy: userId,
     });
 
-    res.status(200).json({
+    // Format response to match expected DTO structure
+    const responseUpdated = updated ? updated.map(principal => ({
+      ...principal,
+      accessRoleId: principal.accessRoleId
+    })) : [];
+
+    /** @type {TUpdateResourcePermissionsResponse} */
+    const response = {
       message: 'Permissions updated successfully',
-      results,
-    });
+      results: {
+        principals: responseUpdated,
+        public: isPublic || false,
+        publicAccessRoleId: isPublic ? publicAccessRoleId : undefined,
+      },
+    };
+
+    res.status(200).json(response);
   } catch (error) {
     logger.error('Error updating resource permissions:', error);
     res.status(400).json({
@@ -92,39 +150,134 @@ const updateResourcePermissions = async (req, res) => {
 };
 
 /**
- * Get all permissions for a resource
- * @route GET /api/{resourceType}/{resourceId}/permissions
+ * Get principals with their permission roles for a resource (UI-friendly format)
+ * Uses efficient aggregation pipeline to join User/Group data in single query
+ * @route GET /api/permissions/{resourceType}/{resourceId}
  */
 const getResourcePermissions = async (req, res) => {
   try {
     const { resourceType, resourceId } = req.params;
 
-    const permissions = await AclEntry.find({
+    // Use aggregation pipeline for efficient single-query data retrieval
+    const results = await AclEntry.aggregate([
+      // Match ACL entries for this resource
+      {
+        $match: {
+          resourceType,
+          resourceId: mongoose.Types.ObjectId.isValid(resourceId) ? mongoose.Types.ObjectId.createFromHexString(resourceId) : resourceId,
+        },
+      },
+      // Lookup AccessRole information
+      {
+        $lookup: {
+          from: 'accessroles',
+          localField: 'roleId',
+          foreignField: '_id',
+          as: 'role',
+        },
+      },
+      // Lookup User information (for user principals)
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'principalId',
+          foreignField: '_id',
+          as: 'userInfo',
+          pipeline: [
+            {
+              $project: {
+                _id: 1,
+                name: 1,
+                username: 1,
+                email: 1,
+                avatar: 1,
+              },
+            },
+          ],
+        },
+      },
+      // Lookup Group information (for group principals)
+      {
+        $lookup: {
+          from: 'groups',
+          localField: 'principalId',
+          foreignField: '_id',
+          as: 'groupInfo',
+          pipeline: [
+            {
+              $project: {
+                _id: 1,
+                name: 1,
+                email: 1,
+                description: 1,
+                avatar: 1,
+              },
+            },
+          ],
+        },
+      },
+      // Project final structure
+      {
+        $project: {
+          principalType: 1,
+          principalId: 1,
+          accessRoleId: { $arrayElemAt: ['$role.accessRoleId', 0] },
+          userInfo: { $arrayElemAt: ['$userInfo', 0] },
+          groupInfo: { $arrayElemAt: ['$groupInfo', 0] },
+        },
+      },
+    ]);
+
+    const principals = [];
+    let publicPermission = null;
+
+    // Process aggregation results
+    for (const result of results) {
+      if (result.principalType === 'public') {
+        publicPermission = {
+          public: true,
+          publicAccessRoleId: result.accessRoleId,
+        };
+      } else if (result.principalType === 'user' && result.userInfo) {
+        principals.push({
+          type: 'user',
+          id: result.userInfo._id.toString(),
+          name: result.userInfo.name || result.userInfo.username,
+          email: result.userInfo.email,
+          avatar: result.userInfo.avatar,
+          source: 'local',
+          accessRoleId: result.accessRoleId,
+        });
+      } else if (result.principalType === 'group' && result.groupInfo) {
+        principals.push({
+          type: 'group',
+          id: result.groupInfo._id.toString(),
+          name: result.groupInfo.name,
+          email: result.groupInfo.email,
+          description: result.groupInfo.description,
+          avatar: result.groupInfo.avatar,
+          source: 'local',
+          accessRoleId: result.accessRoleId,
+        });
+      }
+    }
+
+    // Return response in format expected by frontend
+    const response = {
       resourceType,
       resourceId,
-    })
-      .populate('roleId', 'accessRoleId name description permBits')
-      .lean();
+      principals,
+      public: publicPermission?.public || false,
+      ...(publicPermission?.publicAccessRoleId && {
+        publicAccessRoleId: publicPermission.publicAccessRoleId,
+      }),
+    };
 
-    const formattedPermissions = permissions.map((permission) => ({
-      id: permission._id,
-      principalType: permission.principalType,
-      principalId: permission.principalId,
-      role: permission.roleId,
-      grantedBy: permission.grantedBy,
-      grantedAt: permission.grantedAt,
-      inheritedFrom: permission.inheritedFrom,
-    }));
-
-    res.status(200).json({
-      resourceType,
-      resourceId,
-      permissions: formattedPermissions,
-    });
+    res.status(200).json(response);
   } catch (error) {
-    logger.error('Error getting resource permissions:', error);
+    logger.error('Error getting resource permissions principals:', error);
     res.status(500).json({
-      error: 'Failed to get permissions',
+      error: 'Failed to get permissions principals',
       details: error.message,
     });
   }

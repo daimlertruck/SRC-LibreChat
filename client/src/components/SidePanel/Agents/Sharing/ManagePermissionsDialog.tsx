@@ -21,37 +21,63 @@ import {
 import { cn, removeFocusOutlines } from '~/utils';
 import { useToastContext } from '~/Providers';
 import { useLocalize } from '~/hooks';
+import {
+  useGetResourcePermissionsQuery,
+  useUpdateResourcePermissionsMutation,
+} from 'librechat-data-provider/react-query';
 
 // Import modular components
 import SelectedPrincipalsList from './PeoplePicker/SelectedPrincipalsList';
 import PublicSharingToggle from './PublicSharingToggle';
-import { MOCK_CURRENT_SHARES } from './mockData';
 
 export default function ManagePermissionsDialog({
-  agent_id = '',
+  agentDbId,
   agentName,
-  currentShares = MOCK_CURRENT_SHARES,
-  isPublic = false,
-  publicRole = ACCESS_ROLE_IDS.AGENT_VIEWER,
+  resourceType = 'agent',
   onUpdatePermissions,
 }: {
-  agent_id?: string;
+  agentDbId: string;
   agentName?: string;
-  currentShares?: TPrincipal[];
-  isPublic?: boolean;
-  publicRole?: string;
+  resourceType?: string;
   onUpdatePermissions?: (shares: TPrincipal[], isPublic: boolean, publicRole: string) => void;
 }) {
   const localize = useLocalize();
   const { showToast } = useToastContext();
 
+  // Fetch current permissions from API
+  const {
+    data: permissionsData,
+    isLoading: isLoadingPermissions,
+    error: permissionsError,
+  } = useGetResourcePermissionsQuery(resourceType, agentDbId, {
+    enabled: !!agentDbId,
+  });
+
+  // Update permissions mutation
+  const updatePermissionsMutation = useUpdateResourcePermissionsMutation();
+
   // State for managing current permissions
-  const [managedShares, setManagedShares] = useState<TPrincipal[]>(currentShares);
-  const [managedIsPublic, setManagedIsPublic] = useState(isPublic);
-  const [managedPublicRole, setManagedPublicRole] = useState<string>(publicRole);
+  const [managedShares, setManagedShares] = useState<TPrincipal[]>([]);
+  const [managedIsPublic, setManagedIsPublic] = useState(false);
+  const [managedPublicRole, setManagedPublicRole] = useState<string>(ACCESS_ROLE_IDS.AGENT_VIEWER);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+
+  // Convert API response to TPrincipal format
+  const currentShares: TPrincipal[] =
+    permissionsData?.principals?.map((principal) => ({
+      type: principal.type,
+      id: principal.id,
+      name: principal.name,
+      email: principal.email,
+      source: principal.source,
+      avatar: principal.avatar,
+      description: principal.description,
+      accessRoleId: principal.accessRoleId,
+    })) || [];
+
+  const isPublic = permissionsData?.public || false;
+  const publicRole = permissionsData?.publicAccessRoleId || ACCESS_ROLE_IDS.AGENT_VIEWER;
 
   const {
     formState: { isValid },
@@ -59,25 +85,34 @@ export default function ManagePermissionsDialog({
     mode: 'onChange',
   });
 
-  // Update internal state when props change
-  useEffect(() => {
-    setManagedShares(currentShares);
-    setManagedIsPublic(isPublic);
-    setManagedPublicRole(publicRole);
-    setHasChanges(false);
-  }, [currentShares, isPublic, publicRole, isModalOpen]);
+  // // Update internal state when API data changes
+  // useEffect(() => {
+  //   if (permissionsData) {
+  //     setManagedShares(currentShares);
+  //     setManagedIsPublic(isPublic);
+  //     setManagedPublicRole(publicRole);
+  //     setHasChanges(false);
+  //   }
+  // }, [permissionsData, isModalOpen, currentShares, isPublic, publicRole]);
 
-  // Track changes to enable/disable save button
-  useEffect(() => {
-    const sharesChanged = JSON.stringify(managedShares) !== JSON.stringify(currentShares);
-    const publicChanged = managedIsPublic !== isPublic;
-    const publicRoleChanged = managedPublicRole !== publicRole;
+  // // Track changes to enable/disable save button
+  // useEffect(() => {
+  //   const sharesChanged = JSON.stringify(managedShares) !== JSON.stringify(currentShares);
+  //   const publicChanged = managedIsPublic !== isPublic;
+  //   const publicRoleChanged = managedPublicRole !== publicRole;
 
-    setHasChanges(sharesChanged || publicChanged || publicRoleChanged);
-  }, [managedShares, managedIsPublic, managedPublicRole, currentShares, isPublic, publicRole]);
+  //   setHasChanges(sharesChanged || publicChanged || publicRoleChanged);
+  // }, [managedShares, managedIsPublic, managedPublicRole, currentShares, isPublic, publicRole]);
 
-  if (!agent_id) {
+  if (!agentDbId) {
     return null;
+  }
+
+  // Show error if permissions couldn't be loaded
+  if (permissionsError) {
+    return (
+      <div className="text-sm text-red-600">Failed to load permissions. Please try again.</div>
+    );
   }
 
   const handleRemoveShare = (id: string) => {
@@ -89,15 +124,37 @@ export default function ManagePermissionsDialog({
   };
 
   const handleSaveChanges = async () => {
-    setIsSubmitting(true);
-
     try {
-      // TODO: Replace with real API calls when backend is ready
-      console.log('Updating agent permissions:', {
-        agentId: agent_id,
-        updatedShares: managedShares,
-        isPublic: managedIsPublic,
-        publicRole: managedPublicRole,
+      // Determine which principals were added/updated and which were removed
+      const originalSharesMap = new Map(
+        currentShares.map((share) => [`${share.type}-${share.id}`, share]),
+      );
+      const managedSharesMap = new Map(
+        managedShares.map((share) => [`${share.type}-${share.id}`, share]),
+      );
+
+      // Updated principals (including role changes)
+      const updated = managedShares.filter((share) => {
+        const key = `${share.type}-${share.id}`;
+        const original = originalSharesMap.get(key);
+        return !original || original.accessRoleId !== share.accessRoleId;
+      });
+
+      // Removed principals
+      const removed = currentShares.filter((share) => {
+        const key = `${share.type}-${share.id}`;
+        return !managedSharesMap.has(key);
+      });
+
+      await updatePermissionsMutation.mutateAsync({
+        resourceType,
+        resourceId: agentDbId,
+        data: {
+          updated,
+          removed,
+          public: managedIsPublic,
+          publicAccessRoleId: managedIsPublic ? managedPublicRole : undefined,
+        },
       });
 
       // Call parent callback if provided
@@ -112,12 +169,11 @@ export default function ManagePermissionsDialog({
 
       setIsModalOpen(false);
     } catch (error) {
+      console.error('Error updating permissions:', error);
       showToast({
         message: 'Failed to update permissions. Please try again.',
         status: 'error',
       });
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -200,7 +256,12 @@ export default function ManagePermissionsDialog({
           </div>
 
           {/* User/Group Permissions List */}
-          {managedShares.length > 0 ? (
+          {isLoadingPermissions ? (
+            <div className="flex items-center justify-center p-8">
+              <Loader className="h-6 w-6 animate-spin" />
+              <span className="ml-2 text-sm text-text-secondary">Loading permissions...</span>
+            </div>
+          ) : managedShares.length > 0 ? (
             <div>
               <h3 className="mb-3 flex items-center gap-2 text-sm font-medium text-text-primary">
                 <UserCheck className="h-4 w-4" />
@@ -242,10 +303,10 @@ export default function ManagePermissionsDialog({
             </OGDialogClose>
             <Button
               onClick={handleSaveChanges}
-              disabled={isSubmitting || !hasChanges}
+              disabled={updatePermissionsMutation.isLoading || !hasChanges || isLoadingPermissions}
               className="min-w-[120px]"
             >
-              {isSubmitting ? (
+              {updatePermissionsMutation.isLoading ? (
                 <div className="flex items-center gap-2">
                   <Loader className="h-4 w-4 animate-spin" />
                   Saving...

@@ -32,7 +32,6 @@ export default function AgentFooter({
   const { control } = methods;
   const agent = useWatch({ control, name: 'agent' });
   const agent_id = useWatch({ control, name: 'id' });
-
   const hasAccessToShareAgents = useHasAccess({
     permissionType: PermissionTypes.AGENTS,
     permission: Permissions.SHARED_GLOBAL,
@@ -65,10 +64,7 @@ export default function AgentFooter({
         />
         {(agent?.author === user?.id || user?.role === SystemRoles.ADMIN) &&
           hasAccessToShareAgents && (
-            <GrantAccessDialog
-              agent_id={agent_id}
-              agentName={agent?.name ?? ''}
-            />
+            <GrantAccessDialog agentDbId={agent?._id} agentName={agent?.name ?? ''} />
           )}
         {agent && agent.author === user?.id && <DuplicateAgent agent_id={agent_id} />}
         {/* Submit Button */}

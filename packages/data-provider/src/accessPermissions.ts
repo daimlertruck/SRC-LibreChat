@@ -58,6 +58,7 @@ export const principalSchema = z.object({
   avatar: z.string().optional(), // for user and group types
   description: z.string().optional(), // for group type
   idOnTheSource: z.string().optional(), // Entra ID for users/groups
+  accessRoleId: z.string().optional(), // Access role ID for permissions
 });
 
 /**
@@ -123,6 +124,43 @@ export const bulkUpdatePermissionsRequestSchema = z.object({
   })),
 });
 
+/**
+ * Update resource permissions request schema
+ * This matches the user's requirement for the frontend DTO structure
+ */
+export const updateResourcePermissionsRequestSchema = z.object({
+  updated: principalSchema.array(),
+  removed:principalSchema.array(),
+  public: z.boolean(),
+  publicAccessRoleId: z.string().optional(),
+});
+
+/**
+ * Update resource permissions response schema
+ * Returns the updated permissions with accessRoleId included
+ */
+export const updateResourcePermissionsResponseSchema = z.object({
+  message: z.string(),
+  results: z.object({
+    principals: z.array(z.object({
+      id: z.string().nullable(),
+      type: z.enum(['user', 'group']),
+      name: z.string(),
+      email: z.string().optional(),
+      username: z.string().optional(),
+      avatar: z.string().optional(),
+      provider: z.string().optional(),
+      source: z.enum(['local', 'entra']),
+      memberCount: z.number().optional(),
+      description: z.string().optional(),
+      idOnTheSource: z.string().optional(),
+      accessRoleId: z.string(), // Added role ID as required
+    })),
+    public: z.boolean(),
+    publicAccessRoleId: z.string().optional(),
+  }),
+});
+
 // ===== TYPESCRIPT TYPES =====
 
 /**
@@ -154,6 +192,18 @@ export type TGrantPermissionRequest = z.infer<typeof grantPermissionRequestSchem
  * Bulk update permissions request
  */
 export type TBulkUpdatePermissionsRequest = z.infer<typeof bulkUpdatePermissionsRequestSchema>;
+
+/**
+ * Update resource permissions request
+ * This matches the user's requirement for the frontend DTO structure
+ */
+export type TUpdateResourcePermissionsRequest = z.infer<typeof updateResourcePermissionsRequestSchema>;
+
+/**
+ * Update resource permissions response
+ * Returns the updated permissions with accessRoleId included
+ */
+export type TUpdateResourcePermissionsResponse = z.infer<typeof updateResourcePermissionsResponseSchema>;
 
 /**
  * Principal search request parameters
@@ -203,6 +253,35 @@ export type TAvailableRolesResponse = {
   resourceType: string;
   roles: TAccessRole[];
 };
+
+/**
+ * Get resource permissions response schema
+ * This matches the enhanced aggregation-based endpoint response format
+ */
+export const getResourcePermissionsResponseSchema = z.object({
+  resourceType: z.string(),
+  resourceId: z.string(),
+  principals: z.array(z.object({
+    type: z.enum(['user', 'group']),
+    id: z.string(),
+    name: z.string(),
+    email: z.string().optional(),
+    username: z.string().optional(), // for users
+    avatar: z.string().optional(),
+    source: z.enum(['local', 'entra']),
+    memberCount: z.number().optional(), // for groups
+    description: z.string().optional(), // for groups
+    accessRoleId: z.string(),
+  })),
+  public: z.boolean(),
+  publicAccessRoleId: z.string().optional(),
+});
+
+/**
+ * Get resource permissions response type
+ * This matches the enhanced aggregation-based endpoint response format
+ */
+export type TGetResourcePermissionsResponse = z.infer<typeof getResourcePermissionsResponseSchema>;
 
 // ===== UTILITY TYPES =====
 

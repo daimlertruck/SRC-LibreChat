@@ -273,7 +273,7 @@ const getListAgents = async (searchParameter) => {
   const agents = (
     await Agent.find(query, {
       id: 1,
-      _id: 0,
+      _id: 1,
       name: 1,
       avatar: 1,
       author: 1,
