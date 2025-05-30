@@ -6,7 +6,7 @@ const { logger } = require('~/config');
 const client = require('openid-client');
 
 /**
- * @import { TPrincipalSearchResult } from 'librechat-data-provider'
+ * @import { TPrincipalSearchResult, TGraphPerson, TGraphUser, TGraphGroup, TGraphPeopleResponse, TGraphUsersResponse, TGraphGroupsResponse } from 'librechat-data-provider'
  */
 
 /**
@@ -20,7 +20,7 @@ const createGraphClient = async (accessToken, sub) => {
     // Reason: Use existing OpenID configuration and token exchange pattern from openidStrategy.js
     const openidConfig = getOpenIdConfig();
     const exchangedToken = await exchangeTokenForGraphAccess(openidConfig, accessToken, sub);
-    
+
     const graphClient = Client.init({
       authProvider: (done) => {
         done(null, exchangedToken);
@@ -55,8 +55,9 @@ const exchangeTokenForGraphAccess = async (config, accessToken, sub) => {
 
     // Reason: Use Graph API specific scopes for on-behalf-of flow
     const graphScopes = process.env.OPENID_GRAPH_SCOPES || 'User.Read,People.Read,Group.Read.All';
-    const scopeString = graphScopes.split(',')
-      .map(scope => `https://graph.microsoft.com/${scope}`)
+    const scopeString = graphScopes
+      .split(',')
+      .map((scope) => `https://graph.microsoft.com/${scope}`)
       .join(' ');
 
     const grantResponse = await client.genericGrantRequest(
@@ -128,15 +129,15 @@ const searchEntraIdPrincipals = async (accessToken, sub, query, type = 'all', li
       // Search both users and groups with full limit, then merge
       const [userResults, groupResults] = await Promise.all([
         searchUsers(graphClient, query, limit),
-        searchGroups(graphClient, query, limit)
+        searchGroups(graphClient, query, limit),
       ]);
-      
+
       allResults.push(...userResults, ...groupResults);
     }
 
     // Step 4: Remove duplicates based on idOnTheSource and apply final limit
     const seenIds = new Set();
-    const uniqueResults = allResults.filter(result => {
+    const uniqueResults = allResults.filter((result) => {
       if (seenIds.has(result.idOnTheSource)) {
         return false;
       }
@@ -161,7 +162,7 @@ const searchEntraIdPrincipals = async (accessToken, sub, query, type = 'all', li
 const getCurrentUserGroups = async (accessToken, sub) => {
   try {
     const graphClient = await createGraphClient(accessToken, sub);
-    
+
     // Reason: Use /me/people endpoint with server-side filtering for UnifiedGroup subclass
     const groupsResponse = await graphClient
       .api('/me/people')
@@ -186,7 +187,7 @@ const getCurrentUserGroups = async (accessToken, sub) => {
  */
 const transformPersonToInternal = (person) => {
   const primaryEmail = person.scoredEmailAddresses?.[0]?.address || person.userPrincipalName;
-  
+
   return {
     type: 'user',
     displayName: person.displayName,
@@ -215,7 +216,7 @@ const transformPersonToInternal = (person) => {
  */
 const transformGroupToInternal = (group) => {
   const primaryEmail = group.scoredEmailAddresses?.[0]?.address || group.userPrincipalName;
-  
+
   return {
     type: 'group',
     displayName: group.displayName,
@@ -230,8 +231,6 @@ const transformGroupToInternal = (group) => {
     idOnTheSource: group.id, // Reason: Include Entra ID for duplicate removal and mapping to group schema
   };
 };
-
-
 
 /**
  * Search for contacts (users and groups) using Microsoft Graph /me/people endpoint
@@ -261,7 +260,10 @@ const searchContacts = async (graphClient, query, limit = 10, type = 'all') => {
     let apiCall = graphClient
       .api('/me/people')
       .search(`"${query}"`)
-      .select('id,displayName,givenName,surname,userPrincipalName,jobTitle,department,companyName,scoredEmailAddresses,personType,phones,mail')
+      .select(
+        'id,displayName,givenName,surname,userPrincipalName,jobTitle,department,companyName,scoredEmailAddresses,personType,phones',
+      )
+      .header('ConsistencyLevel', 'eventual')
       .top(limit);
 
     // Apply filter if specified
@@ -294,8 +296,13 @@ const searchUsers = async (graphClient, query, limit = 10) => {
     // Reason: Search users by display name, email, and user principal name
     const usersResponse = await graphClient
       .api('/users')
-      .search(`"displayName:${query}" OR "userPrincipalName:${query}" OR "mail:${query}" OR "givenName:${query}" OR "surname:${query}"`)
-      .select('id,displayName,givenName,surname,userPrincipalName,jobTitle,department,companyName,mail,phones')
+      .search(
+        `"displayName:${query}" OR "userPrincipalName:${query}" OR "mail:${query}" OR "givenName:${query}" OR "surname:${query}"`,
+      )
+      .select(
+        'id,displayName,givenName,surname,userPrincipalName,jobTitle,department,companyName,mail,phones',
+      )
+      .header('ConsistencyLevel', 'eventual')
       .top(limit)
       .get();
 
@@ -325,6 +332,7 @@ const searchGroups = async (graphClient, query, limit = 10) => {
       .api('/groups')
       .search(`"displayName:${query}" OR "mail:${query}" OR "mailNickname:${query}"`)
       .select('id,displayName,mail,mailNickname,description,groupTypes,resourceProvisioningOptions')
+      .header('ConsistencyLevel', 'eventual')
       .top(limit)
       .get();
 
@@ -363,7 +371,8 @@ const testGraphApiAccess = async (accessToken, sub) => {
 
     // Test People.Read permission with OrganizationUser filter
     try {
-      await graphClient.api('/me/people')
+      await graphClient
+        .api('/me/people')
         .filter("personType/subclass eq 'OrganizationUser'")
         .top(1)
         .get();
@@ -374,7 +383,8 @@ const testGraphApiAccess = async (accessToken, sub) => {
 
     // Test People.Read permission with UnifiedGroup filter
     try {
-      await graphClient.api('/me/people')
+      await graphClient
+        .api('/me/people')
         .filter("personType/subclass eq 'UnifiedGroup'")
         .top(1)
         .get();
@@ -385,7 +395,8 @@ const testGraphApiAccess = async (accessToken, sub) => {
 
     // Test /users endpoint access (requires User.Read.All or similar)
     try {
-      await graphClient.api('/users')
+      await graphClient
+        .api('/users')
         .search('"displayName:test"')
         .select('id,displayName,userPrincipalName')
         .top(1)
@@ -397,7 +408,8 @@ const testGraphApiAccess = async (accessToken, sub) => {
 
     // Test /groups endpoint access (requires Group.Read.All or similar)
     try {
-      await graphClient.api('/groups')
+      await graphClient
+        .api('/groups')
         .search('"displayName:test"')
         .select('id,displayName,mail')
         .top(1)
@@ -423,7 +435,7 @@ const testGraphApiAccess = async (accessToken, sub) => {
 
 /**
  * Map Graph API user object to TPrincipalSearchResult format
- * @param {Object} user - Raw user object from Graph API
+ * @param {TGraphUser} user - Raw user object from Graph API
  * @returns {TPrincipalSearchResult} Mapped user result
  */
 const mapUserToTPrincipalSearchResult = (user) => {
@@ -431,7 +443,7 @@ const mapUserToTPrincipalSearchResult = (user) => {
     id: null,
     type: 'user',
     name: user.displayName,
-    email: user.mail,
+    email: user.mail || user.userPrincipalName,
     username: user.userPrincipalName,
     source: 'entra',
     idOnTheSource: user.id,
@@ -440,7 +452,7 @@ const mapUserToTPrincipalSearchResult = (user) => {
 
 /**
  * Map Graph API group object to TPrincipalSearchResult format
- * @param {Object} group - Raw group object from Graph API
+ * @param {TGraphGroup} group - Raw group object from Graph API
  * @returns {TPrincipalSearchResult} Mapped group result
  */
 const mapGroupToTPrincipalSearchResult = (group) => {
@@ -448,7 +460,8 @@ const mapGroupToTPrincipalSearchResult = (group) => {
     id: null,
     type: 'group',
     name: group.displayName,
-    email: group.mail,
+    email: group.mail || group.userPrincipalName,
+    description: group.description,
     source: 'entra',
     idOnTheSource: group.id,
   };
@@ -457,12 +470,12 @@ const mapGroupToTPrincipalSearchResult = (group) => {
 /**
  * Map Graph API /me/people contact object to TPrincipalSearchResult format
  * Handles both user and group contacts from the people endpoint
- * @param {Object} contact - Raw contact object from Graph API /me/people
+ * @param {TGraphPerson} contact - Raw contact object from Graph API /me/people
  * @returns {TPrincipalSearchResult} Mapped contact result
  */
 const mapContactToTPrincipalSearchResult = (contact) => {
   const isGroup = contact.personType?.class === 'Group';
-  const primaryEmail = contact.scoredEmailAddresses?.[0]?.address || contact.mail;
+  const primaryEmail = contact.scoredEmailAddresses?.[0]?.address;
 
   return {
     id: null,

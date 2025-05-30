@@ -3,6 +3,9 @@ import { Schema, Document, Types } from 'mongoose';
 export interface IGroup extends Document {
   _id: Types.ObjectId;
   name: string;
+  description?: string;
+  email?: string;
+  avatar?: string;
   memberIds: Types.ObjectId[];
   source: 'local' | 'entra';
   idOnTheSource?: string;
@@ -15,10 +18,22 @@ const GroupSchema = new Schema<IGroup>(
       required: true,
       index: true,
     },
+    description: {
+      type: String,
+      required: false,
+    },
+    email: {
+      type: String,
+      required: false,
+      index: true,
+    },
+    avatar: {
+      type: String,
+      required: false,
+    },
     memberIds: [{
       type: Schema.Types.ObjectId,
       ref: 'User',
-      index: true,
     }],
     source: {
       type: String,

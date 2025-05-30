@@ -117,12 +117,13 @@ export type PrincipalSearchResult = {
   id: string | null; // null for Entra ID principals that don't exist locally yet
   type: 'user' | 'group';
   name: string;
-  email?: string; // for users
+  email?: string; // for users and groups
   username?: string; // for users
-  avatar?: string; // for users
+  avatar?: string; // for users and groups
   provider?: string; // for users
   source: 'local' | 'entra';
   memberCount?: number; // for groups
+  description?: string; // for groups
   idOnTheSource?: string; // Entra ID for users (maps to openidId) and groups (maps to idOnTheSource)
 };
 

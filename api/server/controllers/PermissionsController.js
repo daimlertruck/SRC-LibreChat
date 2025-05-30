@@ -4,10 +4,14 @@ const {
   revokePermission,
   getEffectivePermissions,
   getAvailableRoles,
-  bulkUpdateResourcePermissions
+  bulkUpdateResourcePermissions,
 } = require('~/server/services/PermissionService');
 const { AclEntry } = require('~/models/AclEntry');
-const { searchPrincipals: searchPrincipalsService, sortPrincipalsByRelevance, calculateRelevanceScore } = require('~/models/userGroupMethods');
+const {
+  searchPrincipals: searchLocalPrincipals,
+  sortPrincipalsByRelevance,
+  calculateRelevanceScore,
+} = require('~/models/userGroupMethods');
 const { searchEntraIdPrincipals } = require('~/server/services/GraphApiService');
 const { isEnabled } = require('~/server/utils');
 
@@ -32,7 +36,7 @@ const createResourcePermission = async (req, res) => {
       resourceType,
       resourceId,
       accessRoleId,
-      grantedBy: userId
+      grantedBy: userId,
     });
 
     res.status(201).json({
@@ -45,15 +49,14 @@ const createResourcePermission = async (req, res) => {
         resourceId: aclEntry.resourceId,
         accessRoleId: accessRoleId,
         grantedBy: aclEntry.grantedBy,
-        grantedAt: aclEntry.grantedAt
-      }
+        grantedAt: aclEntry.grantedAt,
+      },
     });
-
   } catch (error) {
     logger.error('Error creating resource permission:', error);
     res.status(400).json({
       error: 'Failed to create permission',
-      details: error.message
+      details: error.message,
     });
   }
 };
@@ -72,19 +75,18 @@ const updateResourcePermissions = async (req, res) => {
       resourceType,
       resourceId,
       permissions,
-      grantedBy: userId
+      grantedBy: userId,
     });
 
     res.status(200).json({
       message: 'Permissions updated successfully',
-      results
+      results,
     });
-
   } catch (error) {
     logger.error('Error updating resource permissions:', error);
     res.status(400).json({
       error: 'Failed to update permissions',
-      details: error.message
+      details: error.message,
     });
   }
 };
@@ -99,32 +101,31 @@ const getResourcePermissions = async (req, res) => {
 
     const permissions = await AclEntry.find({
       resourceType,
-      resourceId
+      resourceId,
     })
-    .populate('roleId', 'accessRoleId name description permBits')
-    .lean();
+      .populate('roleId', 'accessRoleId name description permBits')
+      .lean();
 
-    const formattedPermissions = permissions.map(permission => ({
+    const formattedPermissions = permissions.map((permission) => ({
       id: permission._id,
       principalType: permission.principalType,
       principalId: permission.principalId,
       role: permission.roleId,
       grantedBy: permission.grantedBy,
       grantedAt: permission.grantedAt,
-      inheritedFrom: permission.inheritedFrom
+      inheritedFrom: permission.inheritedFrom,
     }));
 
     res.status(200).json({
       resourceType,
       resourceId,
-      permissions: formattedPermissions
+      permissions: formattedPermissions,
     });
-
   } catch (error) {
     logger.error('Error getting resource permissions:', error);
     res.status(500).json({
       error: 'Failed to get permissions',
-      details: error.message
+      details: error.message,
     });
   }
 };
@@ -143,12 +144,12 @@ const updateResourcePermission = async (req, res) => {
     const existingEntry = await AclEntry.findOne({
       _id: permissionId,
       resourceType,
-      resourceId
+      resourceId,
     });
 
     if (!existingEntry) {
       return res.status(404).json({
-        error: 'Permission not found'
+        error: 'Permission not found',
       });
     }
 
@@ -157,7 +158,7 @@ const updateResourcePermission = async (req, res) => {
       principalType: existingEntry.principalType,
       principalId: existingEntry.principalId,
       resourceType,
-      resourceId
+      resourceId,
     });
 
     // Grant the new permission with updated role
@@ -167,7 +168,7 @@ const updateResourcePermission = async (req, res) => {
       resourceType,
       resourceId,
       accessRoleId,
-      grantedBy: userId
+      grantedBy: userId,
     });
 
     res.status(200).json({
@@ -180,15 +181,14 @@ const updateResourcePermission = async (req, res) => {
         resourceId: updatedEntry.resourceId,
         accessRoleId: accessRoleId,
         grantedBy: updatedEntry.grantedBy,
-        grantedAt: updatedEntry.grantedAt
-      }
+        grantedAt: updatedEntry.grantedAt,
+      },
     });
-
   } catch (error) {
     logger.error('Error updating resource permission:', error);
     res.status(500).json({
       error: 'Failed to update permission',
-      details: error.message
+      details: error.message,
     });
   }
 };
@@ -205,12 +205,12 @@ const deleteResourcePermission = async (req, res) => {
     const aclEntry = await AclEntry.findOne({
       _id: permissionId,
       resourceType,
-      resourceId
+      resourceId,
     });
 
     if (!aclEntry) {
       return res.status(404).json({
-        error: 'Permission not found'
+        error: 'Permission not found',
       });
     }
 
@@ -219,19 +219,18 @@ const deleteResourcePermission = async (req, res) => {
       principalType: aclEntry.principalType,
       principalId: aclEntry.principalId,
       resourceType,
-      resourceId
+      resourceId,
     });
 
     res.status(200).json({
       message: 'Permission revoked successfully',
-      permissionId
+      permissionId,
     });
-
   } catch (error) {
     logger.error('Error deleting resource permission:', error);
     res.status(500).json({
       error: 'Failed to delete permission',
-      details: error.message
+      details: error.message,
     });
   }
 };
@@ -248,19 +247,18 @@ const getResourceRoles = async (req, res) => {
 
     res.status(200).json({
       resourceType,
-      roles: roles.map(role => ({
+      roles: roles.map((role) => ({
         accessRoleId: role.accessRoleId,
         name: role.name,
         description: role.description,
-        permBits: role.permBits
-      }))
+        permBits: role.permBits,
+      })),
     });
-
   } catch (error) {
     logger.error('Error getting resource roles:', error);
     res.status(500).json({
       error: 'Failed to get roles',
-      details: error.message
+      details: error.message,
     });
   }
 };
@@ -277,21 +275,20 @@ const getUserEffectivePermissions = async (req, res) => {
     const permissions = await getEffectivePermissions({
       userId,
       resourceType,
-      resourceId
+      resourceId,
     });
 
     res.status(200).json({
       resourceType,
       resourceId,
       userId,
-      effectivePermissions: permissions
+      effectivePermissions: permissions,
     });
-
   } catch (error) {
     logger.error('Error getting user effective permissions:', error);
     res.status(500).json({
       error: 'Failed to get effective permissions',
-      details: error.message
+      details: error.message,
     });
   }
 };
@@ -307,159 +304,98 @@ const searchPrincipals = async (req, res) => {
 
     if (!query || query.trim().length === 0) {
       return res.status(400).json({
-        error: 'Query parameter "q" is required and must not be empty'
+        error: 'Query parameter "q" is required and must not be empty',
       });
     }
 
     if (query.trim().length < 2) {
       return res.status(400).json({
-        error: 'Query must be at least 2 characters long'
+        error: 'Query must be at least 2 characters long',
       });
     }
 
     const searchLimit = Math.min(Math.max(1, parseInt(limit) || 10), 50);
     const typeFilter = ['user', 'group'].includes(type) ? type : null;
 
-    // Step 1: Search local database first for immediate results
-    const localResults = await searchPrincipalsService(
-      query.trim(),
-      searchLimit,
-      typeFilter
-    );
-
+    const localResults = await searchLocalPrincipals(query.trim(), searchLimit, typeFilter);
     let allPrincipals = [...localResults];
 
-    // Step 2: Check if Entra ID integration is enabled and user has OpenID provider
-    const useEntraId = isEnabled(process.env.USE_ENTRA_ID_FOR_PEOPLE_SEARCH) &&
-                       isEnabled(process.env.OPENID_REUSE_TOKENS) &&
-                       req.user?.provider === 'openid' &&
-                       req.user?.openidId;
+    const useEntraId =
+      isEnabled(process.env.USE_ENTRA_ID_FOR_PEOPLE_SEARCH) &&
+      isEnabled(process.env.OPENID_REUSE_TOKENS) &&
+      req.user?.provider === 'openid' &&
+      req.user?.openidId;
 
-    // Step 3: Enhance with Graph API results if enabled and local results are insufficient  
     if (useEntraId && localResults.length < searchLimit) {
       try {
         const graphTypeMap = {
-          'user': 'users',
-          'group': 'groups',
-          null: 'all'
+          user: 'users',
+          group: 'groups',
+          null: 'all',
         };
-        
-        // Reason: GraphApiService handles token exchange and caching internally
-        // We just need to pass the user's OpenID identifier for token lookup
-        // Extract access token from authorization header
+
         const authHeader = req.headers.authorization;
-        const accessToken = authHeader && authHeader.startsWith('Bearer ') 
-          ? authHeader.substring(7) 
-          : null;
-          
+        const accessToken =
+          authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+
         if (accessToken) {
           const graphResults = await searchEntraIdPrincipals(
             accessToken,
             req.user.openidId,
             query.trim(),
             graphTypeMap[typeFilter],
-            searchLimit - localResults.length
+            searchLimit - localResults.length,
           );
-          
-          // Step 4: Merge and deduplicate results
-          // TODO: Currently only checking email duplicates - need to fix openIdId mapping
-          // when Graph API id field is verified to match stored openidId (sub claim)
-          const localEmails = new Set(localResults.map(p => p.email?.toLowerCase()).filter(Boolean));
-          const localGroupSourceIds = new Set(localResults.map(p => p.idOnTheSource).filter(Boolean));
-          
-          // Add Graph API results (avoid duplicates by email and idOnTheSource)
+
+          const localEmails = new Set(
+            localResults.map((p) => p.email?.toLowerCase()).filter(Boolean),
+          );
+          const localGroupSourceIds = new Set(
+            localResults.map((p) => p.idOnTheSource).filter(Boolean),
+          );
+
           for (const principal of graphResults) {
-            const isDuplicateByEmail = principal.email && localEmails.has(principal.email.toLowerCase());
-            const isDuplicateBySourceId = principal.idOnTheSource && localGroupSourceIds.has(principal.idOnTheSource);
-            
+            const isDuplicateByEmail =
+              principal.email && localEmails.has(principal.email.toLowerCase());
+            const isDuplicateBySourceId =
+              principal.idOnTheSource && localGroupSourceIds.has(principal.idOnTheSource);
+
             if (!isDuplicateByEmail && !isDuplicateBySourceId) {
-              allPrincipals.push({
-                _id: null, // Reason: Keep _id null, frontend will upsert based on idOnTheSource
-                type: principal.type,
-                name: principal.name,
-                email: principal.email,
-                username: principal.username,
-                userPrincipalName: principal.username, // Map username to userPrincipalName for consistency
-                source: principal.source,
-                relevanceScore: 0.8, // Default relevance score for Graph results
-                idOnTheSource: principal.idOnTheSource
-              });
+              allPrincipals.push(principal);
             }
           }
-          
-          // Step 5: Calculate relevance scores and sort by relevance 
-          const scoredResults = allPrincipals.map(item => ({
-            ...item,
-            _searchScore: calculateRelevanceScore(item, query.trim())
-          }));
-          
-          // Sort using the helper function and apply limit
-          allPrincipals = sortPrincipalsByRelevance(scoredResults)
-            .slice(0, searchLimit)
-            .map(result => {
-              // Remove the search score from final results
-              const { _searchScore, ...resultWithoutScore } = result;
-              return resultWithoutScore;
-            });
         }
-        
       } catch (graphError) {
-        // Reason: Graceful degradation - if Graph API fails, return local results
         logger.warn('Graph API search failed, falling back to local results:', graphError.message);
       }
     }
+    const scoredResults = allPrincipals.map((item) => ({
+      ...item,
+      _searchScore: calculateRelevanceScore(item, query.trim()),
+    }));
 
-    // Format the results for frontend consumption
-    const formattedResults = allPrincipals.map(principal => {
-      if (principal.type === 'user') {
-        return {
-          id: principal._id,
-          type: 'user',
-          name: principal.name || principal.email,
-          email: principal.email,
-          username: principal.username,
-          userPrincipalName: principal.userPrincipalName,
-          avatar: principal.avatar,
-          provider: principal.provider,
-          givenName: principal.givenName,
-          surname: principal.surname,
-          department: principal.department,
-          jobTitle: principal.jobTitle,
-          companyName: principal.companyName,
-          source: principal.source || 'local',
-          idOnTheSource: principal.idOnTheSource // Reason: Include Entra ID for frontend upsert logic
-        };
-      } else {
-        return {
-          id: principal._id,
-          type: 'group',
-          name: principal.name,
-          email: principal.email,
-          userPrincipalName: principal.userPrincipalName,
-          source: principal.source || 'local',
-          memberCount: principal.memberIds ? principal.memberIds.length : 0,
-          idOnTheSource: principal.idOnTheSource // Reason: Include Entra ID for frontend upsert logic
-        };
-      }
-    });
-
+    allPrincipals = sortPrincipalsByRelevance(scoredResults)
+      .slice(0, searchLimit)
+      .map((result) => {
+        const { _searchScore, ...resultWithoutScore } = result;
+        return resultWithoutScore;
+      });
     res.status(200).json({
       query: query.trim(),
       limit: searchLimit,
       type: typeFilter,
-      results: formattedResults,
-      count: formattedResults.length,
+      results: allPrincipals,
+      count: allPrincipals.length,
       sources: {
-        local: formattedResults.filter(r => r.source === 'local').length,
-        entra: formattedResults.filter(r => r.source === 'entra').length
-      }
+        local: allPrincipals.filter((r) => r.source === 'local').length,
+        entra: allPrincipals.filter((r) => r.source === 'entra').length,
+      },
     });
-
   } catch (error) {
     logger.error('Error searching principals:', error);
     res.status(500).json({
       error: 'Failed to search principals',
-      details: error.message
+      details: error.message,
     });
   }
 };
@@ -472,5 +408,5 @@ module.exports = {
   deleteResourcePermission,
   getResourceRoles,
   getUserEffectivePermissions,
-  searchPrincipals
+  searchPrincipals,
 };

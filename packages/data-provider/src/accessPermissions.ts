@@ -53,9 +53,10 @@ export const principalSchema = z.object({
   type: z.enum(['user', 'group', 'public']),
   id: z.string().optional(), // undefined for 'public' type
   name: z.string().optional(),
-  email: z.string().optional(), // for user type
+  email: z.string().optional(), // for user and group types
   source: z.enum(['local', 'entra']).optional(),
-  avatar: z.string().optional(),
+  avatar: z.string().optional(), // for user and group types
+  description: z.string().optional(), // for group type
   idOnTheSource: z.string().optional(), // Entra ID for users/groups
 });
 
@@ -170,12 +171,13 @@ export type TPrincipalSearchResult = {
   id?: string | null; // null for Entra ID principals that don't exist locally yet
   type: 'user' | 'group';
   name: string;
-  email?: string; // for users
+  email?: string; // for users and groups
   username?: string; // for users
-  avatar?: string; // for users
+  avatar?: string; // for users and groups
   provider?: string; // for users
   source: 'local' | 'entra';
   memberCount?: number; // for groups
+  description?: string; // for groups
   idOnTheSource?: string; // Entra ID for users (maps to openidId) and groups (maps to idOnTheSource)
 };
 

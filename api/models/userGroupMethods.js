@@ -8,6 +8,7 @@ const { logger } = require('~/config');
  * @import { TUser } from 'librechat-data-provider'
  * @import { IGroup } from '@librechat/data-schemas'
  */
+
 /**
  * Find a group by its ID
  * @param {string|mongoose.Types.ObjectId} groupId - The group ID
@@ -31,7 +32,12 @@ const findGroupById = async function (groupId, projection = {}, session = null) 
  * @param {mongoose.ClientSession} [session] - Optional MongoDB session for transactions
  * @returns {Promise<Object|null>} The group document or null if not found
  */
-const findGroupByExternalId = async function (idOnTheSource, source = 'entra', projection = {}, session = null) {
+const findGroupByExternalId = async function (
+  idOnTheSource,
+  source = 'entra',
+  projection = {},
+  session = null,
+) {
   const query = Group.findOne({ idOnTheSource, source }, projection);
   if (session) {
     query.session(session);
@@ -47,8 +53,17 @@ const findGroupByExternalId = async function (idOnTheSource, source = 'entra', p
  * @param {mongoose.ClientSession} [session] - Optional MongoDB session for transactions
  * @returns {Promise<Array>} Array of matching groups
  */
-const findGroupsByNamePattern = async function (namePattern, source = null, limit = 20, session = null) {
-  const query = { name: new RegExp(namePattern, 'i') };
+const findGroupsByNamePattern = async function (
+  namePattern,
+  source = null,
+  limit = 20,
+  session = null,
+) {
+  const regex = new RegExp(namePattern, 'i');
+  const query = {
+    $or: [{ name: regex }, { email: regex }, { description: regex }],
+  };
+
   if (source) {
     query.source = source;
   }
@@ -82,7 +97,7 @@ const findGroupsByMemberId = async function (userId, session = null) {
  */
 const createGroup = async function (groupData, session = null) {
   const options = session ? { session } : {};
-  return await Group.create([groupData], options).then(groups => groups[0]);
+  return await Group.create([groupData], options).then((groups) => groups[0]);
 };
 
 /**
@@ -94,26 +109,22 @@ const createGroup = async function (groupData, session = null) {
  * @returns {Promise<Object>} The updated or created group
  */
 const upsertGroupByExternalId = async function (idOnTheSource, source, updateData, session = null) {
-  const options = { 
-    new: true, 
-    upsert: true 
+  const options = {
+    new: true,
+    upsert: true,
   };
-  
+
   if (session) {
     options.session = session;
   }
-  
-  return await Group.findOneAndUpdate(
-    { idOnTheSource, source },
-    { $set: updateData },
-    options
-  );
+
+  return await Group.findOneAndUpdate({ idOnTheSource, source }, { $set: updateData }, options);
 };
 
 /**
  * Add a user to a group and maintain the two-way relationship
  * Updates both User.groupIds and Group.memberIds
- * 
+ *
  * @param {string|mongoose.Types.ObjectId} userId - The user ID
  * @param {string|mongoose.Types.ObjectId} groupId - The group ID to add
  * @param {mongoose.ClientSession} [session] - Optional MongoDB session for transactions
@@ -124,27 +135,26 @@ const addUserToGroup = async function (userId, groupId, session = null) {
   if (session) {
     options.session = session;
   }
-  
-  // Update user and group, adding reciprocal references
+
   const updatedUser = await User.findByIdAndUpdate(
     userId,
     { $addToSet: { groupIds: groupId } },
-    options
+    options,
   ).lean();
-  
+
   const updatedGroup = await Group.findByIdAndUpdate(
     groupId,
     { $addToSet: { memberIds: userId } },
-    options
+    options,
   ).lean();
-  
+
   return { user: updatedUser, group: updatedGroup };
 };
 
 /**
  * Remove a user from a group and maintain the two-way relationship
  * Updates both User.groupIds and Group.memberIds
- * 
+ *
  * @param {string|mongoose.Types.ObjectId} userId - The user ID
  * @param {string|mongoose.Types.ObjectId} groupId - The group ID to remove
  * @param {mongoose.ClientSession} [session] - Optional MongoDB session for transactions
@@ -155,20 +165,19 @@ const removeUserFromGroup = async function (userId, groupId, session = null) {
   if (session) {
     options.session = session;
   }
-  
-  // Update user and group, removing reciprocal references
+
   const updatedUser = await User.findByIdAndUpdate(
     userId,
     { $pull: { groupIds: groupId } },
-    options
+    options,
   ).lean();
-  
+
   const updatedGroup = await Group.findByIdAndUpdate(
     groupId,
     { $pull: { memberIds: userId } },
-    options
+    options,
   ).lean();
-  
+
   return { user: updatedUser, group: updatedGroup };
 };
 
@@ -184,12 +193,11 @@ const getUserGroups = async function (userId, session = null) {
     query.session(session);
   }
   const user = await query.lean();
-  
+
   if (!user || !user.groupIds || user.groupIds.length === 0) {
     return [];
   }
-  
-  // Use our findGroupsByMemberId function instead of individual lookups
+
   return await findGroupsByMemberId(userId, session);
 };
 
@@ -206,26 +214,21 @@ const getUserPrincipals = async function (userId, session = null) {
     query.session(session);
   }
   const user = await query.lean();
-  
+
   if (!user) {
     return [];
   }
-  
-  // Start with the user's own ID
-  const principals = [
-    { principalType: 'user', principalId: user._id }
-  ];
-  
-  // Add all groups the user is a member of
+
+  const principals = [{ principalType: 'user', principalId: user._id }];
+
   if (user.groupIds && user.groupIds.length > 0) {
-    user.groupIds.forEach(groupId => {
+    user.groupIds.forEach((groupId) => {
       principals.push({ principalType: 'group', principalId: groupId });
     });
   }
-  
-  // Always include the 'public' principal for public resources
+
   principals.push({ principalType: 'public', principalId: null });
-  
+
   return principals;
 };
 
@@ -241,80 +244,74 @@ const syncUserEntraGroups = async function (userId, entraGroups, session = null)
   if (session) {
     options.session = session;
   }
-  
-  // Get the current user with their group memberships
+
   const query = User.findById(userId, { groupIds: 1 });
   if (session) {
     query.session(session);
   }
   const user = await query.lean();
-  
+
   if (!user) {
     throw new Error(`User not found: ${userId}`);
   }
-  
-  // Track existing Entra groups to handle removals
+
   const entraIdMap = new Map();
   const addedGroups = [];
   const removedGroups = [];
-  
-  // Step 1: Create or update Entra groups and add the user
+
   for (const entraGroup of entraGroups) {
     entraIdMap.set(entraGroup.id, true);
-    
-    // Find or create the group
+
     let group = await findGroupByExternalId(entraGroup.id, 'entra', null, session);
-    
+
     if (!group) {
-      // Create a new local representation of the Entra group
-      group = await createGroup({
-        name: entraGroup.name,
-        idOnTheSource: entraGroup.id,
-        source: 'entra',
-        memberIds: [userId]
-      }, session);
-      
+      group = await createGroup(
+        {
+          name: entraGroup.name,
+          description: entraGroup.description,
+          email: entraGroup.email,
+          idOnTheSource: entraGroup.id,
+          source: 'entra',
+          memberIds: [userId],
+        },
+        session,
+      );
+
       addedGroups.push(group);
     } else if (!group.memberIds?.includes(userId)) {
-      // Add user to this group if not already a member
       const { group: updatedGroup } = await addUserToGroup(userId, group._id, session);
       addedGroups.push(updatedGroup);
     }
   }
-  
-  // Step 2: Find existing Entra groups for this user
+
   const groupsQuery = Group.find(
     { source: 'entra', memberIds: userId },
-    { _id: 1, idOnTheSource: 1 }
+    { _id: 1, idOnTheSource: 1 },
   );
   if (session) {
     groupsQuery.session(session);
   }
   const existingGroups = await groupsQuery.lean();
-  
-  // Step 3: Remove user from Entra groups they're no longer a member of
+
   for (const group of existingGroups) {
     if (group.idOnTheSource && !entraIdMap.has(group.idOnTheSource)) {
       const { group: removedGroup } = await removeUserFromGroup(userId, group._id, session);
       removedGroups.push(removedGroup);
     }
   }
-  
-  // Get the updated user with new group memberships
+
   const userQuery = User.findById(userId);
   if (session) {
     userQuery.session(session);
   }
   const updatedUser = await userQuery.lean();
-  
+
   return {
     user: updatedUser,
     addedGroups,
-    removedGroups
+    removedGroups,
   };
 };
-
-
 
 /**
  * Calculate relevance score for a search result
@@ -325,18 +322,19 @@ const syncUserEntraGroups = async function (userId, entraGroups, session = null)
 const calculateRelevanceScore = (item, searchPattern) => {
   const exactRegex = new RegExp(`^${searchPattern}$`, 'i');
   const startsWithPattern = searchPattern.toLowerCase();
-  
+
   // Get searchable text based on type
-  const searchableFields = item.type === 'user' 
-    ? [item.name, item.email, item.username].filter(Boolean)
-    : [item.name].filter(Boolean);
-  
+  const searchableFields =
+    item.type === 'user'
+      ? [item.name, item.email, item.username].filter(Boolean)
+      : [item.name, item.email, item.description].filter(Boolean);
+
   let maxScore = 0;
-  
+
   for (const field of searchableFields) {
     const fieldLower = field.toLowerCase();
     let score = 0;
-    
+
     // Exact match gets highest score
     if (exactRegex.test(field)) {
       score = 100;
@@ -353,10 +351,10 @@ const calculateRelevanceScore = (item, searchPattern) => {
     else {
       score = 10;
     }
-    
+
     maxScore = Math.max(maxScore, score);
   }
-  
+
   return maxScore;
 };
 
@@ -367,15 +365,12 @@ const calculateRelevanceScore = (item, searchPattern) => {
  */
 const sortPrincipalsByRelevance = (results) => {
   return results.sort((a, b) => {
-    // First sort by score (descending)
     if (b._searchScore !== a._searchScore) {
       return b._searchScore - a._searchScore;
     }
-    // If scores are equal, prioritize users over groups
     if (a.type !== b.type) {
       return a.type === 'user' ? -1 : 1;
     }
-    // Finally sort alphabetically
     const aName = a.name || a.email || '';
     const bName = b.name || b.email || '';
     return aName.localeCompare(bName);
@@ -397,7 +392,7 @@ const transformUserToTPrincipalSearchResult = (user) => {
     avatar: user.avatar,
     provider: user.provider,
     source: 'local',
-    idOnTheSource: user.openidId
+    idOnTheSource: user.openidId,
   };
 };
 
@@ -412,9 +407,11 @@ const transformGroupToTPrincipalSearchResult = (group) => {
     type: 'group',
     name: group.name,
     email: group.email,
+    avatar: group.avatar,
+    description: group.description,
     source: group.source || 'local',
     memberCount: group.memberIds ? group.memberIds.length : 0,
-    idOnTheSource: group.idOnTheSource
+    idOnTheSource: group.idOnTheSource,
   };
 };
 
@@ -422,12 +419,17 @@ const transformGroupToTPrincipalSearchResult = (group) => {
  * Search for principals (users and groups) by pattern matching on name/email
  * Returns combined results in TPrincipalSearchResult format without sorting
  * @param {string} searchPattern - The pattern to search for
- * @param {number} [limit=10] - Maximum number of results to return
+ * @param {number} [limitPerType=10] - Maximum number of results to return
  * @param {string} [typeFilter] - Optional filter: 'user', 'group', or null for all
  * @param {mongoose.ClientSession} [session] - Optional MongoDB session for transactions
  * @returns {Promise<TPrincipalSearchResult[]>} Array of principals in TPrincipalSearchResult format
  */
-const searchPrincipals = async function (searchPattern, limit = 10, typeFilter = null, session = null) {
+const searchPrincipals = async function (
+  searchPattern,
+  limitPerType = 10,
+  typeFilter = null,
+  session = null,
+) {
   if (!searchPattern || searchPattern.trim().length === 0) {
     return [];
   }
@@ -435,22 +437,22 @@ const searchPrincipals = async function (searchPattern, limit = 10, typeFilter =
   const trimmedPattern = searchPattern.trim();
   const promises = [];
 
-  // Search users if not filtering for groups only
   if (!typeFilter || typeFilter === 'user') {
     const userFields = 'name email username avatar provider openidId';
     promises.push(
-      searchUsers(trimmedPattern, limit * 2, userFields)
-        .then(users => users.map(transformUserToTPrincipalSearchResult))
+      searchUsers(trimmedPattern, limitPerType, userFields).then((users) =>
+        users.map(transformUserToTPrincipalSearchResult),
+      ),
     );
   } else {
     promises.push(Promise.resolve([]));
   }
 
-  // Search groups if not filtering for users only
   if (!typeFilter || typeFilter === 'group') {
     promises.push(
-      findGroupsByNamePattern(trimmedPattern, null, limit * 2, session)
-        .then(groups => groups.map(transformGroupToTPrincipalSearchResult))
+      findGroupsByNamePattern(trimmedPattern, null, limitPerType, session).then((groups) =>
+        groups.map(transformGroupToTPrincipalSearchResult),
+      ),
     );
   } else {
     promises.push(Promise.resolve([]));
@@ -458,31 +460,23 @@ const searchPrincipals = async function (searchPattern, limit = 10, typeFilter =
 
   const [users, groups] = await Promise.all(promises);
 
-  // Combine all results and apply limit
   const combined = [...users, ...groups];
-  return combined.slice(0, limit);
+  return combined;
 };
 
 module.exports = {
-  // Group-related functions
   findGroupById,
   findGroupByExternalId,
   findGroupsByNamePattern,
   findGroupsByMemberId,
   createGroup,
   upsertGroupByExternalId,
-  
-  // User-group relationship functions
   addUserToGroup,
   removeUserFromGroup,
   getUserGroups,
   getUserPrincipals,
   syncUserEntraGroups,
-  
-  // Search functions
   searchPrincipals,
-  
-  // Helper functions
   calculateRelevanceScore,
-  sortPrincipalsByRelevance
+  sortPrincipalsByRelevance,
 };
