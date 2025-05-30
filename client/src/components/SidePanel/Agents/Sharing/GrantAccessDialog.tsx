@@ -64,20 +64,6 @@ export default function GrantAccessDialog({
     return null;
   }
 
-  const handleSelectPrincipal = (principal: TPrincipal) => {
-    // Add the selected principal with the current default permission
-    const principalWithRole = { ...principal, accessRoleId: defaultPermission };
-    setNewShares([...newShares, principalWithRole]);
-  };
-
-  const handleRemoveShare = (id: string) => {
-    setNewShares(newShares.filter((s) => s.id !== id));
-  };
-
-  const handleRoleChange = (id: string, newRole: string) => {
-    setNewShares(newShares.map((s) => (s.id === id ? { ...s, accessRoleId: newRole } : s)));
-  };
-
   const handleGrantAccess = async () => {
     if (newShares.length === 0 && !isPublic) {
       showToast({
