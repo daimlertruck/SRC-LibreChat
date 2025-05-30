@@ -9,6 +9,8 @@ import PrincipalAvatar from '../PrincipalAvatar';
 interface SelectedPrincipalsListProps {
   principles: TPrincipal[];
   onRemoveHandler: (id: string) => void;
+  onRoleChange?: (id: string, newRoleId: string) => void;
+  availableRoles?: Omit<TAccessRole, 'resourceType'>[];
   className?: string;
 }
 
@@ -16,8 +18,9 @@ export default function SelectedPrincipalsList({
   principles,
   onRemoveHandler,
   className = '',
+  onRoleChange,
+  availableRoles,
 }: SelectedPrincipalsListProps) {
-
   const getPrincipalDisplayInfo = (principal: TPrincipal) => {
     // Reason: Standardized display logic used across multiple components
     const displayName = principal.name || 'Unknown';
@@ -75,6 +78,16 @@ export default function SelectedPrincipalsList({
               </div>
 
               <div className="flex flex-shrink-0 items-center gap-2">
+                {!!share.accessRoleId && !!onRoleChange && (
+                  <RoleSelector
+                    currentRole={share.accessRoleId}
+                    onRoleChange={(newRole) => {
+                      // Handle role change logic here, e.g., update state or call API
+                      onRoleChange?.(share.id!, newRole);
+                    }}
+                    availableRoles={availableRoles ?? []}
+                  />
+                )}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -93,50 +106,51 @@ export default function SelectedPrincipalsList({
   );
 }
 
-// // RoleSelector component using DropdownPopup pattern
-// interface RoleSelectorProps {
-//   currentRole: string;
-//   onRoleChange: (newRole: string) => void;
-// }
+// RoleSelector component using DropdownPopup pattern
+interface RoleSelectorProps {
+  currentRole: string;
+  onRoleChange: (newRole: string) => void;
+  availableRoles: Omit<TAccessRole, 'resourceType'>[];
+}
 
-// function RoleSelector({ currentRole, onRoleChange }: RoleSelectorProps) {
-//   const menuId = useId();
-//   const [isMenuOpen, setIsMenuOpen] = useState(false);
+function RoleSelector({ currentRole, onRoleChange, availableRoles }: RoleSelectorProps) {
+  const menuId = useId();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
-//   const currentRoleData = MOCK_ACCESS_ROLES.find((r) => r.accessRoleId === currentRole);
-//   const currentRoleIcon = currentRole.includes('editor') ? (
-//     <Edit className="h-4 w-4 text-green-500" />
-//   ) : (
-//     <Eye className="h-4 w-4 text-blue-500" />
-//   );
+  const currentRoleData = MOCK_ACCESS_ROLES.find((r) => r.accessRoleId === currentRole);
+  const currentRoleIcon = currentRole.includes('editor') ? (
+    <Edit className="h-4 w-4 text-green-500" />
+  ) : (
+    <Eye className="h-4 w-4 text-blue-500" />
+  );
 
-//   return (
-//     <DropdownPopup
-//       portal={true}
-//       mountByState={true}
-//       unmountOnHide={true}
-//       preserveTabOrder={true}
-//       isOpen={isMenuOpen}
-//       setIsOpen={setIsMenuOpen}
-//       trigger={
-//         <Menu.MenuButton className="flex h-8 items-center gap-2 rounded-md border border-border-medium bg-surface-secondary px-2 py-1 text-sm font-medium transition-colors duration-200 hover:bg-surface-tertiary">
-//           {currentRoleIcon}
-//           <span className="hidden sm:inline">{currentRoleData?.name}</span>
-//           <ChevronDown className="h-3 w-3" />
-//         </Menu.MenuButton>
-//       }
-//       items={MOCK_ACCESS_ROLES.map((role) => ({
-//         id: role.accessRoleId,
-//         label: role.name,
-//         icon: role.accessRoleId.includes('editor') ? (
-//           <Edit className="h-4 w-4 text-green-500" />
-//         ) : (
-//           <Eye className="h-4 w-4 text-blue-500" />
-//         ),
-//         onClick: () => onRoleChange(role.accessRoleId),
-//       }))}
-//       menuId={menuId}
-//       className="z-30"
-//     />
-//   );
-// }
+  return (
+    <DropdownPopup
+      portal={true}
+      mountByState={true}
+      unmountOnHide={true}
+      preserveTabOrder={true}
+      isOpen={isMenuOpen}
+      setIsOpen={setIsMenuOpen}
+      trigger={
+        <Menu.MenuButton className="flex h-8 items-center gap-2 rounded-md border border-border-medium bg-surface-secondary px-2 py-1 text-sm font-medium transition-colors duration-200 hover:bg-surface-tertiary">
+          {currentRoleIcon}
+          <span className="hidden sm:inline">{currentRoleData?.name}</span>
+          <ChevronDown className="h-3 w-3" />
+        </Menu.MenuButton>
+      }
+      items={availableRoles?.map((role) => ({
+        id: role.accessRoleId,
+        label: role.name,
+        icon: role.accessRoleId.includes('editor') ? (
+          <Edit className="h-4 w-4 text-green-500" />
+        ) : (
+          <Eye className="h-4 w-4 text-blue-500" />
+        ),
+        onClick: () => onRoleChange(role.accessRoleId),
+      }))}
+      menuId={menuId}
+      className="z-50 [pointer-events:auto]"
+    />
+  );
+}

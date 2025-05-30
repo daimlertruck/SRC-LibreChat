@@ -22,6 +22,7 @@ import { cn, removeFocusOutlines } from '~/utils';
 import { useToastContext } from '~/Providers';
 import { useLocalize } from '~/hooks';
 import {
+  useGetAccessRolesQuery,
   useGetResourcePermissionsQuery,
   useUpdateResourcePermissionsMutation,
 } from 'librechat-data-provider/react-query';
@@ -52,6 +53,8 @@ export default function ManagePermissionsDialog({
   } = useGetResourcePermissionsQuery(resourceType, agentDbId, {
     enabled: !!agentDbId,
   });
+  //available roles
+  const { data: accessRoles, isLoading: rolesLoading } = useGetAccessRolesQuery(resourceType);
 
   // Update permissions mutation
   const updatePermissionsMutation = useUpdateResourcePermissionsMutation();
@@ -270,6 +273,8 @@ export default function ManagePermissionsDialog({
               <SelectedPrincipalsList
                 principles={managedShares}
                 onRemoveHandler={handleRemoveShare}
+                availableRoles={accessRoles || []}
+                onRoleChange={(id, newRole) => handleRoleChange(id, newRole)}
                 // onRoleChange={handleRoleChange}
                 // showRemoveButton={true}
               />
