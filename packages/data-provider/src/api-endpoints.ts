@@ -293,3 +293,6 @@ export const searchPrincipals = (params: q.PrincipalSearchParams) => {
   
   return url;
 };
+
+export const getAccessRoles = (resourceType: string) => 
+  `/api/permissions/${resourceType}/roles`;

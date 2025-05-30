@@ -789,3 +789,10 @@ export function searchPrincipals(
 ): Promise<q.PrincipalSearchResponse> {
   return request.get(endpoints.searchPrincipals(params));
 }
+
+/* Access Roles */
+export function getAccessRoles(
+  resourceType: string,
+): Promise<q.AccessRolesResponse> {
+  return request.get(endpoints.getAccessRoles(resourceType));
+}

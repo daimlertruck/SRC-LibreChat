@@ -1,13 +1,6 @@
-/**
- * PublicSharingToggle Component for Agent Sharing
- *
- * Handles the toggle for making an agent available to all LibreChat users
- * with configurable access level (viewer/editor).
- */
-
 import React from 'react';
 import { Globe, Eye, Edit } from 'lucide-react';
-import { ACCESS_ROLE_IDS } from 'librechat-data-provider';
+import type { AccessRole } from 'librechat-data-provider';
 import { Switch } from '~/components/ui';
 import {
   Select,
@@ -16,7 +9,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/Select';
-import { MOCK_ACCESS_ROLES } from './mockData';
 
 interface PublicSharingToggleProps {
   isPublic: boolean;
@@ -24,6 +16,7 @@ interface PublicSharingToggleProps {
   onPublicToggle: (isPublic: boolean) => void;
   onPublicRoleChange: (role: string) => void;
   className?: string;
+  accessRoles?: AccessRole[];
 }
 
 export default function PublicSharingToggle({
@@ -32,6 +25,7 @@ export default function PublicSharingToggle({
   onPublicToggle,
   onPublicRoleChange,
   className = '',
+  accessRoles = [],
 }: PublicSharingToggleProps) {
   const getRoleIcon = (roleId: string) => {
     // Reason: Consistent role visualization across all sharing components
@@ -65,7 +59,7 @@ export default function PublicSharingToggle({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {MOCK_ACCESS_ROLES.map((role) => (
+              {accessRoles.map((role: AccessRole) => (
                 <SelectItem key={role.accessRoleId} value={role.accessRoleId}>
                   <div className="flex items-center gap-2">
                     {getRoleIcon(role.accessRoleId)}

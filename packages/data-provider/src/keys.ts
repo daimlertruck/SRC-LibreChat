@@ -47,6 +47,7 @@ export enum QueryKeys {
   userTerms = 'userTerms',
   banner = 'banner',
   principalSearch = 'principalSearch',
+  accessRoles = 'accessRoles',
 }
 
 export enum MutationKeys {

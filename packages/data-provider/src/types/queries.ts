@@ -138,3 +138,12 @@ export type PrincipalSearchResponse = {
     entra: number;
   };
 };
+
+export type AccessRole = {
+  accessRoleId: string;
+  name: string;
+  description: string;
+  permBits: number;
+};
+
+export type AccessRolesResponse = AccessRole[];

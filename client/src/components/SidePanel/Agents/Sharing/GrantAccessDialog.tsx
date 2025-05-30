@@ -19,7 +19,7 @@ import { useLocalize } from '~/hooks';
 import PeoplePicker from './PeoplePicker/PeoplePicker';
 import PublicSharingToggle from './PublicSharingToggle';
 import ManagePermissionsDialog from './ManagePermissionsDialog';
-import { MOCK_ACCESS_ROLES } from './mockData';
+import { useGetAccessRolesQuery } from 'librechat-data-provider/react-query';
 
 export default function GrantAccessDialog({
   agent_id = '',
@@ -29,6 +29,7 @@ export default function GrantAccessDialog({
   currentShares = [],
   isPublic: currentIsPublic = false,
   publicRole: currentPublicRole = ACCESS_ROLE_IDS.AGENT_VIEWER,
+  resourceType = 'agent',
 }: {
   agent_id?: string;
   agentName?: string;
@@ -37,9 +38,13 @@ export default function GrantAccessDialog({
   currentShares?: TPrincipal[];
   isPublic?: boolean;
   publicRole?: string;
+  resourceType?: string;
 }) {
   const localize = useLocalize();
   const { showToast } = useToastContext();
+
+  // Fetch access roles from API
+  const { data: accessRoles, isLoading: rolesLoading } = useGetAccessRolesQuery(resourceType);
 
   // State for new shares being added
   const [newShares, setNewShares] = useState<TPrincipal[]>([]);
@@ -187,33 +192,32 @@ export default function GrantAccessDialog({
             <Dropdown
               value={defaultPermission}
               onChange={setDefaultPermission}
-              options={MOCK_ACCESS_ROLES.map((role) => ({
-                value: role.accessRoleId,
-                label: role.name,
-                icon: role.accessRoleId.includes('editor') ? (
-                  <div className="h-2 w-2 rounded-full bg-green-500" />
-                ) : (
-                  <div className="h-2 w-2 rounded-full bg-blue-500" />
-                ),
-              }))}
+              options={
+                accessRoles?.map((role: any) => ({
+                  value: role.accessRoleId,
+                  label: role.name,
+                })) || []
+              }
               sizeClasses="w-[180px]"
               testId="DefaultPermissionDropdown"
               className="z-50"
               portal={false}
             />
+            {accessRoles && (
+              <p className="text-xs text-text-secondary">
+                {accessRoles.find((role) => role.accessRoleId === defaultPermission)?.description ||
+                  'Select a permission level'}
+              </p>
+            )}
           </div>
-
-          {/* Public Sharing Toggle */}
           <PublicSharingToggle
             isPublic={isPublic}
             publicRole={publicRole}
             onPublicToggle={setIsPublic}
             onPublicRoleChange={setPublicRole}
+            accessRoles={accessRoles}
           />
-
-          {/* Action Buttons */}
           <div className="flex justify-between border-t pt-4">
-            {/* Manage Permissions Button - Bottom Left */}
             <ManagePermissionsDialog
               agent_id={agent_id}
               agentName={agentName}
@@ -221,8 +225,6 @@ export default function GrantAccessDialog({
               isPublic={currentIsPublic}
               publicRole={currentPublicRole}
             />
-
-            {/* Main Action Buttons - Bottom Right */}
             <div className="flex gap-3">
               <OGDialogClose asChild>
                 <Button variant="outline" onClick={handleCancel}>

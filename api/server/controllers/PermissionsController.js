@@ -245,15 +245,12 @@ const getResourceRoles = async (req, res) => {
 
     const roles = await getAvailableRoles({ resourceType });
 
-    res.status(200).json({
-      resourceType,
-      roles: roles.map((role) => ({
-        accessRoleId: role.accessRoleId,
-        name: role.name,
-        description: role.description,
-        permBits: role.permBits,
-      })),
-    });
+    res.status(200).json(roles.map((role) => ({
+      accessRoleId: role.accessRoleId,
+      name: role.name,
+      description: role.description,
+      permBits: role.permBits,
+    })));
   } catch (error) {
     logger.error('Error getting resource roles:', error);
     res.status(500).json({
