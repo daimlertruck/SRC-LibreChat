@@ -799,3 +799,8 @@ export function verifyTwoFactorTemp(
 ): Promise<t.TVerify2FATempResponse> {
   return request.post(endpoints.verifyTwoFactorTemp(), payload);
 }
+
+// SharePoint Graph API Token
+export function getGraphApiToken(params: q.GraphTokenParams): Promise<q.GraphTokenResponse> {
+  return request.get(endpoints.graphToken(params.scopes));
+}

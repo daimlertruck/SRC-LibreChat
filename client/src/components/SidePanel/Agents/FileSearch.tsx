@@ -11,6 +11,7 @@ import type { ExtendedFile, AgentForm } from '~/common';
 import { useFileHandling, useLocalize, useLazyEffect } from '~/hooks';
 import FileRow from '~/components/Chat/Input/Files/FileRow';
 import FileSearchCheckbox from './FileSearchCheckbox';
+import SharePointFilePicker from './SharePointFilePicker';
 import { useGetFileConfig } from '~/data-provider';
 import { AttachmentIcon } from '~/components/svg';
 import { useChatContext } from '~/Providers';
@@ -65,6 +66,23 @@ export default function FileSearch({
     fileInputRef.current?.click();
   };
 
+  const handleSharePointFilesSelected = (sharePointFiles: any[]) => {
+    console.log('SharePoint files selected in FileSearch:', sharePointFiles);
+    
+    // For now, just log the files - later we'll integrate with the file handling system
+    sharePointFiles.forEach((file, index) => {
+      console.log(`SharePoint File ${index + 1}:`, {
+        id: file.id,
+        name: file.name,
+        size: file.size,
+        webUrl: file.webUrl,
+        downloadUrl: file.downloadUrl,
+        driveId: file.driveId,
+        itemId: file.itemId,
+      });
+    });
+  };
+
   return (
     <div className="w-full">
       <div className="mb-1.5 flex items-center gap-2">
@@ -106,6 +124,12 @@ export default function FileSearch({
               {localize('com_ui_upload_file_search')}
             </div>
           </button>
+        </div>
+        <div>
+          <SharePointFilePicker
+            disabled={!agent_id || fileSearchChecked === false}
+            onFilesSelected={handleSharePointFilesSelected}
+          />
         </div>
         {/* Disabled Message */}
         {agent_id ? null : (

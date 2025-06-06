@@ -283,3 +283,6 @@ export const confirmTwoFactor = () => '/api/auth/2fa/confirm';
 export const disableTwoFactor = () => '/api/auth/2fa/disable';
 export const regenerateBackupCodes = () => '/api/auth/2fa/backup/regenerate';
 export const verifyTwoFactorTemp = () => '/api/auth/2fa/verify-temp';
+
+// SharePoint Graph API Token
+export const graphToken = (scopes: string) => `/api/auth/graph-token?scopes=${encodeURIComponent(scopes)}`;

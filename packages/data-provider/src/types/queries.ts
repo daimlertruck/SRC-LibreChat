@@ -109,3 +109,15 @@ export type VerifyToolAuthResponse = {
 
 export type GetToolCallParams = { conversationId: string };
 export type ToolCallResults = a.ToolCallResult[];
+
+/* SharePoint Graph API Token */
+export type GraphTokenParams = {
+  scopes: string;
+};
+
+export type GraphTokenResponse = {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  scope: string;
+};
