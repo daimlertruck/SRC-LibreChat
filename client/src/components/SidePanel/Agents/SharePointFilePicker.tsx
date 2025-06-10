@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuthContext } from '~/hooks/AuthContext';
 import { dataService, QueryKeys } from 'librechat-data-provider';
@@ -22,6 +22,11 @@ export default function SharePointFilePicker({
   const { showToast } = useToastContext();
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
+  const portRef = useRef<MessagePort | null>(null);
+  const channelIdRef = useRef<string>('');
 
   // Feature toggle - return null if disabled
   if (!ENABLE_SHAREPOINT_PICKER) {
@@ -50,6 +55,197 @@ export default function SharePointFilePicker({
     retry: 1,
   });
 
+  // Cleanup on component unmount
+  useEffect(() => {
+    return () => {
+      if (cleanupRef.current) {
+        cleanupRef.current();
+      }
+    };
+  }, []);
+
+  // Generate unique channel ID for this picker instance
+  const generateChannelId = useCallback(() => {
+    return `sharepoint-picker-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }, []);
+
+  // MessagePort command handler - follows Microsoft samples pattern
+  const portMessageHandler = useCallback(async (message: MessageEvent) => {
+    console.log('=== SharePoint picker port message received ===');
+    console.log('Message data:', message.data);
+
+    const port = portRef.current;
+    if (!port) {
+      console.error('No port available for communication');
+      return;
+    }
+
+    try {
+      switch (message.data.type) {
+        case 'notification':
+          console.log('SharePoint picker notification:', message.data);
+          break;
+
+        case 'command':
+          // Always acknowledge the command first
+          port.postMessage({
+            type: 'acknowledge',
+            id: message.data.id,
+          });
+
+          const command = message.data.data;
+          console.log('SharePoint picker command:', command);
+
+          switch (command.command) {
+            case 'authenticate':
+              console.log('Authentication requested, providing token');
+              if (token?.access_token) {
+                port.postMessage({
+                  type: 'result',
+                  id: message.data.id,
+                  data: {
+                    result: 'token',
+                    token: token.access_token,
+                  },
+                });
+              } else {
+                console.error('No token available for authentication');
+                port.postMessage({
+                  type: 'result',
+                  id: message.data.id,
+                  data: {
+                    result: 'error',
+                    error: {
+                      code: 'noToken',
+                      message: 'No authentication token available',
+                    },
+                  },
+                });
+              }
+              break;
+
+            case 'close':
+              console.log('Close command received');
+              port.postMessage({
+                type: 'result',
+                id: message.data.id,
+                data: {
+                  result: 'success',
+                },
+              });
+              if (cleanupRef.current) {
+                cleanupRef.current();
+              }
+              break;
+
+            case 'pick':
+              console.log('Files picked from SharePoint:', command);
+              
+              // Extract files from the command data
+              const items = command.items || command.files || [];
+              console.log('Extracted items:', items);
+
+              if (items && items.length > 0) {
+                const selectedFiles = items.map((item: any) => ({
+                  id: item.id || item.shareId || item.driveItem?.id,
+                  name: item.name || item.driveItem?.name,
+                  size: item.size || item.driveItem?.size,
+                  webUrl: item.webUrl || item.driveItem?.webUrl,
+                  downloadUrl: item.downloadUrl || item.driveItem?.['@microsoft.graph.downloadUrl'],
+                  driveId:
+                    item.driveId ||
+                    item.parentReference?.driveId ||
+                    item.driveItem?.parentReference?.driveId,
+                  itemId: item.id || item.driveItem?.id,
+                  sharePointItem: item,
+                }));
+
+                console.log('Processed SharePoint files:', selectedFiles);
+
+                if (onFilesSelected) {
+                  onFilesSelected(selectedFiles);
+                }
+
+                showToast({
+                  message: `Selected ${selectedFiles.length} file(s) from SharePoint`,
+                  status: 'success',
+                });
+              }
+
+              port.postMessage({
+                type: 'result',
+                id: message.data.id,
+                data: {
+                  result: 'success',
+                },
+              });
+
+              if (cleanupRef.current) {
+                cleanupRef.current();
+              }
+              break;
+
+            default:
+              console.warn(`Unsupported command: ${command.command}`);
+              port.postMessage({
+                type: 'result',
+                id: message.data.id,
+                data: {
+                  result: 'error',
+                  error: {
+                    code: 'unsupportedCommand',
+                    message: command.command,
+                  },
+                },
+              });
+              break;
+          }
+          break;
+
+        default:
+          console.log('Unknown message type:', message.data.type);
+          break;
+      }
+    } catch (error) {
+      console.error('Error processing port message:', error);
+    }
+  }, [token, onFilesSelected, showToast]);
+
+  // Initialization message handler - establishes MessagePort communication
+  const initMessageHandler = useCallback((event: MessageEvent) => {
+    console.log('=== SharePoint picker init message received ===');
+    console.log('Event source:', event.source);
+    console.log('Event data:', event.data);
+    console.log('Expected channelId:', channelIdRef.current);
+
+    // Check if this message is from our iframe
+    if (event.source && event.source === iframeRef.current?.contentWindow) {
+      const message = event.data;
+      
+      if (message.type === 'initialize' && message.channelId === channelIdRef.current) {
+        console.log('Establishing MessagePort communication');
+        
+        // Get the MessagePort from the event
+        portRef.current = event.ports[0];
+        
+        if (portRef.current) {
+          // Set up the port message listener
+          portRef.current.addEventListener('message', portMessageHandler);
+          portRef.current.start();
+          
+          // Send activate message to start the picker
+          portRef.current.postMessage({
+            type: 'activate',
+          });
+          
+          console.log('MessagePort established and activated');
+        } else {
+          console.error('No MessagePort found in initialize event');
+        }
+      }
+    }
+  }, [portMessageHandler]);
+
   const handleSharePointPicker = async () => {
     if (!token) {
       showToast({
@@ -62,15 +258,20 @@ export default function SharePointFilePicker({
     try {
       setIsPickerOpen(true);
 
-      console.log('=== SharePoint File Picker v8 ===');
+      // Generate unique channel ID for this picker instance
+      const channelId = generateChannelId();
+      channelIdRef.current = channelId;
+
+      console.log('=== SharePoint File Picker v8 (MessagePort) ===');
       console.log('Token available:', {
         hasToken: !!token.access_token,
         tokenType: token.token_type,
         expiresIn: token.expires_in,
         scopes: token.scope,
       });
+      console.log('Channel ID:', channelId);
 
-      // Microsoft File Picker v8 iframe approach - remove token from options
+      // Microsoft File Picker v8 iframe approach with MessagePort communication
       const pickerOptions: SPPickerConfig = {
         sdk: '8.0',
         entry: {
@@ -80,7 +281,7 @@ export default function SharePointFilePicker({
         },
         messaging: {
           origin: window.location.origin,
-          channelId: `sharepoint-picker-123123123`,
+          channelId: channelId,
         },
         typesAndSources: {
           mode: 'files',
@@ -103,16 +304,6 @@ export default function SharePointFilePicker({
           },
         },
         search: { enabled: true },
-        // tray: {
-        //   commands: [
-        //     {
-        //       key: 'upload',
-        //       label: 'Upload',
-        //       action: 'pick',
-        //     },
-        //   ],
-
-        // },
       };
 
       // Create iframe for picker
@@ -126,6 +317,7 @@ export default function SharePointFilePicker({
       iframe.style.transform = 'translate(-50%, -50%)';
       iframe.style.zIndex = '10000';
       iframe.style.backgroundColor = 'white';
+      iframeRef.current = iframe;
 
       // Create overlay
       const overlay = document.createElement('div');
@@ -136,6 +328,7 @@ export default function SharePointFilePicker({
       overlay.style.height = '100%';
       overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
       overlay.style.zIndex = '9999';
+      overlayRef.current = overlay;
 
       document.body.appendChild(overlay);
       overlay.appendChild(iframe);
@@ -172,93 +365,31 @@ export default function SharePointFilePicker({
         form.submit();
       };
 
-      // Listen for messages from the picker
-      const messageHandler = (event: MessageEvent) => {
-        console.log('=== SharePoint picker message received ===');
-        console.log('Event origin:', event.origin);
-        console.log('Expected origin:', new URL(SHAREPOINT_BASE_URL).origin);
-        console.log('Event data:', event.data);
-        console.log('Event source:', event.source);
-
-        // More flexible origin checking - SharePoint can send messages from different subdomains
-        const expectedOrigin = new URL(SHAREPOINT_BASE_URL).origin;
-        if (!event.origin.includes('sharepoint.com') && event.origin !== expectedOrigin) {
-          console.log('Origin check failed, ignoring message');
-          return;
-        }
-
-        try {
-          const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-          console.log('Parsed message data:', data);
-
-          if (data.type === 'initialize') {
-            console.log('SharePoint picker initialized');
-          } else if (data.type === 'activate') {
-            console.log('SharePoint picker activated');
-          } else if (data.type === 'pick' || data.type === 'picked') {
-            console.log('Files picked from SharePoint:', data);
-
-            // Handle different response formats
-            const items = data.items || data.files || data.result?.items || [];
-            console.log('Extracted items:', items);
-
-            if (items && items.length > 0) {
-              const selectedFiles = items.map((item: any) => ({
-                id: item.id || item.shareId || item.driveItem?.id,
-                name: item.name || item.driveItem?.name,
-                size: item.size || item.driveItem?.size,
-                webUrl: item.webUrl || item.driveItem?.webUrl,
-                downloadUrl: item.downloadUrl || item.driveItem?.['@microsoft.graph.downloadUrl'],
-                driveId:
-                  item.driveId ||
-                  item.parentReference?.driveId ||
-                  item.driveItem?.parentReference?.driveId,
-                itemId: item.id || item.driveItem?.id,
-                sharePointItem: item,
-              }));
-
-              console.log('Processed SharePoint files:', selectedFiles);
-
-              if (onFilesSelected) {
-                onFilesSelected(selectedFiles);
-              }
-
-              showToast({
-                message: `Selected ${selectedFiles.length} file(s) from SharePoint`,
-                status: 'success',
-              });
-            } else {
-              console.log('No files found in pick message');
-            }
-
-            // Close picker
-            cleanup();
-          } else if (data.type === 'cancel' || data.type === 'cancelled') {
-            console.log('SharePoint picker cancelled');
-            cleanup();
-          } else if (data.type === 'error') {
-            console.error('SharePoint picker error:', data.error);
-            showToast({
-              message: `SharePoint picker error: ${data.error?.message || 'Unknown error'}`,
-              status: 'error',
-            });
-            cleanup();
-          } else {
-            console.log('Unknown message type:', data.type);
-          }
-        } catch (error) {
-          console.error('Error processing picker message:', error);
-          console.log('Raw event data that failed to parse:', event.data);
-        }
-      };
-
       const cleanup = () => {
-        window.removeEventListener('message', messageHandler);
-        if (overlay && overlay.parentNode) {
-          document.body.removeChild(overlay);
+        // Remove initialization message listener
+        window.removeEventListener('message', initMessageHandler);
+        
+        // Close MessagePort if it exists
+        if (portRef.current) {
+          portRef.current.removeEventListener('message', portMessageHandler);
+          portRef.current.close();
+          portRef.current = null;
         }
+        
+        // Remove DOM elements
+        if (overlayRef.current && overlayRef.current.parentNode) {
+          document.body.removeChild(overlayRef.current);
+        }
+        
+        // Reset refs
+        overlayRef.current = null;
+        iframeRef.current = null;
+        channelIdRef.current = '';
+        cleanupRef.current = null;
         setIsPickerOpen(false);
       };
+
+      cleanupRef.current = cleanup;
 
       // Add close button to overlay
       const closeButton = document.createElement('button');
@@ -275,9 +406,10 @@ export default function SharePointFilePicker({
       closeButton.style.fontSize = '20px';
       closeButton.style.zIndex = '10001';
       closeButton.onclick = cleanup;
-      overlay.appendChild(closeButton);
+      overlayRef.current?.appendChild(closeButton);
 
-      window.addEventListener('message', messageHandler);
+      // Add initialization message listener to establish MessagePort communication
+      window.addEventListener('message', initMessageHandler);
     } catch (error) {
       console.error('SharePoint file picker error:', error);
       showToast({
