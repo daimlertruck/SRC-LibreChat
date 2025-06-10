@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuthContext } from '~/hooks/AuthContext';
 import { dataService, QueryKeys } from 'librechat-data-provider';
 import { useToastContext } from '~/Providers';
+import { SPPickerConfig } from './config';
 
 interface SharePointFilePickerProps {
   disabled?: boolean;
@@ -70,28 +71,48 @@ export default function SharePointFilePicker({
       });
 
       // Microsoft File Picker v8 iframe approach - remove token from options
-      const pickerOptions = {
+      const pickerOptions: SPPickerConfig = {
         sdk: '8.0',
         entry: {
           sharePoint: {
-            byPath: SHAREPOINT_BASE_URL,
+            // byPath: SHAREPOINT_BASE_URL,
           },
         },
         messaging: {
           origin: window.location.origin,
-          channelId: `sharepoint-picker-${Date.now()}`,
+          channelId: `sharepoint-picker-123123123`,
         },
         typesAndSources: {
           mode: 'files',
           pivots: {
             oneDrive: true,
             recent: true,
-            sharePoint: true,
+            // sharePoint: true,
           },
         },
         selection: {
           mode: 'multiple',
         },
+        title: 'LibreChat SharePoint File Picker',
+        commands: {
+          upload: {
+            enabled: false,
+          },
+          createFolder: {
+            enabled: false,
+          },
+        },
+        search: { enabled: true },
+        // tray: {
+        //   commands: [
+        //     {
+        //       key: 'upload',
+        //       label: 'Upload',
+        //       action: 'pick',
+        //     },
+        //   ],
+
+        // },
       };
 
       // Create iframe for picker
@@ -128,7 +149,7 @@ export default function SharePointFilePicker({
         // Construct query string following Microsoft docs
         const queryString = new URLSearchParams({
           filePicker: JSON.stringify(pickerOptions),
-          locale: 'en-us'
+          locale: 'en-us',
         });
 
         // Create the absolute URL
@@ -176,7 +197,7 @@ export default function SharePointFilePicker({
             console.log('SharePoint picker activated');
           } else if (data.type === 'pick' || data.type === 'picked') {
             console.log('Files picked from SharePoint:', data);
-            
+
             // Handle different response formats
             const items = data.items || data.files || data.result?.items || [];
             console.log('Extracted items:', items);
@@ -188,7 +209,10 @@ export default function SharePointFilePicker({
                 size: item.size || item.driveItem?.size,
                 webUrl: item.webUrl || item.driveItem?.webUrl,
                 downloadUrl: item.downloadUrl || item.driveItem?.['@microsoft.graph.downloadUrl'],
-                driveId: item.driveId || item.parentReference?.driveId || item.driveItem?.parentReference?.driveId,
+                driveId:
+                  item.driveId ||
+                  item.parentReference?.driveId ||
+                  item.driveItem?.parentReference?.driveId,
                 itemId: item.id || item.driveItem?.id,
                 sharePointItem: item,
               }));
