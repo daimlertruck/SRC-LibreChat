@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuthContext } from '~/hooks/AuthContext';
 import { dataService, QueryKeys } from 'librechat-data-provider';
 import { useToastContext } from '~/Providers';
+import { useGetStartupConfig } from '~/data-provider';
 import { SPPickerConfig } from './config';
 
 interface SharePointFilePickerProps {
@@ -10,9 +11,7 @@ interface SharePointFilePickerProps {
   onFilesSelected?: (files: any[]) => void;
 }
 
-// TODO: Replace with env var check and config later
-const ENABLE_SHAREPOINT_PICKER = true;
-const SHAREPOINT_BASE_URL = 'https://m365x98302257.sharepoint.com/';
+// SharePoint configuration from backend
 
 export default function SharePointFilePicker({
   disabled = false,
@@ -28,29 +27,36 @@ export default function SharePointFilePicker({
   const portRef = useRef<MessagePort | null>(null);
   const channelIdRef = useRef<string>('');
 
+  // Get startup configuration
+  const { data: startupConfig } = useGetStartupConfig();
+
   // Feature toggle - return null if disabled
-  if (!ENABLE_SHAREPOINT_PICKER) {
+  if (!startupConfig?.sharePointFilePickerEnabled) {
     return null;
   }
 
+  const sharePointBaseUrl = startupConfig?.sharePointBaseUrl;
+  const sharePointPickerGraphScope = startupConfig?.sharePointPickerGraphScope;
+
   // Check if user is authenticated via Entra ID (OpenID)
-  const isEntraIdUser = user?.provider === 'openid' && user?.openidId;
+  const isEntraIdUser = user?.provider === 'openid';
 
   // Get Graph API token for SharePoint access
+  const graphScopes =
+    sharePointPickerGraphScope ||
+    `${sharePointBaseUrl}MyFiles.Read ${sharePointBaseUrl}AllSites.Read`;
+
   const {
     data: token,
     isLoading: isTokenLoading,
     error: tokenError,
   } = useQuery({
-    queryKey: [
-      QueryKeys.graphToken,
-      `${SHAREPOINT_BASE_URL}MyFiles.Read ${SHAREPOINT_BASE_URL}AllSites.Read`,
-    ],
+    queryKey: [QueryKeys.graphToken, graphScopes],
     queryFn: () =>
       dataService.getGraphApiToken({
-        scopes: `${SHAREPOINT_BASE_URL}MyFiles.Read ${SHAREPOINT_BASE_URL}AllSites.Read`,
+        scopes: graphScopes,
       }),
-    enabled: isEntraIdUser && !disabled,
+    enabled: isEntraIdUser && !disabled && !!sharePointBaseUrl,
     staleTime: 50 * 60 * 1000, // 50 minutes (tokens expire in 60 minutes)
     retry: 1,
   });
@@ -70,181 +76,188 @@ export default function SharePointFilePicker({
   }, []);
 
   // MessagePort command handler - follows Microsoft samples pattern
-  const portMessageHandler = useCallback(async (message: MessageEvent) => {
-    console.log('=== SharePoint picker port message received ===');
-    console.log('Message data:', message.data);
+  const portMessageHandler = useCallback(
+    async (message: MessageEvent) => {
+      console.log('=== SharePoint picker port message received ===');
+      console.log('Message data:', message.data);
 
-    const port = portRef.current;
-    if (!port) {
-      console.error('No port available for communication');
-      return;
-    }
+      const port = portRef.current;
+      if (!port) {
+        console.error('No port available for communication');
+        return;
+      }
 
-    try {
-      switch (message.data.type) {
-        case 'notification':
-          console.log('SharePoint picker notification:', message.data);
-          break;
+      try {
+        switch (message.data.type) {
+          case 'notification':
+            console.log('SharePoint picker notification:', message.data);
+            break;
 
-        case 'command':
-          // Always acknowledge the command first
-          port.postMessage({
-            type: 'acknowledge',
-            id: message.data.id,
-          });
+          case 'command':
+            // Always acknowledge the command first
+            port.postMessage({
+              type: 'acknowledge',
+              id: message.data.id,
+            });
 
-          const command = message.data.data;
-          console.log('SharePoint picker command:', command);
+            const command = message.data.data;
+            console.log('SharePoint picker command:', command);
 
-          switch (command.command) {
-            case 'authenticate':
-              console.log('Authentication requested, providing token');
-              if (token?.access_token) {
+            switch (command.command) {
+              case 'authenticate':
+                console.log('Authentication requested, providing token');
+                if (token?.access_token) {
+                  port.postMessage({
+                    type: 'result',
+                    id: message.data.id,
+                    data: {
+                      result: 'token',
+                      token: token.access_token,
+                    },
+                  });
+                } else {
+                  console.error('No token available for authentication');
+                  port.postMessage({
+                    type: 'result',
+                    id: message.data.id,
+                    data: {
+                      result: 'error',
+                      error: {
+                        code: 'noToken',
+                        message: 'No authentication token available',
+                      },
+                    },
+                  });
+                }
+                break;
+
+              case 'close':
+                console.log('Close command received');
                 port.postMessage({
                   type: 'result',
                   id: message.data.id,
                   data: {
-                    result: 'token',
-                    token: token.access_token,
+                    result: 'success',
                   },
                 });
-              } else {
-                console.error('No token available for authentication');
+                if (cleanupRef.current) {
+                  cleanupRef.current();
+                }
+                break;
+
+              case 'pick':
+                console.log('Files picked from SharePoint:', command);
+
+                // Extract files from the command data
+                const items = command.items || command.files || [];
+                console.log('Extracted items:', items);
+
+                if (items && items.length > 0) {
+                  const selectedFiles = items.map((item: any) => ({
+                    id: item.id || item.shareId || item.driveItem?.id,
+                    name: item.name || item.driveItem?.name,
+                    size: item.size || item.driveItem?.size,
+                    webUrl: item.webUrl || item.driveItem?.webUrl,
+                    downloadUrl:
+                      item.downloadUrl || item.driveItem?.['@microsoft.graph.downloadUrl'],
+                    driveId:
+                      item.driveId ||
+                      item.parentReference?.driveId ||
+                      item.driveItem?.parentReference?.driveId,
+                    itemId: item.id || item.driveItem?.id,
+                    sharePointItem: item,
+                  }));
+
+                  console.log('Processed SharePoint files:', selectedFiles);
+
+                  if (onFilesSelected) {
+                    onFilesSelected(selectedFiles);
+                  }
+
+                  showToast({
+                    message: `Selected ${selectedFiles.length} file(s) from SharePoint`,
+                    status: 'success',
+                  });
+                }
+
+                port.postMessage({
+                  type: 'result',
+                  id: message.data.id,
+                  data: {
+                    result: 'success',
+                  },
+                });
+
+                if (cleanupRef.current) {
+                  cleanupRef.current();
+                }
+                break;
+
+              default:
+                console.warn(`Unsupported command: ${command.command}`);
                 port.postMessage({
                   type: 'result',
                   id: message.data.id,
                   data: {
                     result: 'error',
                     error: {
-                      code: 'noToken',
-                      message: 'No authentication token available',
+                      code: 'unsupportedCommand',
+                      message: command.command,
                     },
                   },
                 });
-              }
-              break;
+                break;
+            }
+            break;
 
-            case 'close':
-              console.log('Close command received');
-              port.postMessage({
-                type: 'result',
-                id: message.data.id,
-                data: {
-                  result: 'success',
-                },
-              });
-              if (cleanupRef.current) {
-                cleanupRef.current();
-              }
-              break;
-
-            case 'pick':
-              console.log('Files picked from SharePoint:', command);
-              
-              // Extract files from the command data
-              const items = command.items || command.files || [];
-              console.log('Extracted items:', items);
-
-              if (items && items.length > 0) {
-                const selectedFiles = items.map((item: any) => ({
-                  id: item.id || item.shareId || item.driveItem?.id,
-                  name: item.name || item.driveItem?.name,
-                  size: item.size || item.driveItem?.size,
-                  webUrl: item.webUrl || item.driveItem?.webUrl,
-                  downloadUrl: item.downloadUrl || item.driveItem?.['@microsoft.graph.downloadUrl'],
-                  driveId:
-                    item.driveId ||
-                    item.parentReference?.driveId ||
-                    item.driveItem?.parentReference?.driveId,
-                  itemId: item.id || item.driveItem?.id,
-                  sharePointItem: item,
-                }));
-
-                console.log('Processed SharePoint files:', selectedFiles);
-
-                if (onFilesSelected) {
-                  onFilesSelected(selectedFiles);
-                }
-
-                showToast({
-                  message: `Selected ${selectedFiles.length} file(s) from SharePoint`,
-                  status: 'success',
-                });
-              }
-
-              port.postMessage({
-                type: 'result',
-                id: message.data.id,
-                data: {
-                  result: 'success',
-                },
-              });
-
-              if (cleanupRef.current) {
-                cleanupRef.current();
-              }
-              break;
-
-            default:
-              console.warn(`Unsupported command: ${command.command}`);
-              port.postMessage({
-                type: 'result',
-                id: message.data.id,
-                data: {
-                  result: 'error',
-                  error: {
-                    code: 'unsupportedCommand',
-                    message: command.command,
-                  },
-                },
-              });
-              break;
-          }
-          break;
-
-        default:
-          console.log('Unknown message type:', message.data.type);
-          break;
+          default:
+            console.log('Unknown message type:', message.data.type);
+            break;
+        }
+      } catch (error) {
+        console.error('Error processing port message:', error);
       }
-    } catch (error) {
-      console.error('Error processing port message:', error);
-    }
-  }, [token, onFilesSelected, showToast]);
+    },
+    [token, onFilesSelected, showToast],
+  );
 
   // Initialization message handler - establishes MessagePort communication
-  const initMessageHandler = useCallback((event: MessageEvent) => {
-    console.log('=== SharePoint picker init message received ===');
-    console.log('Event source:', event.source);
-    console.log('Event data:', event.data);
-    console.log('Expected channelId:', channelIdRef.current);
+  const initMessageHandler = useCallback(
+    (event: MessageEvent) => {
+      console.log('=== SharePoint picker init message received ===');
+      console.log('Event source:', event.source);
+      console.log('Event data:', event.data);
+      console.log('Expected channelId:', channelIdRef.current);
 
-    // Check if this message is from our iframe
-    if (event.source && event.source === iframeRef.current?.contentWindow) {
-      const message = event.data;
-      
-      if (message.type === 'initialize' && message.channelId === channelIdRef.current) {
-        console.log('Establishing MessagePort communication');
-        
-        // Get the MessagePort from the event
-        portRef.current = event.ports[0];
-        
-        if (portRef.current) {
-          // Set up the port message listener
-          portRef.current.addEventListener('message', portMessageHandler);
-          portRef.current.start();
-          
-          // Send activate message to start the picker
-          portRef.current.postMessage({
-            type: 'activate',
-          });
-          
-          console.log('MessagePort established and activated');
-        } else {
-          console.error('No MessagePort found in initialize event');
+      // Check if this message is from our iframe
+      if (event.source && event.source === iframeRef.current?.contentWindow) {
+        const message = event.data;
+
+        if (message.type === 'initialize' && message.channelId === channelIdRef.current) {
+          console.log('Establishing MessagePort communication');
+
+          // Get the MessagePort from the event
+          portRef.current = event.ports[0];
+
+          if (portRef.current) {
+            // Set up the port message listener
+            portRef.current.addEventListener('message', portMessageHandler);
+            portRef.current.start();
+
+            // Send activate message to start the picker
+            portRef.current.postMessage({
+              type: 'activate',
+            });
+
+            console.log('MessagePort established and activated');
+          } else {
+            console.error('No MessagePort found in initialize event');
+          }
         }
       }
-    }
-  }, [portMessageHandler]);
+    },
+    [portMessageHandler],
+  );
 
   const handleSharePointPicker = async () => {
     if (!token) {
@@ -346,7 +359,7 @@ export default function SharePointFilePicker({
         });
 
         // Create the absolute URL
-        const url = SHAREPOINT_BASE_URL + `_layouts/15/FilePicker.aspx?${queryString}`;
+        const url = sharePointBaseUrl + `/_layouts/15/FilePicker.aspx?${queryString}`;
 
         // Create form in iframe document following Microsoft docs pattern
         const form = win.document.createElement('form');
@@ -368,19 +381,19 @@ export default function SharePointFilePicker({
       const cleanup = () => {
         // Remove initialization message listener
         window.removeEventListener('message', initMessageHandler);
-        
+
         // Close MessagePort if it exists
         if (portRef.current) {
           portRef.current.removeEventListener('message', portMessageHandler);
           portRef.current.close();
           portRef.current = null;
         }
-        
+
         // Remove DOM elements
         if (overlayRef.current && overlayRef.current.parentNode) {
           document.body.removeChild(overlayRef.current);
         }
-        
+
         // Reset refs
         overlayRef.current = null;
         iframeRef.current = null;

@@ -19,6 +19,9 @@ const publicSharedLinksEnabled =
   (process.env.ALLOW_SHARED_LINKS_PUBLIC === undefined ||
     isEnabled(process.env.ALLOW_SHARED_LINKS_PUBLIC));
 
+const sharePointFilePickerEnabled = isEnabled(process.env.ENABLE_SHAREPOINT_FILEPICKER);
+const openidReuseTokens = isEnabled(process.env.OPENID_REUSE_TOKENS);
+
 router.get('/', async function (req, res) {
   const cache = getLogStores(CacheKeys.CONFIG_STORE);
   const cachedStartupConfig = await cache.get(CacheKeys.STARTUP_CONFIG);
@@ -95,6 +98,10 @@ router.get('/', async function (req, res) {
       instanceProjectId: instanceProject._id.toString(),
       bundlerURL: process.env.SANDPACK_BUNDLER_URL,
       staticBundlerURL: process.env.SANDPACK_STATIC_BUNDLER_URL,
+      sharePointFilePickerEnabled,
+      sharePointBaseUrl: process.env.SHAREPOINT_BASE_URL,
+      sharePointPickerGraphScope: process.env.SHAREPOINT_PICKER_GRAPH_SCOPE,
+      openidReuseTokens,
     };
     /** @type {TCustomConfig['webSearch']} */
     const webSearchConfig = req.app.locals.webSearch;
