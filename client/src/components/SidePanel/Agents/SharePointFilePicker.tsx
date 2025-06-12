@@ -288,20 +288,32 @@ export default function SharePointFilePicker({
       const pickerOptions: SPPickerConfig = {
         sdk: '8.0',
         entry: {
-          sharePoint: {
-            // byPath: SHAREPOINT_BASE_URL,
-          },
+          // oneDrive: {
+          //   files: {}
+          // },
+          sharePoint: {},
+          // sharePoint: {
+          //   byPath: {
+          //     list: 'https://m365x98302257-my.sharepoint.com/personal/admin_m365x98302257_onmicrosoft_com/Documents',
+          //   },
+          // },
         },
         messaging: {
           origin: window.location.origin,
           channelId: channelId,
+        },
+        authentication: {
+          enabled: false, // Host app handles authentication
         },
         typesAndSources: {
           mode: 'files',
           pivots: {
             oneDrive: true,
             recent: true,
-            // sharePoint: true,
+            shared: true,
+            sharedLibraries: true,
+            myOrganization: true,
+            site: true,
           },
         },
         selection: {
