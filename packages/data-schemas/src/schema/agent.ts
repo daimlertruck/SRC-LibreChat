@@ -1,5 +1,40 @@
-import { Schema } from 'mongoose';
+import { Schema, Document, Types } from 'mongoose';
 import type { IAgent } from '~/types';
+export interface ISupportContact {
+  name?: string;
+  email?: string;
+}
+
+export interface IAgent extends Omit<Document, 'model'> {
+  id: string;
+  name?: string;
+  description?: string;
+  instructions?: string;
+  avatar?: {
+    filepath: string;
+    source: string;
+  };
+  provider: string;
+  model: string;
+  model_parameters?: Record<string, unknown>;
+  artifacts?: string;
+  access_level?: number;
+  recursion_limit?: number;
+  tools?: string[];
+  tool_kwargs?: Array<unknown>;
+  actions?: string[];
+  author: Types.ObjectId;
+  authorName?: string;
+  hide_sequential_outputs?: boolean;
+  end_after_tools?: boolean;
+  agent_ids?: string[];
+  isCollaborative?: boolean;
+  conversation_starters?: string[];
+  tool_resources?: unknown;
+  projectIds?: Types.ObjectId[];
+  category: string;
+  support_contact?: ISupportContact;
+}
 
 const agentSchema = new Schema<IAgent>(
   {
@@ -92,10 +127,41 @@ const agentSchema = new Schema<IAgent>(
       type: [Schema.Types.Mixed],
       default: [],
     },
+    category: {
+      type: String,
+      trim: true,
+      index: true,
+      default: 'general',
+    },
+    support_contact: {
+      type: {
+        name: {
+          type: String,
+          minlength: [3, 'Support contact name must be at least 3 characters.'],
+          trim: true,
+        },
+        email: {
+          type: String,
+          match: [
+            /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/,
+            'Please enter a valid email address.',
+          ],
+          trim: true,
+        },
+      },
+      default: {},
+    },
+    is_promoted: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
   },
   {
     timestamps: true,
   },
 );
+
+agentSchema.index({ updatedAt: -1, _id: 1 });
 
 export default agentSchema;

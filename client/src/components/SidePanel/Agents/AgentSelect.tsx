@@ -40,9 +40,7 @@ export default function AgentSelect({
 
   const resetAgentForm = useCallback(
     (fullAgent: Agent) => {
-      const { instanceProjectId } = startupConfig ?? {};
-      const isGlobal =
-        (instanceProjectId != null && fullAgent.projectIds?.includes(instanceProjectId)) ?? false;
+      const isGlobal = fullAgent.isPublic ?? false;
       const update = {
         ...fullAgent,
         provider: createProviderOption(fullAgent.provider),
@@ -74,6 +72,10 @@ export default function AgentSelect({
         agent: update,
         model: update.model,
         tools: agentTools,
+        // Ensure the category is properly set for the form
+        category: fullAgent.category || 'general',
+        // Make sure support_contact is properly loaded
+        support_contact: fullAgent.support_contact,
       };
 
       Object.entries(fullAgent).forEach(([name, value]) => {
