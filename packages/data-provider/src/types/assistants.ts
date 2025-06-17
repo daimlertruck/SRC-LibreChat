@@ -196,8 +196,13 @@ export interface AgentFileResource extends AgentBaseResource {
    */
   vector_store_ids?: Array<string>;
 }
+export type SupportContact = {
+  name?: string;
+  email?: string;
+};
 
 export type Agent = {
+  _id?: string;
   id: string;
   name: string | null;
   author?: string | null;
@@ -217,6 +222,7 @@ export type Agent = {
   model: string | null;
   model_parameters: AgentModelParameters;
   conversation_starters?: string[];
+  /** @deprecated Use ACL permissions instead */
   isCollaborative?: boolean;
   tool_resources?: AgentToolResources;
   agent_ids?: string[];
@@ -224,7 +230,10 @@ export type Agent = {
   hide_sequential_outputs?: boolean;
   artifacts?: ArtifactModes;
   recursion_limit?: number;
+  isPublic?: boolean;
   version?: number;
+  category?: string;
+  support_contact?: SupportContact;
 };
 
 export type TAgentsMap = Record<string, Agent | undefined>;
@@ -241,7 +250,13 @@ export type AgentCreateParams = {
   model_parameters: AgentModelParameters;
 } & Pick<
   Agent,
-  'agent_ids' | 'end_after_tools' | 'hide_sequential_outputs' | 'artifacts' | 'recursion_limit'
+  | 'agent_ids'
+  | 'end_after_tools'
+  | 'hide_sequential_outputs'
+  | 'artifacts'
+  | 'recursion_limit'
+  | 'category'
+  | 'support_contact'
 >;
 
 export type AgentUpdateParams = {
@@ -260,7 +275,13 @@ export type AgentUpdateParams = {
   isCollaborative?: boolean;
 } & Pick<
   Agent,
-  'agent_ids' | 'end_after_tools' | 'hide_sequential_outputs' | 'artifacts' | 'recursion_limit'
+  | 'agent_ids'
+  | 'end_after_tools'
+  | 'hide_sequential_outputs'
+  | 'artifacts'
+  | 'recursion_limit'
+  | 'category'
+  | 'support_contact'
 >;
 
 export type AgentListParams = {
@@ -269,6 +290,7 @@ export type AgentListParams = {
   after?: string | null;
   order?: 'asc' | 'desc';
   provider?: AgentProvider;
+  requiredPermission?: number;
 };
 
 export type AgentListResponse = {
@@ -277,6 +299,7 @@ export type AgentListResponse = {
   first_id: string;
   last_id: string;
   has_more: boolean;
+  after?: string;
 };
 
 export type AgentFile = {
