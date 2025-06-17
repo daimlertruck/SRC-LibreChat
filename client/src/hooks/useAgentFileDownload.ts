@@ -44,7 +44,6 @@ export function useAgentFileDownload(options: UseAgentFileDownloadOptions) {
 
         onSuccess?.(fileName);
       } catch (error) {
-        console.error('File download failed:', error);
         onError?.(error as Error);
       }
     },

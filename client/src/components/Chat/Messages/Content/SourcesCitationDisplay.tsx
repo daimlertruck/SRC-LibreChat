@@ -9,6 +9,7 @@ interface FileSource {
   fileName: string;
   relevance?: number;
   pages?: number[];
+  pageRelevance?: Record<number, number>;
   metadata?: {
     storageType?: string;
     s3Bucket?: string;
@@ -31,13 +32,6 @@ const SourcesCitationDisplay: React.FC<SourcesCitationDisplayProps> = ({
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set());
   const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
 
-  console.log('[SourcesCitationDisplay] Rendering with:', {
-    sources,
-    sourcesLength: sources?.length,
-    messageId,
-    conversationId,
-  });
-
   const { downloadFile } = useAgentFileDownload({
     conversationId,
     onSuccess: (fileName) => {
@@ -47,8 +41,7 @@ const SourcesCitationDisplay: React.FC<SourcesCitationDisplayProps> = ({
         return next;
       });
     },
-    onError: (error) => {
-      console.error('Download failed:', error);
+    onError: (_error) => {
       setDownloadingFiles(new Set());
     },
   });
@@ -65,6 +58,19 @@ const SourcesCitationDisplay: React.FC<SourcesCitationDisplayProps> = ({
     });
   }, []);
 
+  // Helper function to sort pages by relevance (highest first)
+  const sortPagesByRelevance = useCallback((pages: number[], pageRelevance?: Record<number, number>) => {
+    if (!pageRelevance || Object.keys(pageRelevance).length === 0) {
+      return pages; // Return original order if no relevance data
+    }
+    
+    return [...pages].sort((a, b) => {
+      const relevanceA = pageRelevance[a] || 0;
+      const relevanceB = pageRelevance[b] || 0;
+      return relevanceB - relevanceA; // Highest relevance first
+    });
+  }, []);
+
   const handleDownload = useCallback(
     async (source: FileSource) => {
       if (source.metadata?.storageType === 's3' && source.metadata?.s3Bucket) {
@@ -76,15 +82,8 @@ const SourcesCitationDisplay: React.FC<SourcesCitationDisplayProps> = ({
   );
 
   if (!sources || sources.length === 0) {
-    console.log('[SourcesCitationDisplay] No sources to display, returning null');
     return null;
   }
-
-  console.log(
-    '[SourcesCitationDisplay] Rendering citation display with',
-    sources.length,
-    'sources',
-  );
   return (
     <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800/50">
       <div className="mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -135,7 +134,7 @@ const SourcesCitationDisplay: React.FC<SourcesCitationDisplayProps> = ({
               </div>
               {isExpanded && source.pages && source.pages.length > 0 && (
                 <div className="mt-2 text-left text-xs text-gray-600 dark:text-gray-400">
-                  {localize('com_sources_pages')}: {source.pages.join(', ')}
+                  {localize('com_sources_pages')}: {sortPagesByRelevance(source.pages, source.pageRelevance).join(', ')}
                 </div>
               )}
             </div>

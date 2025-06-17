@@ -294,11 +294,6 @@ class AgentClient extends BaseClient {
           if (file.metadata?.fileIdentifier) {
             continue;
           }
-          // orderedMessages[i].tokenCount += this.calculateImageTokenCost({
-          //   width: file.width,
-          //   height: file.height,
-          //   detail: this.options.imageDetail ?? ImageDetail.auto,
-          // });
         }
       }
 
@@ -742,7 +737,7 @@ class AgentClient extends BaseClient {
 
         if (noSystemMessages === true && systemContent?.length) {
           const latestMessageContent = _messages.pop().content;
-          if (typeof latestMessage !== 'string') {
+          if (typeof latestMessageContent !== 'string') {
             latestMessageContent[0].text = [systemContent, latestMessageContent[0].text].join('\n');
             _messages.push(new HumanMessage({ content: latestMessageContent }));
           } else {
@@ -924,16 +919,6 @@ class AgentClient extends BaseClient {
         }
 
         // Process agent response to capture file references and create attachments
-        logger.info('[AgentClient] Processing agent response for citations', {
-          messageId: this.responseMessageId,
-          contentPartsCount: this.contentParts.length,
-          contentPartsPreview: this.contentParts.slice(0, 3).map((part) => ({
-            type: part.type,
-            hasToolCall: !!part.tool_call,
-            toolCallName: part.tool_call?.name,
-            hasToolResult: !!part.tool_result,
-          })),
-        });
 
         const processedResponse = await processAgentResponse(
           {
@@ -948,12 +933,6 @@ class AgentClient extends BaseClient {
 
         // Update artifact promises with any new attachments from agent response
         if (processedResponse.attachments && processedResponse.attachments.length > 0) {
-          logger.info('[AgentClient] Adding processed attachments to artifactPromises:', {
-            newAttachmentsCount: processedResponse.attachments.length,
-            existingPromisesCount: this.artifactPromises.length,
-            attachmentTypes: processedResponse.attachments.map((att) => att.type),
-          });
-
           // Add new attachments to existing artifactPromises
           processedResponse.attachments.forEach((attachment) => {
             this.artifactPromises.push(Promise.resolve(attachment));

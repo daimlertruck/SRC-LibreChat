@@ -46,86 +46,16 @@ const primeFiles = async (options) => {
 };
 
 /**
- * Creates a callback function for streaming file search results  
- * @param {import('http').ServerResponse} res - The HTTP server response object
- * @returns {function} Function that takes results and streams them
- */
-function createOnFileSearchResults(res) {
-  logger.info('[file_search] createOnFileSearchResults called with res:', !!res);
-  
-  return function onFileSearchResults(results, config) {
-    logger.info('[file_search] onFileSearchResults callback invoked:', {
-      hasRes: !!res,
-      hasConfig: !!config,
-      resultCount: results?.length,
-      headersSent: res?.headersSent
-    });
-
-    try {
-      if (res && config && !res.headersSent && results && results.length > 0) {
-        const { nanoid } = require('nanoid');
-
-        const attachment = {
-          messageId: config.metadata?.run_id,
-          toolCallId: config.toolCall?.id,
-          conversationId: config.metadata?.thread_id,
-          name: `${Tools.file_search}_${config.toolCall?.id}_${nanoid()}`,
-          type: Tools.file_search,
-          [Tools.file_search]: {
-            sources: results.map((result) => ({
-              fileId: result.file_id,
-              fileName: result.filename,
-              pages: result.page ? [result.page] : [],
-              relevance: result.relevance,
-              type: 'file',
-              content: result.content,
-              metadata: {
-                storageType: result.storage_type || 'local',
-                s3Bucket: result.s3_bucket,
-                s3Key: result.s3_key,
-              },
-            })),
-          },
-        };
-
-        res.write(`event: attachment\ndata: ${JSON.stringify(attachment)}\n\n`);
-        logger.info('[file_search] Streamed attachment via callback successfully');
-      } else {
-        logger.warn('[file_search] Callback streaming conditions not met:', {
-          hasRes: !!res,
-          hasConfig: !!config,
-          headersSent: res?.headersSent,
-          resultCount: results?.length
-        });
-      }
-    } catch (error) {
-      logger.error('[file_search] Error streaming results via callback:', error);
-    }
-  };
-}
-
-/**
  *
  * @param {Object} options
  * @param {ServerRequest} options.req
  * @param {Array<{ file_id: string; filename: string }>} options.files
  * @param {string} [options.entity_id]
- * @param {function} [options.onFileSearchResults] - Callback for streaming results
  * @returns
  */
-const createFileSearchTool = async ({ req, files, entity_id, onFileSearchResults }) => {
-  logger.info('[file_search] createFileSearchTool called with callback:', {
-    hasCallback: !!onFileSearchResults,
-    callbackType: typeof onFileSearchResults,
-    filesCount: files.length
-  });
-
+const createFileSearchTool = async ({ req, files, entity_id }) => {
   return tool(
-    async ({ query }, config) => {
-      logger.info('[file_search] Tool execution started:', {
-        hasCallback: !!onFileSearchResults,
-        hasConfig: !!config
-      });
+    async ({ query }) => {
       if (files.length === 0) {
         return 'No files to search. Instruct the user to add files for the search.';
       }
@@ -180,14 +110,6 @@ const createFileSearchTool = async ({ req, files, entity_id, onFileSearchResults
             const filename = docInfo.metadata.source.split('/').pop();
             const file = files[fileIndex]; // Get corresponding file info
 
-            // Log all available metadata from RAG API
-            logger.debug('[file_search] RAG API metadata:', {
-              file_id: file?.file_id,
-              filename,
-              metadata: docInfo.metadata,
-              allMetadataKeys: Object.keys(docInfo.metadata),
-            });
-
             return {
               filename,
               content: docInfo.page_content,
@@ -199,8 +121,6 @@ const createFileSearchTool = async ({ req, files, entity_id, onFileSearchResults
               storage_type: docInfo.metadata.storage_type || docInfo.metadata.storageType,
               s3_bucket: docInfo.metadata.s3_bucket || docInfo.metadata.s3Bucket,
               s3_key: docInfo.metadata.s3_key || docInfo.metadata.s3Key,
-              // Keep all original metadata for debugging
-              originalMetadata: docInfo.metadata,
             };
           }),
         )
@@ -230,30 +150,6 @@ const createFileSearchTool = async ({ req, files, entity_id, onFileSearchResults
         )
         .join('\n---\n');
 
-      // Stream file search results via callback (like web search)
-      logger.info('[file_search] About to call streaming callback:', {
-        hasCallback: !!onFileSearchResults,
-        resultCount: formattedResults.length,
-        hasConfig: !!config,
-        callbackType: typeof onFileSearchResults
-      });
-
-      try {
-        if (onFileSearchResults && formattedResults.length > 0) {
-          logger.info('[file_search] Calling streaming callback now...');
-          onFileSearchResults(formattedResults, config);
-          logger.info('[file_search] Streaming callback called successfully');
-        } else {
-          logger.warn('[file_search] Streaming conditions not met:', {
-            hasCallback: !!onFileSearchResults,
-            resultCount: formattedResults.length,
-            hasConfig: !!config
-          });
-        }
-      } catch (streamError) {
-        logger.error('[file_search] Error calling streaming callback:', streamError);
-      }
-
       // Return the display format, but include a hidden marker with full data for processing
       return `${formattedString}\n\n<!-- INTERNAL_DATA_START -->\n${fullResults}\n<!-- INTERNAL_DATA_END -->`;
     },
@@ -271,4 +167,4 @@ const createFileSearchTool = async ({ req, files, entity_id, onFileSearchResults
   );
 };
 
-module.exports = { createFileSearchTool, primeFiles, createOnFileSearchResults };
+module.exports = { createFileSearchTool, primeFiles };

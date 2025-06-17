@@ -359,7 +359,6 @@ router.post('/', async (req, res) => {
       message = error.message;
     }
 
-    // TODO: delete remote file if it exists
     try {
       await fs.unlink(req.file.path);
       cleanup = false;

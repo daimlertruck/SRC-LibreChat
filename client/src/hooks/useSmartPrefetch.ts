@@ -172,11 +172,7 @@ export function useSmartPrefetch(options: UseSmartPrefetchOptions): SmartPrefetc
         });
 
         onPrefetchComplete?.(fileId, response.downloadUrl);
-
-        console.log(`Prefetch complete for ${fileId} (confidence: ${prediction.confidence})`);
       } catch (error) {
-        console.error(`Prefetch failed for ${fileId}:`, error);
-
         setPrefetchStatus((prev) => {
           const newStatus = new Map(prev);
           newStatus.set(key, { status: 'error', timestamp: Date.now() });
@@ -231,10 +227,7 @@ export function useSmartPrefetch(options: UseSmartPrefetchOptions): SmartPrefetc
         await new Promise((resolve) => setTimeout(resolve, 1000));
 
         // Example: prefetch based on file position and type
-        console.log('Background prefetch triggered for message:', messageId);
-      } catch (error) {
-        console.error('Background prefetch error:', error);
-      }
+      } catch (error) {}
     };
 
     // Debounce prefetch triggers
@@ -266,10 +259,6 @@ export function useSmartPrefetch(options: UseSmartPrefetchOptions): SmartPrefetc
       expired.forEach((key) => {
         prefetchedUrlsRef.current.delete(key);
       });
-
-      if (expired.length > 0) {
-        console.log(`Cleaned up ${expired.length} expired prefetch entries`);
-      }
     }, 60000); // Check every minute
 
     return () => clearInterval(cleanupInterval);

@@ -73,11 +73,6 @@ function SourceItem({ source, expanded = false }: SourceItemProps) {
                   <span className="line-clamp-2 text-sm font-medium text-text-primary md:line-clamp-3">
                     {source.title || source.link}
                   </span>
-                  {/* {'snippet' in source && source.snippet && (
-                    <span className="mt-1 line-clamp-2 md:line-clamp-3 text-xs text-text-secondary">
-                      {source.snippet}
-                    </span>
-                  )} */}
                 </div>
               </a>
             }
@@ -166,6 +161,7 @@ type AgentFileSource = TAttachment & {
   file_id: string;
   bytes?: number;
   type?: string;
+  pageRelevance?: Record<number, number>;
 };
 
 interface FileItemProps {
@@ -188,12 +184,8 @@ const FileItem = React.memo(function FileItem({
   // Use simplified download hook
   const { downloadFile, isLoading, error } = useAgentFileDownload({
     conversationId,
-    onSuccess: (fileName) => {
-      console.log(`Downloaded ${fileName}`);
-    },
-    onError: (error) => {
-      console.error('Download failed:', error);
-    },
+    onSuccess: (_fileName) => {},
+    onError: (_error) => {},
   });
 
   const handleDownload = useCallback(
@@ -227,6 +219,19 @@ const FileItem = React.memo(function FileItem({
       error,
     ],
   );
+
+  // Helper function to sort pages by relevance (highest first)
+  const sortPagesByRelevance = useCallback((pages: number[], pageRelevance?: Record<number, number>) => {
+    if (!pageRelevance || Object.keys(pageRelevance).length === 0) {
+      return pages; // Return original order if no relevance data
+    }
+    
+    return [...pages].sort((a, b) => {
+      const relevanceA = pageRelevance[a] || 0;
+      const relevanceB = pageRelevance[b] || 0;
+      return relevanceB - relevanceA; // Highest relevance first
+    });
+  }, []);
 
   // Memoize file icon computation for performance
   const fileIcon = useMemo(() => {
@@ -271,7 +276,7 @@ const FileItem = React.memo(function FileItem({
           </span>
           {file.pages && file.pages.length > 0 && (
             <span className="mt-1 line-clamp-1 text-left text-xs text-text-secondary">
-              Pages: {file.pages.join(', ')}
+              Pages: {sortPagesByRelevance(file.pages, file.pageRelevance).join(', ')}
             </span>
           )}
           {file.bytes && (
@@ -307,7 +312,7 @@ const FileItem = React.memo(function FileItem({
         </span>
         {file.pages && file.pages.length > 0 && (
           <span className="mt-1 line-clamp-1 text-left text-xs text-text-secondary">
-            Pages: {file.pages.join(', ')}
+            Pages: {sortPagesByRelevance(file.pages, file.pageRelevance).join(', ')}
           </span>
         )}
       </div>
@@ -528,14 +533,6 @@ function SourcesComponent({ messageId, conversationId }: SourcesProps = {}) {
   const { searchResults } = useSearchContext();
   const { announceToScreenReader } = useAccessibility();
 
-  console.log('[Sources] Component rendered with:', {
-    messageId,
-    conversationId,
-    searchResults: !!searchResults,
-    searchResultsKeys: searchResults ? Object.keys(searchResults) : [],
-    searchResultsData: searchResults,
-  });
-
   const { organicSources, topStories, images, hasAnswerBox, agentFiles } = useMemo(() => {
     const organicSourcesMap = new Map<string, ValidSource>();
     const topStoriesMap = new Map<string, ValidSource>();
@@ -570,14 +567,6 @@ function SourcesComponent({ messageId, conversationId }: SourcesProps = {}) {
               const fileId = (source as any).fileId || 'unknown';
               const fileName = source.title || 'Unknown File';
 
-              console.log('[Sources] Processing file source:', {
-                fileId,
-                fileName,
-                pages: (source as any).pages,
-                relevance: (source as any).relevance,
-                fullSource: source,
-              });
-
               // Create a more unique key using both fileId and filename to avoid incorrect merging
               const uniqueKey = `${fileId}_${fileName}`;
 
@@ -591,20 +580,17 @@ function SourcesComponent({ messageId, conversationId }: SourcesProps = {}) {
                 // Remove duplicates and sort
                 const uniquePages = [...new Set(allPages)].sort((a, b) => a - b);
 
+                // Merge page relevance mappings
+                const existingPageRelevance = existing.pageRelevance || {};
+                const newPageRelevance = (source as any).pageRelevance || {};
+                const mergedPageRelevance = { ...existingPageRelevance, ...newPageRelevance };
+
                 existing.pages = uniquePages;
                 existing.relevance = Math.max(
                   existing.relevance || 0,
                   (source as any).relevance || 0,
                 );
-
-                console.log('[Sources] Merged pages for duplicate file:', {
-                  uniqueKey,
-                  fileId,
-                  filename: existing.filename,
-                  originalPages: existingPages,
-                  newPages,
-                  mergedPages: uniquePages,
-                });
+                existing.pageRelevance = mergedPageRelevance;
               } else {
                 // Handle agent file references from searchResults
                 const agentFile: AgentFileSource = {
@@ -615,18 +601,11 @@ function SourcesComponent({ messageId, conversationId }: SourcesProps = {}) {
                   metadata: (source as any).metadata,
                   pages: (source as any).pages,
                   relevance: (source as any).relevance,
+                  pageRelevance: (source as any).pageRelevance,
                   messageId: messageId || '',
                   toolCallId: 'file_search_results',
                 };
                 agentFilesMap.set(uniqueKey, agentFile);
-
-                console.log('[Sources] Added new agent file:', {
-                  uniqueKey,
-                  fileId: agentFile.file_id,
-                  filename: agentFile.filename,
-                  pages: agentFile.pages,
-                  mapSize: agentFilesMap.size,
-                });
               }
               return;
             }
@@ -654,14 +633,6 @@ function SourcesComponent({ messageId, conversationId }: SourcesProps = {}) {
         }
       });
     }
-
-    console.log('[Sources] Processed sources:', {
-      organicSourcesCount: organicSourcesMap.size,
-      topStoriesCount: topStoriesMap.size,
-      imagesCount: imagesMap.size,
-      agentFilesCount: agentFilesMap.size,
-      hasAnswerBox,
-    });
 
     return {
       organicSources: Array.from(organicSourcesMap.values()),

@@ -36,24 +36,8 @@ export const prefetchedUrlsSelector = selectorFamily({
 
       if (fileIds.length === 0) return {};
 
-      try {
-        // Use batch endpoint for better performance
-        const response = await fetch('/api/files/agent-source-urls-batch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileIds }),
-        });
-
-        if (!response.ok) {
-          console.error('Failed to prefetch URLs:', response.statusText);
-          return {};
-        }
-
-        return response.json();
-      } catch (error) {
-        console.error('Error prefetching URLs:', error);
-        return {};
-      }
+      // TODO: Implement batch endpoint for URL prefetching when ready
+      return {};
     },
 });
 
@@ -73,27 +57,6 @@ export const sourcesWithUrlsSelector = selectorFamily({
       }));
     },
 });
-
-// Hook for managing agent sources with URL prefetching
-export const useAgentSourcesWithUrls = (messageId: string) => {
-  const sources = sourcesWithUrlsSelector(messageId);
-
-  return {
-    sources,
-  };
-};
-
-// Action to set agent sources for a message
-export const setAgentSources = (messageId: string, sources: TAttachment[]) => {
-  // This would be used with useSetRecoilState in components
-  return sources;
-};
-
-// Action to clear agent sources for a message
-export const clearAgentSources = (messageId: string) => {
-  // This would be used with useResetRecoilState in components
-  return [];
-};
 
 // Helper to check if a source has a valid download URL
 export const hasValidDownloadUrl = (source: TAttachment & { urlExpiresAt?: string }) => {

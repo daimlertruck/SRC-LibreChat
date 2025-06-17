@@ -187,9 +187,6 @@ export const agentSourcePrefetchSelector = selectorFamily<
         try {
           // In a real implementation, this would call the actual API
           // For now, we'll simulate the prefetch operation
-          console.log(
-            `Prefetching source URL for ${candidate.fileId} (reason: ${candidate.reason})`,
-          );
 
           // Simulate async prefetch operation
           await new Promise((resolve) => setTimeout(resolve, 100));
@@ -206,8 +203,6 @@ export const agentSourcePrefetchSelector = selectorFamily<
           const newStatus = new Map(prefetchStatus);
           newStatus.set(prefetchKey, { status: 'complete', timestamp: Date.now() });
         } catch (error) {
-          console.warn(`Failed to prefetch ${candidate.fileId}:`, error);
-
           // Update error status
           const newStatus = new Map(prefetchStatus);
           newStatus.set(prefetchKey, { status: 'error', timestamp: Date.now() });

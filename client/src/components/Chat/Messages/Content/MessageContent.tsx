@@ -23,7 +23,6 @@ export const ErrorMessage = ({
 }) => {
   const localize = useLocalize();
   if (text === 'Error connecting to server, try refreshing the page.') {
-    console.log('error message', message);
     return (
       <Suspense
         fallback={

@@ -24,12 +24,6 @@ export function useSearchResultsByTurn(attachments?: TAttachment[]) {
       if (attachment.type === 'file_search_sources' && (attachment as any).sources) {
         const sources = (attachment as any).sources;
 
-        console.log('[useSearchResultsByTurn] Processing file_search_sources:', {
-          messageId: attachment.messageId,
-          sourcesCount: sources.length,
-          sources,
-        });
-
         // Deduplicate sources by fileId and merge pages
         const deduplicatedSources = new Map();
 
@@ -44,20 +38,21 @@ export function useSearchResultsByTurn(attachments?: TAttachment[]) {
             // Remove duplicates and sort
             const uniquePages = [...new Set(allPages)].sort((a, b) => a - b);
 
+            // Merge page relevance mappings
+            const existingPageRelevance = existing.pageRelevance || {};
+            const newPageRelevance = source.pageRelevance || {};
+            const mergedPageRelevance = { ...existingPageRelevance, ...newPageRelevance };
+
             existing.pages = uniquePages;
             existing.relevance = Math.max(existing.relevance || 0, source.relevance || 0);
-
-            console.log('[useSearchResultsByTurn] Merged pages for file:', {
-              fileId,
-              fileName: existing.fileName,
-              mergedPages: uniquePages,
-            });
+            existing.pageRelevance = mergedPageRelevance;
           } else {
             deduplicatedSources.set(fileId, {
               fileId: source.fileId,
               fileName: source.fileName,
               pages: source.pages || [],
               relevance: source.relevance || 0.5,
+              pageRelevance: source.pageRelevance || {},
               metadata: source.metadata,
             });
           }
@@ -79,23 +74,16 @@ export function useSearchResultsByTurn(attachments?: TAttachment[]) {
             fileId: source.fileId,
             fileName: source.fileName,
             pages: source.pages,
+            pageRelevance: source.pageRelevance,
             metadata: source.metadata,
           })),
         };
 
         turnMap[agentFileSearchTurn.toString()] = agentSearchData;
         agentFileSearchTurn++;
-
-        console.log('[useSearchResultsByTurn] Created agent search data:', {
-          turn: agentFileSearchTurn - 1,
-          referencesCount: agentSearchData.references.length,
-          deduplicatedFiles: Array.from(deduplicatedSources.keys()),
-          agentSearchData,
-        });
       }
     });
 
-    console.log('[useSearchResultsByTurn] Final turnMap:', turnMap);
     return turnMap;
   }, [attachments]);
 

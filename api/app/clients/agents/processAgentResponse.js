@@ -10,14 +10,19 @@ const { logger } = require('~/config');
  * @param {import('http').ServerResponse} [res] - Server response for streaming
  * @returns {Object} Processed response with attachments
  */
-const processAgentResponse = async (response, userId, conversationId, contentParts = [], res = null) => {
+const processAgentResponse = async (
+  response,
+  userId,
+  conversationId,
+  contentParts = [],
+  res = null,
+) => {
   try {
-    logger.info('[processAgentResponse] Starting processing', {
+    logger.debug('[processAgentResponse] Starting processing', {
       messageId: response.messageId,
       userId,
       conversationId,
       contentPartsCount: contentParts.length,
-      contentParts: JSON.stringify(contentParts, null, 2),
     });
 
     if (!response.messageId) {
@@ -29,16 +34,6 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
     const fileSearchResults = [];
 
     for (const part of contentParts) {
-      logger.debug('[processAgentResponse] Processing content part:', {
-        type: part.type,
-        toolCall: part.tool_call,
-        toolResult: part.tool_result,
-        // Check for other possible properties
-        content: part.content,
-        text: part.text,
-        allKeys: Object.keys(part),
-      });
-
       // Check multiple possible formats for file_search tool calls
       let toolResult = null;
       let isFileSearchTool = false;
@@ -71,16 +66,9 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
       }
 
       if (isFileSearchTool && toolResult) {
-        logger.info('[processAgentResponse] Found file_search tool call:', {
-          partType: part.type,
-          toolResultFull: toolResult,
-          toolResultLength: typeof toolResult === 'string' ? toolResult.length : 'not string',
-        });
-
         if (typeof toolResult === 'string') {
           // Parse the formatted file search results
           const results = parseFileSearchResults(toolResult);
-          logger.info('[processAgentResponse] Parsed file search results:', results);
           fileSearchResults.push(...results);
         }
       }
@@ -94,7 +82,6 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
     }
 
     // Transform results into source format using RAG API metadata as source of truth
-    logger.info('[processAgentResponse] Creating sources using RAG API storage metadata');
 
     const sources = fileSearchResults
       .sort((a, b) => b.relevance - a.relevance)
@@ -106,6 +93,8 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
           pages: result.page ? [result.page] : [],
           relevance: result.relevance,
           type: 'file',
+          // Include page-specific relevance mapping for sorting
+          pageRelevance: result.pageRelevance || {},
           metadata: {
             storageType: result.storage_type || 'local', // Use RAG API storage type
           },
@@ -115,20 +104,6 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
         if (result.storage_type === 's3' && result.s3_bucket && result.s3_key) {
           source.metadata.s3Bucket = result.s3_bucket;
           source.metadata.s3Key = result.s3_key;
-
-          logger.info('[processAgentResponse] Using S3 metadata from RAG API:', {
-            fileId: result.file_id,
-            fileName: result.filename,
-            storageType: result.storage_type,
-            s3Bucket: result.s3_bucket,
-            s3Key: result.s3_key,
-          });
-        } else {
-          logger.info('[processAgentResponse] Using local storage for file:', {
-            fileId: result.file_id,
-            fileName: result.filename,
-            storageType: result.storage_type || 'local',
-          });
         }
 
         return source;
@@ -140,7 +115,7 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
         try {
           const { nanoid } = require('nanoid');
           const { Tools } = require('librechat-data-provider');
-          
+
           const attachment = {
             messageId: response.messageId,
             toolCallId: 'file_search_results',
@@ -154,13 +129,13 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
                 pages: source.pages,
                 relevance: source.relevance,
                 type: 'file',
+                pageRelevance: source.pageRelevance,
                 metadata: source.metadata,
               })),
             },
           };
 
           res.write(`event: attachment\ndata: ${JSON.stringify(attachment)}\n\n`);
-          logger.info('[processAgentResponse] Streamed file search results immediately');
         } catch (streamError) {
           logger.error('[processAgentResponse] Error streaming file search results:', streamError);
         }
@@ -168,31 +143,12 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
 
       // Capture file references for data consistency
       try {
-        logger.info('[processAgentResponse] About to capture file references:', {
-          messageId: response.messageId,
-          userId,
-          conversationId,
-          sources: sources.map((s) => ({
-            fileId: s.fileId,
-            fileName: s.fileName,
-            pages: s.pages,
-            relevance: s.relevance,
-            metadata: s.metadata,
-          })),
-        });
-
-        const capturedReferences = await MessageFileReference.captureReferences(
+        await MessageFileReference.captureReferences(
           response.messageId,
           sources,
           userId,
           conversationId,
         );
-
-        logger.info('[processAgentResponse] Successfully captured file references:', {
-          messageId: response.messageId,
-          capturedCount: capturedReferences.length,
-          capturedIds: capturedReferences.map((ref) => ref._id),
-        });
       } catch (captureError) {
         logger.error('[processAgentResponse] Failed to capture file references:', captureError);
         // Continue with the attachment creation even if capture fails
@@ -209,13 +165,6 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
       // Add to response attachments array for processing
       response.attachments = response.attachments || [];
       response.attachments.push(fileSearchAttachment);
-
-      logger.info('[processAgentResponse] Created file search attachment:', {
-        messageId: response.messageId,
-        sourcesCount: sources.length,
-        fileIds: sources.map((s) => s.fileId),
-        attachmentType: fileSearchAttachment.type,
-      });
     }
 
     return response;
@@ -234,13 +183,6 @@ const parseFileSearchResults = (formattedResults) => {
   const results = [];
 
   try {
-    logger.info('[parseFileSearchResults] Input:', {
-      inputType: typeof formattedResults,
-      inputLength: formattedResults?.length,
-      firstChars: formattedResults?.substring(0, 200),
-      fullInput: formattedResults,
-    });
-
     // Check if there's internal data with page information
     let dataToProcess = formattedResults;
     const internalDataMatch = formattedResults.match(
@@ -249,9 +191,6 @@ const parseFileSearchResults = (formattedResults) => {
     if (internalDataMatch) {
       // Use the internal data which has complete information including pages
       dataToProcess = internalDataMatch[1];
-      logger.info('[parseFileSearchResults] Found internal data section, using it for parsing');
-    } else {
-      logger.info('[parseFileSearchResults] No internal data section found, using visible data');
     }
 
     // Try multiple parsing strategies
@@ -269,11 +208,6 @@ const parseFileSearchResults = (formattedResults) => {
       let content = '';
       let page = null;
 
-      logger.debug('[parseFileSearchResults] Processing section:', {
-        section: section.substring(0, 100),
-        lines: lines.slice(0, 5),
-      });
-
       let storage_type = null;
       let s3_bucket = null;
       let s3_key = null;
@@ -283,13 +217,6 @@ const parseFileSearchResults = (formattedResults) => {
         if (trimmedLine.startsWith('File: ')) {
           const rawFilename = trimmedLine.replace('File: ', '').trim();
           filename = extractOriginalFilename(rawFilename);
-
-          if (filename !== rawFilename) {
-            logger.info('[parseFileSearchResults] Transformed filename:', {
-              raw: rawFilename,
-              original: filename,
-            });
-          }
         } else if (trimmedLine.startsWith('File_ID: ')) {
           file_id = trimmedLine.replace('File_ID: ', '').trim();
         } else if (trimmedLine.startsWith('Relevance: ')) {
@@ -312,17 +239,6 @@ const parseFileSearchResults = (formattedResults) => {
         }
       }
 
-      logger.debug('[parseFileSearchResults] Extracted data:', {
-        filename,
-        file_id,
-        relevance,
-        page,
-        storage_type,
-        s3_bucket,
-        s3_key,
-        contentLength: content.length,
-      });
-
       if (filename && (relevance > 0 || file_id)) {
         // Use extracted file_id or generate one as fallback
         const finalFileId = file_id || extractFileIdFromFilename(filename);
@@ -333,28 +249,17 @@ const parseFileSearchResults = (formattedResults) => {
           relevance: relevance || 0.5, // Default relevance if not parsed
           content,
           page,
+          // Store page-specific relevance for sorting
+          pageRelevance: page ? { [page]: relevance || 0.5 } : {},
           // Include RAG API storage metadata
           storage_type,
           s3_bucket,
           s3_key,
         };
 
-        logger.info('[parseFileSearchResults] Successfully parsed result:', parsedResult);
         results.push(parsedResult);
-      } else {
-        logger.warn(
-          '[parseFileSearchResults] Skipped result due to missing filename or relevance:',
-          {
-            filename,
-            file_id,
-            relevance,
-            hasContent: !!content,
-          },
-        );
       }
     }
-
-    logger.info('[parseFileSearchResults] Final results:', results);
   } catch (error) {
     logger.error('[parseFileSearchResults] Error parsing results:', error);
   }
@@ -394,17 +299,6 @@ const extractFileIdFromFilename = (filename) => {
   // This is a simple implementation - in production you might want to
   // maintain a mapping of filenames to file IDs or extract from metadata
   return filename.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-};
-
-/**
- * Attempts to extract page number from content
- * @param {string} content - The content text
- * @returns {number|null} Page number if found
- */
-const extractPageNumber = (content) => {
-  // Look for common page indicators
-  const pageMatch = content.match(/page\s+(\d+)/i);
-  return pageMatch ? parseInt(pageMatch[1]) : null;
 };
 
 module.exports = {
