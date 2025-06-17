@@ -32,6 +32,7 @@ const {
 } = require('~/app/clients/tools');
 const { processFileURL, uploadImageBuffer } = require('~/server/services/Files/process');
 const { createOnSearchResults } = require('~/server/services/Tools/search');
+const { createOnFileSearchResults } = require('~/app/clients/tools/util/fileSearch');
 const { isActionDomainAllowed } = require('~/server/services/domains');
 const { getEndpointsConfig } = require('~/server/services/Config');
 const { recordUsage } = require('~/server/services/Threads');
@@ -546,6 +547,12 @@ async function loadAgentTools({ req, res, agent, tool_resources, openAIApiKey })
   if (includesWebSearch) {
     webSearchCallbacks = createOnSearchResults(res);
   }
+  
+  /** @type {ReturnType<createOnFileSearchResults>} */
+  let fileSearchCallback;
+  if (_agentTools.includes(Tools.file_search)) {
+    fileSearchCallback = createOnFileSearchResults(res);
+  }
   const { loadedTools, toolContextMap } = await loadTools({
     agent,
     functions: true,
@@ -553,6 +560,7 @@ async function loadAgentTools({ req, res, agent, tool_resources, openAIApiKey })
     tools: _agentTools,
     options: {
       req,
+      res,
       openAIApiKey,
       tool_resources,
       processFileURL,
@@ -560,6 +568,7 @@ async function loadAgentTools({ req, res, agent, tool_resources, openAIApiKey })
       returnMetadata: true,
       fileStrategy: req.app.locals.fileStrategy,
       [Tools.web_search]: webSearchCallbacks,
+      [Tools.file_search]: fileSearchCallback,
     },
   });
 

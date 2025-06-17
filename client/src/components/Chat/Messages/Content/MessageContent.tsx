@@ -125,7 +125,6 @@ const MessageContent = ({
   ...props
 }: TMessageContentProps) => {
   const { message } = props;
-  const { messageId } = message;
 
   const { thinkingContent, regularContent } = useMemo(() => {
     const thinkingMatch = text.match(/:::thinking([\s\S]*?):::/);
@@ -158,14 +157,9 @@ const MessageContent = ({
   return (
     <>
       {thinkingContent.length > 0 && (
-        <Thinking key={`thinking-${messageId}`}>{thinkingContent}</Thinking>
+        <Thinking key={`thinking-${message.messageId}`}>{thinkingContent}</Thinking>
       )}
-      <DisplayMessage
-        key={`display-${messageId}`}
-        showCursor={showRegularCursor}
-        text={regularContent}
-        {...props}
-      />
+      <DisplayMessage showCursor={showRegularCursor} text={regularContent} {...props} />
       {unfinishedMessage}
     </>
   );

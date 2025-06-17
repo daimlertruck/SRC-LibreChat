@@ -438,6 +438,49 @@ export default function useEventHandlers({
         isTemporary = false,
       } = submission;
 
+      // DEBUG: Check if responseMessage contains attachments
+      console.log('[FINAL HANDLER DEBUG]:', {
+        hasResponseMessage: !!responseMessage,
+        responseMessageId: responseMessage?.messageId,
+        hasAttachments: !!responseMessage?.attachments,
+        attachmentsCount: responseMessage?.attachments?.length || 0,
+        attachmentTypes: responseMessage?.attachments?.map((att) => att.type) || [],
+        hasFileSearchSources: responseMessage?.attachments?.some(
+          (att) => att.type === 'file_search_sources',
+        ),
+        fullResponseMessage: responseMessage,
+        fullData: data,
+      });
+
+      // CRITICAL FIX: Process attachments from responseMessage into messageAttachmentsMap
+      if (responseMessage?.attachments && responseMessage.attachments.length > 0) {
+        console.log('[FINAL HANDLER] Processing responseMessage attachments:', {
+          messageId: responseMessage.messageId,
+          attachmentsCount: responseMessage.attachments.length,
+          attachmentTypes: responseMessage.attachments.map((att) => att.type),
+        });
+
+        // Process each attachment through the attachmentHandler
+        responseMessage.attachments.forEach((attachment) => {
+          const attachmentData = {
+            ...attachment,
+            messageId: responseMessage.messageId,
+          };
+
+          console.log('[FINAL HANDLER] Processing individual attachment:', {
+            type: attachmentData.type,
+            messageId: attachmentData.messageId,
+            hasSourcesArray: !!(attachmentData as any).sources,
+            sourcesCount: (attachmentData as any).sources?.length || 0,
+          });
+
+          attachmentHandler({
+            data: attachmentData,
+            submission: submission as EventSubmission,
+          });
+        });
+      }
+
       setShowStopButton(false);
       setCompleted((prev) => new Set(prev.add(submission.initialResponse.messageId)));
 

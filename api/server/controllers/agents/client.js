@@ -42,6 +42,7 @@ const { checkAccess } = require('~/server/middleware/roles/access');
 const BaseClient = require('~/app/clients/BaseClient');
 const { loadAgent } = require('~/models/Agent');
 const { getMCPManager } = require('~/config');
+const { processAgentResponse } = require('~/app/clients/agents/processAgentResponse');
 
 /**
  * @param {ServerRequest} req
@@ -921,6 +922,44 @@ class AgentClient extends BaseClient {
             this.artifactPromises.push(...attachments);
           }
         }
+
+        // Process agent response to capture file references and create attachments
+        logger.info('[AgentClient] Processing agent response for citations', {
+          messageId: this.responseMessageId,
+          contentPartsCount: this.contentParts.length,
+          contentPartsPreview: this.contentParts.slice(0, 3).map((part) => ({
+            type: part.type,
+            hasToolCall: !!part.tool_call,
+            toolCallName: part.tool_call?.name,
+            hasToolResult: !!part.tool_result,
+          })),
+        });
+
+        const processedResponse = await processAgentResponse(
+          {
+            messageId: this.responseMessageId,
+            attachments: this.artifactPromises,
+          },
+          this.user ?? this.options.req.user?.id,
+          this.conversationId,
+          this.contentParts,
+          this.res, // Pass res for streaming
+        );
+
+        // Update artifact promises with any new attachments from agent response
+        if (processedResponse.attachments && processedResponse.attachments.length > 0) {
+          logger.info('[AgentClient] Adding processed attachments to artifactPromises:', {
+            newAttachmentsCount: processedResponse.attachments.length,
+            existingPromisesCount: this.artifactPromises.length,
+            attachmentTypes: processedResponse.attachments.map((att) => att.type),
+          });
+
+          // Add new attachments to existing artifactPromises
+          processedResponse.attachments.forEach((attachment) => {
+            this.artifactPromises.push(Promise.resolve(attachment));
+          });
+        }
+
         await this.recordCollectedUsage({ context: 'message' });
       } catch (err) {
         logger.error(

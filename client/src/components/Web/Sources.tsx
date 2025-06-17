@@ -1,12 +1,15 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useCallback, useEffect } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { VisuallyHidden } from '@ariakit/react';
-import { X, Globe, Newspaper, Image, ChevronDown } from 'lucide-react';
-import type { ValidSource, ImageResult } from 'librechat-data-provider';
+import { X, Globe, Newspaper, Image, ChevronDown, File, Download } from 'lucide-react';
+import type { ValidSource, ImageResult, TAttachment } from 'librechat-data-provider';
 import { FaviconImage, getCleanDomain } from '~/components/Web/SourceHovercard';
+import SourcesErrorBoundary from './SourcesErrorBoundary';
 import { useSearchContext } from '~/Providers';
 import { AnimatedTabs } from '~/components/ui';
-import { useLocalize } from '~/hooks';
+import useLocalize from '~/hooks/useLocalize';
+import { useAccessibility, useLiveRegion } from '~/hooks/useAccessibility';
+import { useAgentFileDownload } from '~/hooks/useAgentFileDownload';
 import {
   OGDialog,
   OGDialogClose,
@@ -17,11 +20,10 @@ import {
 
 interface SourceItemProps {
   source: ValidSource;
-  isNews?: boolean;
   expanded?: boolean;
 }
 
-function SourceItem({ source, isNews, expanded = false }: SourceItemProps) {
+function SourceItem({ source, expanded = false }: SourceItemProps) {
   const localize = useLocalize();
   const domain = getCleanDomain(source.link);
 
@@ -159,6 +161,163 @@ function ImageItem({ image }: { image: ImageResult }) {
   );
 }
 
+// Type for agent file sources that have the full file properties
+type AgentFileSource = TAttachment & {
+  file_id: string;
+  bytes?: number;
+  type?: string;
+};
+
+interface FileItemProps {
+  file: AgentFileSource;
+  messageId: string;
+  conversationId: string;
+  expanded?: boolean;
+}
+
+const FileItem = React.memo(function FileItem({
+  file,
+  messageId,
+  conversationId,
+  expanded = false,
+}: FileItemProps) {
+  const localize = useLocalize();
+  const { announceToScreenReader, generateAriaLabel } = useAccessibility();
+  const { announce } = useLiveRegion();
+
+  // Use simplified download hook
+  const { downloadFile, isLoading, error } = useAgentFileDownload({
+    conversationId,
+    onSuccess: (fileName) => {
+      console.log(`Downloaded ${fileName}`);
+    },
+    onError: (error) => {
+      console.error('Download failed:', error);
+    },
+  });
+
+  const handleDownload = useCallback(
+    async (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      announceToScreenReader(localize('com_sources_downloading_file', { filename: file.filename }));
+
+      await downloadFile(file.file_id, messageId, file.filename);
+
+      if (!error) {
+        announceToScreenReader(
+          localize('com_sources_download_complete', { filename: file.filename }),
+        );
+        announce(localize('com_sources_download_complete', { filename: file.filename }));
+      } else {
+        const errorMessage = localize('com_sources_download_failed', { filename: file.filename });
+        announceToScreenReader(errorMessage, 'assertive');
+        announce(errorMessage);
+      }
+    },
+    [
+      downloadFile,
+      file.file_id,
+      file.filename,
+      messageId,
+      announceToScreenReader,
+      announce,
+      localize,
+      error,
+    ],
+  );
+
+  // Memoize file icon computation for performance
+  const fileIcon = useMemo(() => {
+    const fileType = file.type?.toLowerCase() || '';
+    if (fileType.includes('pdf')) return '📄';
+    if (fileType.includes('image')) return '🖼️';
+    if (fileType.includes('text')) return '📝';
+    if (fileType.includes('word') || fileType.includes('doc')) return '📄';
+    if (fileType.includes('excel') || fileType.includes('sheet')) return '📊';
+    if (fileType.includes('powerpoint') || fileType.includes('presentation')) return '📈';
+    return '📎';
+  }, [file.type]);
+
+  // Memoize aria label for accessibility
+  const downloadAriaLabel = useMemo(
+    () =>
+      generateAriaLabel('download_button', {
+        filename: file.filename,
+        loading: isLoading,
+      }),
+    [generateAriaLabel, file.filename, isLoading],
+  );
+
+  if (expanded) {
+    return (
+      <button
+        onClick={handleDownload}
+        disabled={isLoading}
+        className="flex w-full flex-col rounded-lg bg-surface-primary-contrast px-3 py-2 text-sm transition-all duration-300 hover:bg-surface-tertiary disabled:opacity-50"
+        aria-label={downloadAriaLabel}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-lg">{fileIcon}</span>
+          <span className="truncate text-xs font-medium text-text-secondary">
+            {localize('com_sources_agent_file')}
+          </span>
+          <Download className="ml-auto h-3 w-3" />
+        </div>
+        <div className="mt-1">
+          <span className="line-clamp-2 text-left text-sm font-medium text-text-primary md:line-clamp-3">
+            {file.filename}
+          </span>
+          {file.pages && file.pages.length > 0 && (
+            <span className="mt-1 line-clamp-1 text-left text-xs text-text-secondary">
+              Pages: {file.pages.join(', ')}
+            </span>
+          )}
+          {file.bytes && (
+            <span className="mt-1 line-clamp-1 text-xs text-text-secondary">
+              {(file.bytes / 1024).toFixed(1)} KB
+            </span>
+          )}
+        </div>
+        {error && (
+          <div className="mt-1 text-xs text-red-500">{localize('com_sources_download_failed')}</div>
+        )}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={handleDownload}
+      disabled={isLoading}
+      className="flex h-full w-full flex-col rounded-lg bg-surface-primary-contrast px-3 py-2 text-sm transition-all duration-300 hover:bg-surface-tertiary disabled:opacity-50"
+      aria-label={downloadAriaLabel}
+    >
+      <div className="flex items-center gap-2">
+        <span className="text-lg">{fileIcon}</span>
+        <span className="truncate text-xs font-medium text-text-secondary">
+          {localize('com_sources_agent_file')}
+        </span>
+        <Download className="ml-auto h-3 w-3" />
+      </div>
+      <div className="mt-1">
+        <span className="line-clamp-2 text-left text-sm font-medium text-text-primary md:line-clamp-3">
+          {file.filename}
+        </span>
+        {file.pages && file.pages.length > 0 && (
+          <span className="mt-1 line-clamp-1 text-left text-xs text-text-secondary">
+            Pages: {file.pages.join(', ')}
+          </span>
+        )}
+      </div>
+      {error && (
+        <div className="mt-1 text-xs text-red-500">{localize('com_sources_download_failed')}</div>
+      )}
+    </button>
+  );
+});
+
 export function StackedFavicons({
   sources,
   start = 0,
@@ -185,11 +344,25 @@ export function StackedFavicons({
   );
 }
 
-function SourcesGroup({ sources, limit = 3 }: { sources: ValidSource[]; limit?: number }) {
+const SourcesGroup = React.memo(function SourcesGroup({
+  sources,
+  limit = 3,
+}: {
+  sources: ValidSource[];
+  limit?: number;
+}) {
   const localize = useLocalize();
-  const visibleSources = sources.slice(0, limit);
-  const remainingSources = sources.slice(limit);
-  const hasMoreSources = remainingSources.length > 0;
+
+  // Memoize source slicing for better performance
+  const { visibleSources, remainingSources, hasMoreSources } = useMemo(() => {
+    const visible = sources.slice(0, limit);
+    const remaining = sources.slice(limit);
+    return {
+      visibleSources: visible,
+      remainingSources: remaining,
+      hasMoreSources: remaining.length > 0,
+    };
+  }, [sources, limit]);
 
   return (
     <div className="scrollbar-none grid w-full grid-cols-4 gap-2 overflow-x-auto">
@@ -265,6 +438,75 @@ function SourcesGroup({ sources, limit = 3 }: { sources: ValidSource[]; limit?: 
       </OGDialog>
     </div>
   );
+});
+
+interface FilesGroupProps {
+  files: AgentFileSource[];
+  messageId: string;
+  conversationId: string;
+  limit?: number;
+}
+
+function FilesGroup({ files, messageId, conversationId, limit = 3 }: FilesGroupProps) {
+  const localize = useLocalize();
+  // If there's only 1 remaining file, show it instead of "+1 files"
+  const shouldShowAll = files.length <= limit + 1;
+  const actualLimit = shouldShowAll ? files.length : limit;
+  const visibleFiles = files.slice(0, actualLimit);
+  const remainingFiles = files.slice(actualLimit);
+  const hasMoreFiles = remainingFiles.length > 0;
+
+  return (
+    <div className="scrollbar-none grid w-full grid-cols-4 gap-2 overflow-x-auto">
+      <OGDialog>
+        {visibleFiles.map((file, i) => (
+          <div key={`file-${i}`} className="w-full min-w-[120px]">
+            <FileItem file={file} messageId={messageId} conversationId={conversationId} />
+          </div>
+        ))}
+        {hasMoreFiles && (
+          <OGDialogTrigger className="flex flex-col rounded-lg bg-surface-primary-contrast px-3 py-2 text-sm transition-all duration-300 hover:bg-surface-tertiary">
+            <div className="flex items-center gap-2">
+              <div className="relative flex">
+                {remainingFiles.slice(0, 3).map((_, i) => (
+                  <File key={`file-icon-${i}`} className={`h-4 w-4 ${i > 0 ? 'ml-[-6px]' : ''}`} />
+                ))}
+              </div>
+              <span className="truncate text-xs font-medium text-text-secondary">
+                {localize('com_sources_more_files', { count: remainingFiles.length })}
+              </span>
+            </div>
+          </OGDialogTrigger>
+        )}
+        <OGDialogContent className="flex max-h-[80vh] max-w-full flex-col overflow-hidden rounded-lg bg-surface-primary p-0 md:max-w-[600px]">
+          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border-light bg-surface-primary px-3 py-2">
+            <OGDialogTitle className="text-base font-medium">
+              {localize('com_sources_agent_files')}
+            </OGDialogTitle>
+            <OGDialogClose
+              className="rounded-full p-1 text-text-secondary hover:bg-surface-tertiary hover:text-text-primary"
+              aria-label={localize('com_ui_close')}
+            >
+              <X className="h-4 w-4" />
+            </OGDialogClose>
+          </div>
+          <div className="flex-1 overflow-y-auto px-3 py-2">
+            <div className="flex flex-col gap-2">
+              {[...visibleFiles, ...remainingFiles].map((file, i) => (
+                <FileItem
+                  key={`more-file-${i}`}
+                  file={file}
+                  messageId={messageId}
+                  conversationId={conversationId}
+                  expanded={true}
+                />
+              ))}
+            </div>
+          </div>
+        </OGDialogContent>
+      </OGDialog>
+    </div>
+  );
 }
 
 function TabWithIcon({ label, icon }: { label: string; icon: React.ReactNode }) {
@@ -276,66 +518,149 @@ function TabWithIcon({ label, icon }: { label: string; icon: React.ReactNode }) 
   );
 }
 
-export default function Sources() {
+interface SourcesProps {
+  messageId?: string;
+  conversationId?: string;
+}
+
+function SourcesComponent({ messageId, conversationId }: SourcesProps = {}) {
   const localize = useLocalize();
   const { searchResults } = useSearchContext();
+  const { announceToScreenReader } = useAccessibility();
 
-  const { organicSources, topStories, images, hasAnswerBox } = useMemo(() => {
-    if (!searchResults) {
-      return {
-        organicSources: [],
-        topStories: [],
-        images: [],
-        hasAnswerBox: false,
-      };
-    }
+  console.log('[Sources] Component rendered with:', {
+    messageId,
+    conversationId,
+    searchResults: !!searchResults,
+    searchResultsKeys: searchResults ? Object.keys(searchResults) : [],
+    searchResultsData: searchResults,
+  });
 
+  const { organicSources, topStories, images, hasAnswerBox, agentFiles } = useMemo(() => {
     const organicSourcesMap = new Map<string, ValidSource>();
     const topStoriesMap = new Map<string, ValidSource>();
     const imagesMap = new Map<string, ImageResult>();
     let hasAnswerBox = false;
 
-    Object.values(searchResults).forEach((result) => {
-      if (!result) return;
+    // Collect agent files with deduplication by file_id
+    const agentFilesMap = new Map<string, AgentFileSource>();
 
-      if (result.organic?.length) {
-        result.organic.forEach((source) => {
-          if (source.link) {
-            organicSourcesMap.set(source.link, source);
-          }
-        });
-      }
-      if (result.references?.length) {
-        result.references.forEach((source) => {
-          if (source.type === 'image') {
-            imagesMap.set(source.link, {
-              ...source,
-              imageUrl: source.link,
-            });
-            return;
-          }
-          if (source.link) {
-            organicSourcesMap.set(source.link, source);
-          }
-        });
-      }
-      if (result.topStories?.length) {
-        result.topStories.forEach((source) => {
-          if (source.link) {
-            topStoriesMap.set(source.link, source);
-          }
-        });
-      }
-      if (result.images?.length) {
-        result.images.forEach((image) => {
-          if (image.imageUrl) {
-            imagesMap.set(image.imageUrl, image);
-          }
-        });
-      }
-      if (result.answerBox) {
-        hasAnswerBox = true;
-      }
+    // Process search results
+    if (searchResults) {
+      Object.values(searchResults).forEach((result) => {
+        if (!result) return;
+
+        if (result.organic?.length) {
+          result.organic.forEach((source) => {
+            if (source.link) {
+              organicSourcesMap.set(source.link, source);
+            }
+          });
+        }
+        if (result.references?.length) {
+          result.references.forEach((source) => {
+            if (source.type === 'image') {
+              imagesMap.set(source.link, {
+                ...source,
+                imageUrl: source.link,
+              });
+              return;
+            }
+            if (source.type === 'file') {
+              const fileId = (source as any).fileId || 'unknown';
+              const fileName = source.title || 'Unknown File';
+
+              console.log('[Sources] Processing file source:', {
+                fileId,
+                fileName,
+                pages: (source as any).pages,
+                relevance: (source as any).relevance,
+                fullSource: source,
+              });
+
+              // Create a more unique key using both fileId and filename to avoid incorrect merging
+              const uniqueKey = `${fileId}_${fileName}`;
+
+              // Check if we already have this exact file
+              if (agentFilesMap.has(uniqueKey)) {
+                // Merge pages for the same file
+                const existing = agentFilesMap.get(uniqueKey)!;
+                const existingPages = existing.pages || [];
+                const newPages = (source as any).pages || [];
+                const allPages = [...existingPages, ...newPages];
+                // Remove duplicates and sort
+                const uniquePages = [...new Set(allPages)].sort((a, b) => a - b);
+
+                existing.pages = uniquePages;
+                existing.relevance = Math.max(
+                  existing.relevance || 0,
+                  (source as any).relevance || 0,
+                );
+
+                console.log('[Sources] Merged pages for duplicate file:', {
+                  uniqueKey,
+                  fileId,
+                  filename: existing.filename,
+                  originalPages: existingPages,
+                  newPages,
+                  mergedPages: uniquePages,
+                });
+              } else {
+                // Handle agent file references from searchResults
+                const agentFile: AgentFileSource = {
+                  type: 'file_search_sources',
+                  file_id: fileId,
+                  filename: fileName,
+                  bytes: undefined,
+                  metadata: (source as any).metadata,
+                  pages: (source as any).pages,
+                  relevance: (source as any).relevance,
+                  messageId: messageId || '',
+                  toolCallId: 'file_search_results',
+                };
+                agentFilesMap.set(uniqueKey, agentFile);
+
+                console.log('[Sources] Added new agent file:', {
+                  uniqueKey,
+                  fileId: agentFile.file_id,
+                  filename: agentFile.filename,
+                  pages: agentFile.pages,
+                  mapSize: agentFilesMap.size,
+                });
+              }
+              return;
+            }
+            if (source.link) {
+              organicSourcesMap.set(source.link, source);
+            }
+          });
+        }
+        if (result.topStories?.length) {
+          result.topStories.forEach((source) => {
+            if (source.link) {
+              topStoriesMap.set(source.link, source);
+            }
+          });
+        }
+        if (result.images?.length) {
+          result.images.forEach((image) => {
+            if (image.imageUrl) {
+              imagesMap.set(image.imageUrl, image);
+            }
+          });
+        }
+        if (result.answerBox) {
+          hasAnswerBox = true;
+        }
+      });
+    }
+
+    console.log('[Sources] Processed sources:', {
+      organicSourcesCount: organicSourcesMap.size,
+      topStoriesCount: topStoriesMap.size,
+      imagesCount: imagesMap.size,
+      agentFilesCount: agentFilesMap.size,
+      hasAnswerBox,
     });
 
     return {
@@ -343,8 +668,9 @@ export default function Sources() {
       topStories: Array.from(topStoriesMap.values()),
       images: Array.from(imagesMap.values()),
       hasAnswerBox,
+      agentFiles: Array.from(agentFilesMap.values()),
     };
-  }, [searchResults]);
+  }, [searchResults, messageId]);
 
   const tabs = useMemo(() => {
     const availableTabs: Array<{ label: React.ReactNode; content: React.ReactNode }> = [];
@@ -376,18 +702,104 @@ export default function Sources() {
       });
     }
 
+    if (agentFiles.length && messageId && conversationId) {
+      availableTabs.push({
+        label: <TabWithIcon label={localize('com_sources_tab_files')} icon={<File />} />,
+        content: (
+          <FilesGroup
+            files={agentFiles}
+            messageId={messageId}
+            conversationId={conversationId}
+            limit={3}
+          />
+        ),
+      });
+    }
+
     return availableTabs;
-  }, [organicSources, topStories, images, hasAnswerBox, localize]);
+  }, [
+    organicSources,
+    topStories,
+    images,
+    hasAnswerBox,
+    agentFiles,
+    messageId,
+    conversationId,
+    localize,
+  ]);
+
+  // Announce when sources become available
+  useEffect(() => {
+    if (tabs.length > 0) {
+      const totalSources =
+        organicSources.length + topStories.length + images.length + agentFiles.length;
+      announceToScreenReader(
+        localize('com_sources_available', { count: totalSources, tabs: tabs.length }),
+      );
+    }
+  }, [
+    tabs.length,
+    organicSources.length,
+    topStories.length,
+    images.length,
+    agentFiles.length,
+    announceToScreenReader,
+    localize,
+  ]);
 
   if (!tabs.length) return null;
 
   return (
-    <AnimatedTabs
-      tabs={tabs}
-      containerClassName="flex min-w-full mb-4"
-      tabListClassName="flex items-center mb-2 border-b border-border-light overflow-x-auto"
-      tabPanelClassName="w-full overflow-x-auto scrollbar-none md:mx-0 md:px-0"
-      tabClassName="flex items-center whitespace-nowrap text-xs font-medium text-token-text-secondary px-1 pt-2 pb-1 border-b-2 border-transparent data-[state=active]:text-text-primary outline-none"
-    />
+    <div role="region" aria-label={localize('com_sources_region_label')}>
+      <AnimatedTabs
+        tabs={tabs}
+        containerClassName="flex min-w-full mb-4"
+        tabListClassName="flex items-center mb-2 border-b border-border-light overflow-x-auto"
+        tabPanelClassName="w-full overflow-x-auto scrollbar-none md:mx-0 md:px-0"
+        tabClassName="flex items-center whitespace-nowrap text-xs font-medium text-token-text-secondary px-1 pt-2 pb-1 border-b-2 border-transparent data-[state=active]:text-text-primary outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+      />
+    </div>
+  );
+}
+
+// Enhanced error boundary wrapper with accessibility features
+export default function Sources(props: SourcesProps) {
+  const localize = useLocalize();
+
+  const handleError = (error: Error, errorInfo: React.ErrorInfo) => {
+    // Log error for monitoring/analytics
+    console.error('Sources component error:', { error, errorInfo });
+
+    // Could send to error tracking service here
+    // analytics.track('sources_error', { error: error.message });
+  };
+
+  const fallbackUI = (
+    <div
+      className="flex flex-col items-center justify-center rounded-lg border border-border-medium bg-surface-secondary p-4 text-center"
+      role="alert"
+      aria-live="polite"
+    >
+      <div className="mb-2 text-sm text-text-secondary">
+        {localize('com_sources_error_fallback')}
+      </div>
+      <button
+        onClick={() => window.location.reload()}
+        className="hover:bg-surface-primary-hover rounded-md bg-surface-primary px-3 py-1 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-ring"
+        aria-label={localize('com_sources_reload_page')}
+      >
+        {localize('com_ui_refresh')}
+      </button>
+    </div>
+  );
+
+  return (
+    <SourcesErrorBoundary
+      onError={handleError}
+      fallback={fallbackUI}
+      showDetails={process.env.NODE_ENV === 'development'}
+    >
+      <SourcesComponent {...props} />
+    </SourcesErrorBoundary>
   );
 }

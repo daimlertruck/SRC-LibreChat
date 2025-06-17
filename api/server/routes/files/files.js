@@ -1,5 +1,7 @@
 const fs = require('fs').promises;
 const express = require('express');
+const rateLimit = require('express-rate-limit');
+const { RedisStore } = require('rate-limit-redis');
 const { EnvVar } = require('@librechat/agents');
 const {
   Time,
@@ -24,9 +26,49 @@ const { getFiles, batchUpdateFiles } = require('~/models/File');
 const { getAssistant } = require('~/models/Assistant');
 const { getAgent } = require('~/models/Agent');
 const { getLogStores } = require('~/cache');
+const { removePorts, isEnabled } = require('~/server/utils');
+const ioredisClient = require('~/cache/ioredisClient');
 const { logger } = require('~/config');
+const {
+  generateAgentSourceUrl,
+  validateAgentFileAccess,
+  validateAgentFileRequest,
+} = require('~/server/services/Files/agents');
 
 const router = express.Router();
+
+// Rate limiter using LibreChat patterns
+const createAgentFileRateLimiter = () => {
+  const windowMs = (parseInt(process.env.AGENT_FILE_RATE_WINDOW) || 15) * 60 * 1000; // 15 minutes
+  const max = parseInt(process.env.AGENT_FILE_RATE_LIMIT) || 50;
+  const windowInMinutes = windowMs / 60000;
+  const message = `Too many agent file requests, please try again after ${windowInMinutes} minutes.`;
+
+  const limiterOptions = {
+    windowMs,
+    max,
+    message,
+    keyGenerator: removePorts,
+    handler: (req, res) => {
+      logger.warn(`Rate limit exceeded for agent file requests from ${req.ip}`);
+      return res.status(429).json({ error: message });
+    },
+  };
+
+  // Use Redis store if available
+  if (isEnabled(process.env.USE_REDIS) && ioredisClient) {
+    logger.debug('Using Redis for agent file rate limiter.');
+    const store = new RedisStore({
+      sendCommand: (...args) => ioredisClient.call(...args),
+      prefix: 'agent_file_limiter:',
+    });
+    limiterOptions.store = store;
+  }
+
+  return rateLimit(limiterOptions);
+};
+
+const agentFileRateLimiter = createAgentFileRateLimiter();
 
 router.get('/', async (req, res) => {
   try {
@@ -193,13 +235,14 @@ router.get('/download/:userId/:file_id', async (req, res) => {
     const { userId, file_id } = req.params;
     logger.debug(`File download requested by user ${userId}: ${file_id}`);
 
+    const errorPrefix = `File download requested by user ${userId}`;
+
     if (userId !== req.user.id) {
       logger.warn(`${errorPrefix} forbidden: ${file_id}`);
       return res.status(403).send('Forbidden');
     }
 
     const [file] = await getFiles({ file_id });
-    const errorPrefix = `File download requested by user ${userId}`;
 
     if (!file) {
       logger.warn(`${errorPrefix} not found: ${file_id}`);
@@ -259,6 +302,35 @@ router.get('/download/:userId/:file_id', async (req, res) => {
     res.status(500).send('Error downloading file');
   }
 });
+
+// Simple rate limiting middleware
+const rateLimitMiddleware = async (req, res, next) => {
+  try {
+    if (agentFileRateLimiter.consume) {
+      await agentFileRateLimiter.consume(req.user.id);
+    }
+    next();
+  } catch (rejRes) {
+    logger.warn(`Rate limit exceeded for agent file access`, {
+      userId: req.user.id,
+      retryAfter: rejRes.msBeforeNext,
+    });
+
+    res.status(429).json({
+      error: 'Too many requests',
+      retryAfter: Math.round(rejRes.msBeforeNext / 1000) || 900,
+    });
+  }
+};
+
+// Simplified agent source URL endpoint
+router.post(
+  '/agent-source-url',
+  rateLimitMiddleware,
+  validateAgentFileRequest,
+  validateAgentFileAccess,
+  generateAgentSourceUrl,
+);
 
 router.post('/', async (req, res) => {
   const metadata = req.body;

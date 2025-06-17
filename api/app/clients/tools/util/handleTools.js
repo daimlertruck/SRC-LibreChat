@@ -27,7 +27,7 @@ const {
   createOpenAIImageTools,
 } = require('../');
 const { primeFiles: primeCodeFiles } = require('~/server/services/Files/Code/process');
-const { createFileSearchTool, primeFiles: primeSearchFiles } = require('./fileSearch');
+const { createFileSearchTool, primeFiles: primeSearchFiles, createOnFileSearchResults } = require('./fileSearch');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { createMCPTool } = require('~/server/services/MCP');
 const { logger } = require('~/config');
@@ -260,12 +260,25 @@ const loadTools = async ({
       };
       continue;
     } else if (tool === Tools.file_search) {
+      logger.info('[handleTools] Processing file_search tool setup');
       requestedTools[tool] = async () => {
+        logger.info('[handleTools] Creating file_search tool instance');
         const { files, toolContext } = await primeSearchFiles(options);
         if (toolContext) {
           toolContextMap[tool] = toolContext;
         }
-        return createFileSearchTool({ req: options.req, files, entity_id: agent?.id });
+        const fileSearchCallback = options?.[Tools.file_search] ?? createOnFileSearchResults(options.res);
+        logger.info('[handleTools] Created file search callback:', {
+          hasCallback: !!fileSearchCallback,
+          filesCount: files.length,
+          hasRes: !!options.res
+        });
+        return createFileSearchTool({
+          req: options.req,
+          files,
+          entity_id: agent?.id,
+          onFileSearchResults: fileSearchCallback,
+        });
       };
       continue;
     } else if (tool === Tools.web_search) {
