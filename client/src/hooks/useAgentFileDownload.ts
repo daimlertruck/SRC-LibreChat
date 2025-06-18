@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { useAgentSourceDownload } from 'librechat-data-provider';
+import { useAgentSourceDownload } from 'librechat-data-provider/react-query';
 
 interface UseAgentFileDownloadOptions {
   conversationId: string;

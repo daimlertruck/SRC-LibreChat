@@ -89,54 +89,44 @@ const SourcesCitationDisplay: React.FC<SourcesCitationDisplayProps> = ({
       <div className="mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
         {localize('com_sources_referenced_files')}
       </div>
-      <div className="space-y-2">
+      <div className="scrollbar-none grid w-full grid-cols-4 gap-2 overflow-x-auto">
         {sources.map((source) => {
           const isExpanded = expandedSources.has(source.fileId);
           const isDownloading = downloadingFiles.has(source.fileName);
           const canDownload = source.metadata?.storageType === 's3';
 
           return (
-            <div
-              key={source.fileId}
-              className="rounded-md border border-gray-200 bg-white p-2 dark:border-gray-600 dark:bg-gray-700"
-            >
-              <div className="flex items-center justify-between">
-                <button
-                  onClick={() => toggleSource(source.fileId)}
-                  className="flex flex-1 items-center gap-2 text-left transition-colors hover:text-blue-600 dark:hover:text-blue-400"
-                >
+            <div key={source.fileId} className="w-full min-w-[120px]">
+              <button
+                onClick={() => toggleSource(source.fileId)}
+                disabled={isDownloading}
+                className="flex w-full flex-col rounded-lg bg-surface-primary-contrast px-3 py-2 text-sm transition-all duration-300 hover:bg-surface-tertiary disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2">
                   <FileText className="h-4 w-4 flex-shrink-0" />
-                  <span className="text-sm font-medium">{source.fileName}</span>
-                  {source.relevance && (
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      ({Math.round(source.relevance * 100)}% {localize('com_sources_relevant')})
+                  <span className="truncate text-xs font-medium text-text-secondary">
+                    {localize('com_sources_agent_file')}
+                  </span>
+                  {canDownload && (
+                    <Download className="ml-auto h-3 w-3" />
+                  )}
+                </div>
+                <div className="mt-1">
+                  <span className="line-clamp-2 text-left text-sm font-medium text-text-primary md:line-clamp-3">
+                    {source.fileName}
+                  </span>
+                  {source.pages && source.pages.length > 0 && (
+                    <span className="mt-1 line-clamp-1 text-left text-xs text-text-secondary">
+                      Pages: {sortPagesByRelevance(source.pages, source.pageRelevance).join(', ')}
                     </span>
                   )}
-                </button>
-                {canDownload && (
-                  <button
-                    onClick={() => handleDownload(source)}
-                    disabled={isDownloading}
-                    className={cn(
-                      'ml-2 rounded p-1 transition-colors',
-                      'hover:bg-gray-100 dark:hover:bg-gray-600',
-                      'disabled:cursor-not-allowed disabled:opacity-50',
-                    )}
-                    title={localize('com_sources_download_file')}
-                  >
-                    {isDownloading ? (
-                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600 dark:border-gray-600 dark:border-t-gray-300" />
-                    ) : (
-                      <Download className="h-4 w-4" />
-                    )}
-                  </button>
-                )}
-              </div>
-              {isExpanded && source.pages && source.pages.length > 0 && (
-                <div className="mt-2 text-left text-xs text-gray-600 dark:text-gray-400">
-                  {localize('com_sources_pages')}: {sortPagesByRelevance(source.pages, source.pageRelevance).join(', ')}
+                  {source.relevance && (
+                    <span className="mt-1 line-clamp-1 text-xs text-text-secondary">
+                      {Math.round(source.relevance * 100)}% {localize('com_sources_relevant')}
+                    </span>
+                  )}
                 </div>
-              )}
+              </button>
             </div>
           );
         })}

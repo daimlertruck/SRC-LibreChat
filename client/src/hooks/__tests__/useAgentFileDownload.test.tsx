@@ -1,9 +1,9 @@
 import { renderHook, act } from '@testing-library/react';
 import { useAgentFileDownload } from '../useAgentFileDownload';
-import { useAgentSourceDownload } from 'librechat-data-provider';
+import { useAgentSourceDownload } from 'librechat-data-provider/react-query';
 
 // Mock dependencies
-jest.mock('librechat-data-provider', () => ({
+jest.mock('librechat-data-provider/react-query', () => ({
   useAgentSourceDownload: jest.fn(),
 }));
 jest.mock('../useLocalize');

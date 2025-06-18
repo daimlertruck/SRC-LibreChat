@@ -1,6 +1,6 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { useRecoilValue, useRecoilState } from 'recoil';
-import { useAgentSourceDownload } from 'librechat-data-provider';
+import { useAgentSourceDownload } from 'librechat-data-provider/react-query';
 import {
   prefetchConfigState,
   prefetchStatusState,

@@ -37,6 +37,8 @@ export * from './headers-helpers';
 export { default as request } from './request';
 export { dataService };
 import * as dataService from './data-service';
+/* react-query hooks */
+export * from './react-query';
 /* general helpers */
 export * from './utils';
 export * from './actions';
