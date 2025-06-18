@@ -82,10 +82,53 @@ const processAgentResponse = async (
     }
 
     // Transform results into source format using RAG API metadata as source of truth
+    // Ensure file diversity by including at least one result per file, then fill with highest relevance
 
-    const sources = fileSearchResults
-      .sort((a, b) => b.relevance - a.relevance)
-      .slice(0, 10) // Limit to top 10 results
+    // Group results by file_id to ensure file diversity
+    const resultsByFileId = {};
+    fileSearchResults.forEach((result) => {
+      if (!resultsByFileId[result.file_id]) {
+        resultsByFileId[result.file_id] = [];
+      }
+      resultsByFileId[result.file_id].push(result);
+    });
+
+    // Get the highest relevance result from each file (file representatives)
+    const fileRepresentatives = [];
+    for (const fileId in resultsByFileId) {
+      const fileResults = resultsByFileId[fileId].sort((a, b) => b.relevance - a.relevance);
+      fileRepresentatives.push(fileResults[0]); // Take the best result from each file
+    }
+
+    // Sort file representatives by their highest relevance score
+    fileRepresentatives.sort((a, b) => b.relevance - a.relevance);
+
+    // Start with file representatives, then add remaining high-relevance results up to limit
+    const selectedResults = [...fileRepresentatives];
+
+    // If we have room for more results (under 10), add additional high-relevance results
+    if (selectedResults.length < 10) {
+      const allResultsSorted = fileSearchResults.sort((a, b) => b.relevance - a.relevance);
+
+      for (const result of allResultsSorted) {
+        if (selectedResults.length >= 10) break;
+
+        // Check if this exact result is already included (avoid duplicates)
+        const alreadyIncluded = selectedResults.some(
+          (selected) =>
+            selected.file_id === result.file_id &&
+            selected.page === result.page &&
+            Math.abs(selected.relevance - result.relevance) < 0.0001, // Handle floating point precision
+        );
+
+        if (!alreadyIncluded) {
+          selectedResults.push(result);
+        }
+      }
+    }
+
+    const sources = selectedResults
+      .slice(0, 10) // Final safety limit to 10 results
       .map((result) => {
         const source = {
           fileId: result.file_id,
