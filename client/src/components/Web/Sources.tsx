@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback, useEffect } from 'react';
+import React, { useMemo, useCallback } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { VisuallyHidden } from '@ariakit/react';
 import { X, Globe, Newspaper, Image, ChevronDown, File, Download } from 'lucide-react';
@@ -8,7 +8,6 @@ import SourcesErrorBoundary from './SourcesErrorBoundary';
 import { useSearchContext } from '~/Providers';
 import { AnimatedTabs } from '~/components/ui';
 import useLocalize from '~/hooks/useLocalize';
-import { useAccessibility, useLiveRegion } from '~/hooks/useAccessibility';
 import { useAgentFileDownload } from '~/hooks/useAgentFileDownload';
 import { sortPagesByRelevance } from '~/utils/fileSorting';
 import {
@@ -181,8 +180,6 @@ const FileItem = React.memo(function FileItem({
   expanded = false,
 }: FileItemProps) {
   const localize = useLocalize();
-  const { announceToScreenReader, generateAriaLabel } = useAccessibility();
-  const { announce } = useLiveRegion();
 
   // Use simplified download hook
   const { downloadFile, isLoading, error } = useAgentFileDownload({
@@ -196,31 +193,11 @@ const FileItem = React.memo(function FileItem({
       e.preventDefault();
       e.stopPropagation();
 
-      announceToScreenReader(localize('com_sources_downloading_file', { filename: file.filename }));
 
       await downloadFile(file.file_id, messageId, file.filename);
 
-      if (!error) {
-        announceToScreenReader(
-          localize('com_sources_download_complete', { filename: file.filename }),
-        );
-        announce(localize('com_sources_download_complete', { filename: file.filename }));
-      } else {
-        const errorMessage = localize('com_sources_download_failed', { filename: file.filename });
-        announceToScreenReader(errorMessage, 'assertive');
-        announce(errorMessage);
-      }
     },
-    [
-      downloadFile,
-      file.file_id,
-      file.filename,
-      messageId,
-      announceToScreenReader,
-      announce,
-      localize,
-      error,
-    ],
+    [downloadFile, file.file_id, file.filename, messageId, localize, error],
   );
 
   // Memoize file icon computation for performance
@@ -235,15 +212,8 @@ const FileItem = React.memo(function FileItem({
     return '📎';
   }, [file.type]);
 
-  // Memoize aria label for accessibility
-  const downloadAriaLabel = useMemo(
-    () =>
-      generateAriaLabel('download_button', {
-        filename: file.filename,
-        loading: isLoading,
-      }),
-    [generateAriaLabel, file.filename, isLoading],
-  );
+  // Simple aria label
+  const downloadAriaLabel = `Download ${file.filename}${isLoading ? ' (downloading...)' : ''}`;
 
   if (expanded) {
     return (
@@ -523,7 +493,6 @@ interface SourcesProps {
 function SourcesComponent({ messageId, conversationId }: SourcesProps = {}) {
   const localize = useLocalize();
   const { searchResults } = useSearchContext();
-  const { announceToScreenReader } = useAccessibility();
 
   const { organicSources, topStories, images, hasAnswerBox, agentFiles } = useMemo(() => {
     const organicSourcesMap = new Map<string, ValidSource>();
@@ -688,25 +657,6 @@ function SourcesComponent({ messageId, conversationId }: SourcesProps = {}) {
     agentFiles,
     messageId,
     conversationId,
-    localize,
-  ]);
-
-  // Announce when sources become available
-  useEffect(() => {
-    if (tabs.length > 0) {
-      const totalSources =
-        organicSources.length + topStories.length + images.length + agentFiles.length;
-      announceToScreenReader(
-        localize('com_sources_available', { count: totalSources, tabs: tabs.length }),
-      );
-    }
-  }, [
-    tabs.length,
-    organicSources.length,
-    topStories.length,
-    images.length,
-    agentFiles.length,
-    announceToScreenReader,
     localize,
   ]);
 
