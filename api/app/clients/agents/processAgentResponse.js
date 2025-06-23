@@ -1,4 +1,4 @@
-const { MessageFileReference, Files } = require('~/models');
+const { Files } = require('~/models');
 const { getCustomConfig } = require('~/server/services/Config/getCustomConfig');
 const { logger } = require('~/config');
 
@@ -26,8 +26,7 @@ const processAgentResponse = async (
 
     // Get configurable max file search results from librechat.yaml
     const customConfig = await getCustomConfig();
-    const maxFileSearchResults = 
-      customConfig?.endpoints?.agents?.maxFileSearchResults ?? 10;
+    const maxFileSearchResults = customConfig?.endpoints?.agents?.maxFileSearchResults ?? 10;
 
     // Look for file search tool calls in content parts
     const fileSearchResults = [];
@@ -101,7 +100,8 @@ const processAgentResponse = async (
     try {
       const files = await Files.find({ file_id: { $in: fileIds } });
       fileMetadataMap = files.reduce((map, file) => {
-        map[file.file_id] = file.metadata || {};
+        // Store full file object to access both metadata and root-level S3 fields
+        map[file.file_id] = file;
         return map;
       }, {});
     } catch (lookupError) {
@@ -110,7 +110,9 @@ const processAgentResponse = async (
 
     // Create sources with metadata
     const sources = finalResults.map((result) => {
-      const metadata = fileMetadataMap[result.file_id] || {};
+      const fileRecord = fileMetadataMap[result.file_id] || {};
+      // Use configured file strategy from librechat.yaml instead of defaulting to 'local'
+      const configuredStorageType = fileRecord.source || customConfig?.fileStrategy || 'local';
       return {
         fileId: result.file_id,
         fileName: result.filename,
@@ -119,69 +121,46 @@ const processAgentResponse = async (
         type: 'file',
         pageRelevance: result.pageRelevance || {},
         metadata: {
-          storageType: metadata.storageType || 'local',
-          s3Bucket: metadata.s3Bucket,
-          s3Key: metadata.s3Key,
+          storageType: configuredStorageType,
+          s3Bucket: fileRecord.s3Bucket,
+          s3Key: fileRecord.s3Key,
         },
       };
     });
 
     if (sources.length > 0) {
+      // File references will be stored as message attachments (following web search pattern)
+      logger.debug(
+        '[processAgentResponse] Creating consolidated file search attachment with sources:',
+        sources.length,
+      );
+
+      const { nanoid } = require('nanoid');
+      const { Tools } = require('librechat-data-provider');
+
+      const fileSearchAttachment = {
+        messageId: response.messageId,
+        toolCallId: 'file_search_results',
+        conversationId: conversationId,
+        name: `${Tools.file_search}_file_search_results_${nanoid()}`,
+        type: Tools.file_search,
+        [Tools.file_search]: {
+          sources: sources,
+        },
+      };
+
+      // Add to response attachments array for processing (only once per message)
+      response.attachments = response.attachments || [];
+      response.attachments.push(fileSearchAttachment);
+
       // Stream file search results immediately if res is available
       if (res && !res.headersSent) {
         try {
-          const { nanoid } = require('nanoid');
-          const { Tools } = require('librechat-data-provider');
-
-          const attachment = {
-            messageId: response.messageId,
-            toolCallId: 'file_search_results',
-            conversationId: conversationId,
-            name: `${Tools.file_search}_file_search_results_${nanoid()}`,
-            type: Tools.file_search,
-            [Tools.file_search]: {
-              sources: sources.map((source) => ({
-                fileId: source.fileId,
-                fileName: source.fileName,
-                pages: source.pages,
-                relevance: source.relevance,
-                type: 'file',
-                pageRelevance: source.pageRelevance,
-                metadata: source.metadata,
-              })),
-            },
-          };
-
-          res.write(`event: attachment\ndata: ${JSON.stringify(attachment)}\n\n`);
+          res.write(`event: attachment\ndata: ${JSON.stringify(fileSearchAttachment)}\n\n`);
         } catch (streamError) {
           logger.error('[processAgentResponse] Error streaming file search results:', streamError);
         }
       }
-
-      // Capture file references for data consistency
-      try {
-        await MessageFileReference.captureReferences(
-          response.messageId,
-          sources,
-          userId,
-          conversationId,
-        );
-      } catch (captureError) {
-        logger.error('[processAgentResponse] Failed to capture file references:', captureError);
-        // Continue with the attachment creation even if capture fails
-      }
-
-      // Create attachment object that will be added to artifactPromises
-      const fileSearchAttachment = {
-        type: 'file_search_sources',
-        sources: sources,
-        messageId: response.messageId,
-        toolCallId: 'file_search_results',
-      };
-
-      // Add to response attachments array for processing
-      response.attachments = response.attachments || [];
-      response.attachments.push(fileSearchAttachment);
     }
 
     return response;

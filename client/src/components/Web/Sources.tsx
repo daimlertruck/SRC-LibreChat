@@ -2,7 +2,8 @@ import React, { useMemo, useCallback } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { VisuallyHidden } from '@ariakit/react';
 import { X, Globe, Newspaper, Image, ChevronDown, File, Download } from 'lucide-react';
-import type { ValidSource, ImageResult, TAttachment } from 'librechat-data-provider';
+import type { ValidSource, ImageResult } from 'librechat-data-provider';
+import { Tools } from 'librechat-data-provider';
 import { FaviconImage, getCleanDomain } from '~/components/Web/SourceHovercard';
 import SourcesErrorBoundary from './SourcesErrorBoundary';
 import { useSearchContext } from '~/Providers';
@@ -156,14 +157,18 @@ function ImageItem({ image }: { image: ImageResult }) {
   );
 }
 
-// Type for agent file sources that have the full file properties
-type AgentFileSource = TAttachment & {
+// Type for agent file sources (simplified for file citations)
+type AgentFileSource = {
   file_id: string;
+  filename: string;
   bytes?: number;
   type?: string;
   pages?: number[];
   relevance?: number;
   pageRelevance?: Record<number, number>;
+  messageId: string;
+  toolCallId: string;
+  metadata?: any;
 };
 
 interface FileItemProps {
@@ -193,11 +198,9 @@ const FileItem = React.memo(function FileItem({
       e.preventDefault();
       e.stopPropagation();
 
-
       await downloadFile(file.file_id, messageId, file.filename);
-
     },
-    [downloadFile, file.file_id, file.filename, messageId, localize, error],
+    [downloadFile, file.file_id, file.filename, messageId],
   );
 
   // Memoize file icon computation for performance
@@ -555,7 +558,7 @@ function SourcesComponent({ messageId, conversationId }: SourcesProps = {}) {
               } else {
                 // Handle agent file references from searchResults
                 const agentFile: AgentFileSource = {
-                  type: 'file_search_sources',
+                  type: Tools.file_search,
                   file_id: fileId,
                   filename: fileName,
                   bytes: undefined,

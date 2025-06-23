@@ -723,15 +723,6 @@ class BaseClient {
 
     if (this.artifactPromises) {
       responseMessage.attachments = (await Promise.all(this.artifactPromises)).filter((a) => a);
-      logger.debug('[BaseClient] Final response message attachments:', {
-        messageId: responseMessage.messageId,
-        attachmentsCount: responseMessage.attachments?.length || 0,
-        attachmentTypes: responseMessage.attachments?.map((att) => att.type) || [],
-        hasFileSearchSources: responseMessage.attachments?.some(
-          (att) => att.type === 'file_search_sources',
-        ),
-        fullAttachments: JSON.stringify(responseMessage.attachments, null, 2),
-      });
     }
 
     if (this.options.attachments) {

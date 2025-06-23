@@ -81,20 +81,16 @@ const createFile = async (data, disableTTL) => {
   // Use findOneAndUpdate with upsert to handle race conditions atomically
   // If metadata exists in both existing file and new data, merge them
   const existingFile = await File.findOne({ file_id: data.file_id }).lean();
-  
+
   if (existingFile && existingFile.metadata && data.metadata) {
     fileData.metadata = { ...existingFile.metadata, ...data.metadata };
   }
 
-  const result = await File.findOneAndUpdate(
-    { file_id: data.file_id }, 
-    fileData, 
-    {
-      new: true,
-      upsert: true,
-    }
-  ).lean();
-  
+  const result = await File.findOneAndUpdate({ file_id: data.file_id }, fileData, {
+    new: true,
+    upsert: true,
+  }).lean();
+
   return result;
 };
 

@@ -20,9 +20,9 @@ export function useSearchResultsByTurn(attachments?: TAttachment[]) {
         }
       }
 
-      // Handle agent file search attachments (new functionality)
-      if (attachment.type === 'file_search_sources' && (attachment as any).sources) {
-        const sources = (attachment as any).sources;
+      // Handle agent file search attachments (following web search pattern)
+      if (attachment.type === Tools.file_search && attachment[Tools.file_search]) {
+        const sources = attachment[Tools.file_search].sources;
 
         // Deduplicate sources by fileId and merge pages
         const deduplicatedSources = new Map();
