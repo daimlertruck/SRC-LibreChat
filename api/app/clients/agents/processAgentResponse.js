@@ -1,4 +1,4 @@
-const { MessageFileReference } = require('~/models');
+const { MessageFileReference, Files } = require('~/models');
 const { logger } = require('~/config');
 
 /**
@@ -18,13 +18,6 @@ const processAgentResponse = async (
   res = null,
 ) => {
   try {
-    logger.debug('[processAgentResponse] Starting processing', {
-      messageId: response.messageId,
-      userId,
-      conversationId,
-      contentPartsCount: contentParts.length,
-    });
-
     if (!response.messageId) {
       logger.warn('[processAgentResponse] No messageId in response');
       return response;
@@ -127,9 +120,9 @@ const processAgentResponse = async (
       }
     }
 
-    const sources = selectedResults
-      .slice(0, 10) // Final safety limit to 10 results
-      .map((result) => {
+    // Look up storage metadata from LibreChat database instead of relying on RAG API
+    const sources = await Promise.all(
+      selectedResults.slice(0, 10).map(async (result) => {
         const source = {
           fileId: result.file_id,
           fileName: result.filename,
@@ -139,18 +132,33 @@ const processAgentResponse = async (
           // Include page-specific relevance mapping for sorting
           pageRelevance: result.pageRelevance || {},
           metadata: {
-            storageType: result.storage_type || 'local', // Use RAG API storage type
+            storageType: 'local', // Default fallback
           },
         };
 
-        // Add S3 metadata if storage type is S3
-        if (result.storage_type === 's3' && result.s3_bucket && result.s3_key) {
-          source.metadata.s3Bucket = result.s3_bucket;
-          source.metadata.s3Key = result.s3_key;
+        // Look up file record from LibreChat database to get storage metadata
+        try {
+          const file = await Files.findOne({ file_id: result.file_id });
+
+          if (file && file.metadata) {
+            // Use storage metadata from LibreChat file record
+            if (file.metadata.storageType) {
+              source.metadata.storageType = file.metadata.storageType;
+            }
+            if (file.metadata.s3Bucket) {
+              source.metadata.s3Bucket = file.metadata.s3Bucket;
+            }
+            if (file.metadata.s3Key) {
+              source.metadata.s3Key = file.metadata.s3Key;
+            }
+          }
+        } catch (lookupError) {
+          logger.error('[processAgentResponse] Error looking up file metadata:', lookupError);
         }
 
         return source;
-      });
+      }),
+    );
 
     if (sources.length > 0) {
       // Stream file search results immediately if res is available

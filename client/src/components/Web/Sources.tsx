@@ -161,6 +161,8 @@ type AgentFileSource = TAttachment & {
   file_id: string;
   bytes?: number;
   type?: string;
+  pages?: number[];
+  relevance?: number;
   pageRelevance?: Record<number, number>;
 };
 
@@ -270,8 +272,8 @@ const FileItem = React.memo(function FileItem({
           </span>
           <Download className="ml-auto h-3 w-3" />
         </div>
-        <div className="mt-1">
-          <span className="line-clamp-2 text-left text-sm font-medium text-text-primary md:line-clamp-3">
+        <div className="mt-1 min-w-0">
+          <span className="line-clamp-2 break-all text-left text-sm font-medium text-text-primary md:line-clamp-3">
             {file.filename}
           </span>
           {file.pages && file.pages.length > 0 && (
@@ -306,8 +308,8 @@ const FileItem = React.memo(function FileItem({
         </span>
         <Download className="ml-auto h-3 w-3" />
       </div>
-      <div className="mt-1">
-        <span className="line-clamp-2 text-left text-sm font-medium text-text-primary md:line-clamp-3">
+      <div className="mt-1 min-w-0">
+        <span className="line-clamp-2 break-all text-left text-sm font-medium text-text-primary md:line-clamp-3">
           {file.filename}
         </span>
         {file.pages && file.pages.length > 0 && (

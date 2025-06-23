@@ -24,23 +24,14 @@ export function useAgentFileDownload(options: UseAgentFileDownloadOptions) {
           conversationId,
         });
 
-        // Check if it's a PDF file
+        // Download all files directly, regardless of type
         const finalFileName = response.fileName || fileName;
-        const isPDF =
-          finalFileName.toLowerCase().endsWith('.pdf') || response.mimeType === 'application/pdf';
-
-        if (isPDF) {
-          // Open PDF in new tab for viewing
-          window.open(response.downloadUrl, '_blank', 'noopener,noreferrer');
-        } else {
-          // Download other file types normally
-          const link = document.createElement('a');
-          link.href = response.downloadUrl;
-          link.download = finalFileName;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-        }
+        const link = document.createElement('a');
+        link.href = response.downloadUrl;
+        link.download = finalFileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
 
         onSuccess?.(fileName);
       } catch (error) {

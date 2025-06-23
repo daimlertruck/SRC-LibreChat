@@ -1,5 +1,4 @@
 const fs = require('fs');
-const path = require('path');
 const fetch = require('node-fetch');
 const { FileSources } = require('librechat-data-provider');
 const {
@@ -80,11 +79,28 @@ async function saveBufferToS3({ userId, buffer, fileName, basePath = defaultBase
  * @param {string} params.userId - The user's unique identifier.
  * @param {string} params.fileName - The file name in S3.
  * @param {string} [params.basePath='images'] - The base path in the bucket.
+ * @param {string} [params.customFilename] - Custom filename for Content-Disposition header (overrides extracted filename).
+ * @param {string} [params.contentType] - Custom content type for the response.
  * @returns {Promise<string>} A URL to access the S3 object
  */
-async function getS3URL({ userId, fileName, basePath = defaultBasePath }) {
+async function getS3URL({
+  userId,
+  fileName,
+  basePath = defaultBasePath,
+  customFilename = null,
+  contentType = null,
+}) {
   const key = getS3Key(basePath, userId, fileName);
   const params = { Bucket: bucketName, Key: key };
+
+  // Add response headers if specified
+  if (customFilename) {
+    params.ResponseContentDisposition = `attachment; filename="${customFilename}"`;
+  }
+
+  if (contentType) {
+    params.ResponseContentType = contentType;
+  }
 
   try {
     const s3 = initializeS3();
@@ -188,7 +204,7 @@ async function uploadFileToS3({ req, file, file_id, basePath = defaultBasePath }
   try {
     const inputFilePath = file.path;
     const userId = req.user.id;
-    const fileName = `${file_id}__${path.basename(inputFilePath)}`;
+    const fileName = `${file_id}__${file.originalname}`;
     const key = getS3Key(basePath, userId, fileName);
 
     const stats = await fs.promises.stat(inputFilePath);

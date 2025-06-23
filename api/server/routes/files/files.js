@@ -21,10 +21,11 @@ const {
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { getOpenAIClient } = require('~/server/controllers/assistants/helpers');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
-const { refreshS3FileUrls } = require('~/server/services/Files/S3/crud');
+const { refreshS3FileUrls, getS3URL } = require('~/server/services/Files/S3/crud');
 const { getFiles, batchUpdateFiles } = require('~/models/File');
 const { getAssistant } = require('~/models/Assistant');
 const { getAgent } = require('~/models/Agent');
+const { cleanFileName } = require('~/server/utils/files');
 const { getLogStores } = require('~/cache');
 const { removePorts, isEnabled } = require('~/server/utils');
 const ioredisClient = require('~/cache/ioredisClient');
@@ -266,7 +267,8 @@ router.get('/download/:userId/:file_id', async (req, res) => {
     }
 
     const setHeaders = () => {
-      res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+      const cleanedFilename = cleanFileName(file.filename);
+      res.setHeader('Content-Disposition', `attachment; filename="${cleanedFilename}"`);
       res.setHeader('Content-Type', 'application/octet-stream');
       res.setHeader('X-File-Metadata', JSON.stringify(file));
     };
@@ -292,13 +294,48 @@ router.get('/download/:userId/:file_id', async (req, res) => {
       setHeaders();
       logger.debug(`File ${file_id} downloaded from OpenAI`);
       passThrough.body.pipe(res);
+    } else if (file.source === FileSources.s3) {
+      // For S3 files, redirect to fresh presigned URL instead of streaming
+      logger.debug('[DOWNLOAD ROUTE] S3 file detected, generating fresh presigned URL');
+      try {
+        // Extract S3 key from the stored filepath
+        const s3Key = file.filepath.split('/').slice(3).join('/'); // Remove https://bucket.s3.region.amazonaws.com/
+        const fileName = file.filename;
+
+        logger.debug('[DOWNLOAD ROUTE] Extracting S3 info:', {
+          originalFilepath: file.filepath,
+          extractedKey: s3Key,
+          fileName,
+        });
+
+        // Generate fresh presigned URL with cleaned filename
+        const cleanedFilename = cleanFileName(fileName);
+        const freshPresignedUrl = await getS3URL({
+          userId: file.user,
+          fileName: `${file.file_id}__${fileName}`,
+          basePath: file.filepath.includes('/images/') ? 'images' : 'uploads',
+          customFilename: cleanedFilename,
+        });
+
+        // Redirect to S3 presigned URL for direct download
+        return res.redirect(302, freshPresignedUrl);
+      } catch (error) {
+        logger.error('[DOWNLOAD ROUTE] Error generating S3 presigned URL:', error);
+        // Fallback to streaming
+        fileStream = await getDownloadStream(req, file.filepath);
+      }
     } else {
-      fileStream = getDownloadStream(file_id);
+      fileStream = await getDownloadStream(req, file.filepath);
+
+      fileStream.on('error', (streamError) => {
+        logger.error('[DOWNLOAD ROUTE] Stream error:', streamError);
+      });
+
       setHeaders();
       fileStream.pipe(res);
     }
   } catch (error) {
-    logger.error('Error downloading file:', error);
+    logger.error('[DOWNLOAD ROUTE] Error downloading file:', error);
     res.status(500).send('Error downloading file');
   }
 });
