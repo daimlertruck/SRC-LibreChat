@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const mime = require('mime');
 const { v4 } = require('uuid');
+
+// LibreChat data provider imports
 const {
   isUUID,
   megabyte,
@@ -17,6 +19,24 @@ const {
   isAssistantsEndpoint,
 } = require('librechat-data-provider');
 const { sanitizeFilename } = require('@librechat/api');
+const { EnvVar } = require('@librechat/agents');
+
+// Local service imports
+const {
+  convertImage,
+  resizeAndConvert,
+  resizeImageBuffer,
+} = require('~/server/services/Files/images');
+const { addResourceFileId, deleteResourceFileId } = require('~/server/controllers/assistants/v2');
+const { addAgentResourceFile, removeAgentResourceFiles } = require('~/models/Agent');
+const { getOpenAIClient } = require('~/server/controllers/assistants/helpers');
+const { createFile, updateFileUsage, deleteFiles } = require('~/models/File');
+const { loadAuthValues } = require('~/server/services/Tools/credentials');
+const { checkCapability } = require('~/server/services/Config');
+const { LB_QueueAsyncCall } = require('~/server/utils/queue');
+const { getStrategyFunctions } = require('./strategies');
+const { determineFileType } = require('~/server/utils');
+const { logger } = require('~/config');
 
 /**
  * Creates a modular file upload wrapper that ensures filename sanitization
@@ -40,22 +60,6 @@ const createSanitizedUploadWrapper = (uploadFunction) => {
     return uploadFunction({ req, file: sanitizedFile, file_id, ...restParams });
   };
 };
-const { EnvVar } = require('@librechat/agents');
-const {
-  convertImage,
-  resizeAndConvert,
-  resizeImageBuffer,
-} = require('~/server/services/Files/images');
-const { addResourceFileId, deleteResourceFileId } = require('~/server/controllers/assistants/v2');
-const { addAgentResourceFile, removeAgentResourceFiles } = require('~/models/Agent');
-const { getOpenAIClient } = require('~/server/controllers/assistants/helpers');
-const { createFile, updateFileUsage, deleteFiles } = require('~/models/File');
-const { loadAuthValues } = require('~/server/services/Tools/credentials');
-const { checkCapability } = require('~/server/services/Config');
-const { LB_QueueAsyncCall } = require('~/server/utils/queue');
-const { getStrategyFunctions } = require('./strategies');
-const { determineFileType } = require('~/server/utils');
-const { logger } = require('~/config');
 
 /**
  *

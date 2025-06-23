@@ -1,4 +1,5 @@
 const { MessageFileReference, Files } = require('~/models');
+const { getCustomConfig } = require('~/server/services/Config/getCustomConfig');
 const { logger } = require('~/config');
 
 /**
@@ -23,47 +24,19 @@ const processAgentResponse = async (
       return response;
     }
 
+    // Get configurable max file search results from librechat.yaml
+    const customConfig = await getCustomConfig();
+    const maxFileSearchResults = 
+      customConfig?.endpoints?.agents?.maxFileSearchResults ?? 10;
+
     // Look for file search tool calls in content parts
     const fileSearchResults = [];
 
     for (const part of contentParts) {
-      // Check multiple possible formats for file_search tool calls
-      let toolResult = null;
-      let isFileSearchTool = false;
-
-      // Format 1: Direct tool_call with tool_result
-      if (part.type === 'tool_call' && part.tool_call?.name === 'file_search') {
-        isFileSearchTool = true;
-        toolResult = part.tool_result || part.tool_call?.output;
-      }
-
-      // Format 2: Check if it's a tool result with file_search content
-      if (part.type === 'tool_result' || part.type === 'tool_call') {
-        const resultContent =
-          part.tool_result || part.content || part.text || part.result || part.tool_call?.output;
-        if (resultContent && typeof resultContent === 'string' && resultContent.includes('File:')) {
-          isFileSearchTool = true;
-          toolResult = resultContent;
-        }
-      }
-
-      // Format 3: Check content for file search patterns
-      if (
-        !isFileSearchTool &&
-        part.content &&
-        typeof part.content === 'string' &&
-        part.content.includes('File:')
-      ) {
-        isFileSearchTool = true;
-        toolResult = part.content;
-      }
-
-      if (isFileSearchTool && toolResult) {
-        if (typeof toolResult === 'string') {
-          // Parse the formatted file search results
-          const results = parseFileSearchResults(toolResult);
-          fileSearchResults.push(...results);
-        }
+      const toolResult = extractToolResult(part);
+      if (toolResult) {
+        const results = parseFileSearchResults(toolResult);
+        fileSearchResults.push(...results);
       }
     }
 
@@ -99,12 +72,12 @@ const processAgentResponse = async (
     // Start with file representatives, then add remaining high-relevance results up to limit
     const selectedResults = [...fileRepresentatives];
 
-    // If we have room for more results (under 10), add additional high-relevance results
-    if (selectedResults.length < 10) {
+    // If we have room for more results, add additional high-relevance results
+    if (selectedResults.length < maxFileSearchResults) {
       const allResultsSorted = fileSearchResults.sort((a, b) => b.relevance - a.relevance);
 
       for (const result of allResultsSorted) {
-        if (selectedResults.length >= 10) break;
+        if (selectedResults.length >= maxFileSearchResults) break;
 
         // Check if this exact result is already included (avoid duplicates)
         const alreadyIncluded = selectedResults.some(
@@ -120,45 +93,38 @@ const processAgentResponse = async (
       }
     }
 
-    // Look up storage metadata from LibreChat database instead of relying on RAG API
-    const sources = await Promise.all(
-      selectedResults.slice(0, 10).map(async (result) => {
-        const source = {
-          fileId: result.file_id,
-          fileName: result.filename,
-          pages: result.page ? [result.page] : [],
-          relevance: result.relevance,
-          type: 'file',
-          // Include page-specific relevance mapping for sorting
-          pageRelevance: result.pageRelevance || {},
-          metadata: {
-            storageType: 'local', // Default fallback
-          },
-        };
+    // Look up storage metadata from LibreChat database in batch
+    const finalResults = selectedResults.slice(0, maxFileSearchResults);
+    const fileIds = [...new Set(finalResults.map((result) => result.file_id))];
+    // Batch lookup all files at once
+    let fileMetadataMap = {};
+    try {
+      const files = await Files.find({ file_id: { $in: fileIds } });
+      fileMetadataMap = files.reduce((map, file) => {
+        map[file.file_id] = file.metadata || {};
+        return map;
+      }, {});
+    } catch (lookupError) {
+      logger.error('[processAgentResponse] Error looking up file metadata:', lookupError);
+    }
 
-        // Look up file record from LibreChat database to get storage metadata
-        try {
-          const file = await Files.findOne({ file_id: result.file_id });
-
-          if (file && file.metadata) {
-            // Use storage metadata from LibreChat file record
-            if (file.metadata.storageType) {
-              source.metadata.storageType = file.metadata.storageType;
-            }
-            if (file.metadata.s3Bucket) {
-              source.metadata.s3Bucket = file.metadata.s3Bucket;
-            }
-            if (file.metadata.s3Key) {
-              source.metadata.s3Key = file.metadata.s3Key;
-            }
-          }
-        } catch (lookupError) {
-          logger.error('[processAgentResponse] Error looking up file metadata:', lookupError);
-        }
-
-        return source;
-      }),
-    );
+    // Create sources with metadata
+    const sources = finalResults.map((result) => {
+      const metadata = fileMetadataMap[result.file_id] || {};
+      return {
+        fileId: result.file_id,
+        fileName: result.filename,
+        pages: result.page ? [result.page] : [],
+        relevance: result.relevance,
+        type: 'file',
+        pageRelevance: result.pageRelevance || {},
+        metadata: {
+          storageType: metadata.storageType || 'local',
+          s3Bucket: metadata.s3Bucket,
+          s3Key: metadata.s3Key,
+        },
+      };
+    });
 
     if (sources.length > 0) {
       // Stream file search results immediately if res is available
@@ -350,6 +316,34 @@ const extractFileIdFromFilename = (filename) => {
   // This is a simple implementation - in production you might want to
   // maintain a mapping of filenames to file IDs or extract from metadata
   return filename.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+};
+
+/**
+ * Extracts tool result from content part, handling multiple formats
+ * @param {Object} part - Content part to extract from
+ * @returns {string|null} Tool result string or null if not found
+ */
+const extractToolResult = (part) => {
+  // Direct tool_call with file_search name
+  if (part.type === 'tool_call' && part.tool_call?.name === 'file_search') {
+    return part.tool_result || part.tool_call?.output;
+  }
+
+  // Check tool result content for file search patterns
+  if (part.type === 'tool_result' || part.type === 'tool_call') {
+    const resultContent =
+      part.tool_result || part.content || part.text || part.result || part.tool_call?.output;
+    if (resultContent && typeof resultContent === 'string' && resultContent.includes('File:')) {
+      return resultContent;
+    }
+  }
+
+  // Check direct content for file search patterns
+  if (part.content && typeof part.content === 'string' && part.content.includes('File:')) {
+    return part.content;
+  }
+
+  return null;
 };
 
 module.exports = {

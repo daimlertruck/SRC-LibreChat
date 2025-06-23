@@ -251,6 +251,7 @@ export const agentsEndpointSchema = baseEndpointSchema
       recursionLimit: z.number().optional(),
       disableBuilder: z.boolean().optional().default(false),
       maxRecursionLimit: z.number().optional(),
+      maxFileSearchResults: z.number().min(1).max(50).optional().default(10),
       allowedProviders: z.array(z.union([z.string(), eModelEndpointSchema])).optional(),
       capabilities: z
         .array(z.nativeEnum(AgentCapabilities))
@@ -261,6 +262,7 @@ export const agentsEndpointSchema = baseEndpointSchema
   .default({
     disableBuilder: false,
     capabilities: defaultAgentCapabilities,
+    maxFileSearchResults: 10,
   });
 
 export type TAgentsEndpoint = z.infer<typeof agentsEndpointSchema>;

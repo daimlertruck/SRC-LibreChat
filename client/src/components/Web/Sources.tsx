@@ -10,6 +10,7 @@ import { AnimatedTabs } from '~/components/ui';
 import useLocalize from '~/hooks/useLocalize';
 import { useAccessibility, useLiveRegion } from '~/hooks/useAccessibility';
 import { useAgentFileDownload } from '~/hooks/useAgentFileDownload';
+import { sortPagesByRelevance } from '~/utils/fileSorting';
 import {
   OGDialog,
   OGDialogClose,
@@ -222,19 +223,6 @@ const FileItem = React.memo(function FileItem({
     ],
   );
 
-  // Helper function to sort pages by relevance (highest first)
-  const sortPagesByRelevance = useCallback((pages: number[], pageRelevance?: Record<number, number>) => {
-    if (!pageRelevance || Object.keys(pageRelevance).length === 0) {
-      return pages; // Return original order if no relevance data
-    }
-    
-    return [...pages].sort((a, b) => {
-      const relevanceA = pageRelevance[a] || 0;
-      const relevanceB = pageRelevance[b] || 0;
-      return relevanceB - relevanceA; // Highest relevance first
-    });
-  }, []);
-
   // Memoize file icon computation for performance
   const fileIcon = useMemo(() => {
     const fileType = file.type?.toLowerCase() || '';
@@ -278,7 +266,8 @@ const FileItem = React.memo(function FileItem({
           </span>
           {file.pages && file.pages.length > 0 && (
             <span className="mt-1 line-clamp-1 text-left text-xs text-text-secondary">
-              Pages: {sortPagesByRelevance(file.pages, file.pageRelevance).join(', ')}
+              {localize('com_sources_pages')}:{' '}
+              {sortPagesByRelevance(file.pages, file.pageRelevance).join(', ')}
             </span>
           )}
           {file.bytes && (
@@ -314,7 +303,8 @@ const FileItem = React.memo(function FileItem({
         </span>
         {file.pages && file.pages.length > 0 && (
           <span className="mt-1 line-clamp-1 text-left text-xs text-text-secondary">
-            Pages: {sortPagesByRelevance(file.pages, file.pageRelevance).join(', ')}
+            {localize('com_sources_pages')}:{' '}
+            {sortPagesByRelevance(file.pages, file.pageRelevance).join(', ')}
           </span>
         )}
       </div>

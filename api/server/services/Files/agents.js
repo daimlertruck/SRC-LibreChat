@@ -1,6 +1,7 @@
 const { Files, MessageFileReference } = require('~/models');
 const { getS3URL } = require('./S3/crud');
 const { cleanFileName } = require('~/server/utils/files');
+const { createAbsoluteUrl, extractS3Details } = require('~/server/utils/url');
 const { logger } = require('~/config');
 
 /**
@@ -79,18 +80,7 @@ const generateAgentSourceUrl = async (req, res) => {
     let downloadUrl;
 
     // Generate URL based on storage type
-    // Helper function to create absolute URLs
-    const createAbsoluteUrl = (path) => {
-      const protocol = req.protocol;
-      const host = req.get('host');
-      return `${protocol}://${host}${path}`;
-    };
-
-    // Check for S3 details - prioritize clean file fields over potentially corrupted metadata
-    const s3Key = file.s3Key || fileReference.capturedMetadata?.s3Key;
-    const s3Bucket = file.s3Bucket || fileReference.capturedMetadata?.s3Bucket;
-    const storageType =
-      file.source === 's3' ? 's3' : fileReference.capturedMetadata?.storageType || file.source;
+    const { s3Key, s3Bucket, storageType } = extractS3Details(file, fileReference);
 
     if (
       (storageType === 's3' && s3Key && s3Bucket) ||
@@ -120,14 +110,14 @@ const generateAgentSourceUrl = async (req, res) => {
       } catch (s3Error) {
         logger.error('[generateAgentSourceUrl] Error generating S3 URL:', s3Error);
         // Fallback to local download with absolute URL
-        downloadUrl = createAbsoluteUrl(`/api/files/download/${userId}/${file.file_id}`);
+        downloadUrl = createAbsoluteUrl(req, `/api/files/download/${userId}/${file.file_id}`);
       }
     } else if (file.source === 'vectordb' || file.source === 'local') {
       // Vector database or local files - use existing download endpoint with absolute URL
-      downloadUrl = createAbsoluteUrl(`/api/files/download/${userId}/${file.file_id}`);
+      downloadUrl = createAbsoluteUrl(req, `/api/files/download/${userId}/${file.file_id}`);
     } else {
       // Fallback to local download endpoint with absolute URL
-      downloadUrl = createAbsoluteUrl(`/api/files/download/${userId}/${file.file_id}`);
+      downloadUrl = createAbsoluteUrl(req, `/api/files/download/${userId}/${file.file_id}`);
     }
 
     const response = {
