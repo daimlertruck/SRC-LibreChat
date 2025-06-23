@@ -139,9 +139,12 @@ const generateAgentSourceUrl = async (req, res) => {
         // Fallback to local download with absolute URL
         downloadUrl = createAbsoluteUrl(req, `/api/files/download/${userId}/${file.file_id}`);
       }
-    } else if (file.source === 'vectordb' || file.source === 'local') {
-      // Vector database or local files - use existing download endpoint with absolute URL
+    } else if (file.source === 'vectordb') {
+      // Vector database files - use existing download endpoint with absolute URL
       downloadUrl = createAbsoluteUrl(req, `/api/files/download/${userId}/${file.file_id}`);
+    } else if (file.source === 'local') {
+      // Local files - disable download functionality
+      return res.status(403).json({ error: 'Download not available for local files' });
     } else {
       // Fallback to local download endpoint with absolute URL
       downloadUrl = createAbsoluteUrl(req, `/api/files/download/${userId}/${file.file_id}`);

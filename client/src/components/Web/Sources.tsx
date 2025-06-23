@@ -216,7 +216,10 @@ const FileItem = React.memo(function FileItem({
   }, [file.type]);
 
   // Simple aria label
-  const downloadAriaLabel = `Download ${file.filename}${isLoading ? ' (downloading...)' : ''}`;
+  const downloadAriaLabel = localize('com_sources_download_aria_label', {
+    filename: file.filename,
+    status: isLoading ? localize('com_sources_downloading_status') : '',
+  });
 
   if (expanded) {
     return (
@@ -250,7 +253,22 @@ const FileItem = React.memo(function FileItem({
           )}
         </div>
         {error && (
-          <div className="mt-1 text-xs text-red-500">{localize('com_sources_download_failed')}</div>
+          <div className="mt-1 text-xs text-red-500">
+            {(() => {
+              const errorString = JSON.stringify(error);
+              const errorWithResponse = error as any;
+              const isLocalFileError =
+                error?.message?.includes('local files') ||
+                errorWithResponse?.response?.data?.error?.includes('local files') ||
+                errorWithResponse?.response?.status === 403 ||
+                errorString.includes('local files') ||
+                errorString.includes('403');
+
+              return isLocalFileError
+                ? localize('com_sources_download_local_unavailable')
+                : localize('com_sources_download_failed');
+            })()}
+          </div>
         )}
       </button>
     );
@@ -282,7 +300,22 @@ const FileItem = React.memo(function FileItem({
         )}
       </div>
       {error && (
-        <div className="mt-1 text-xs text-red-500">{localize('com_sources_download_failed')}</div>
+        <div className="mt-1 text-xs text-red-500">
+          {(() => {
+            const errorString = JSON.stringify(error);
+            const errorWithResponse = error as any;
+            const isLocalFileError =
+              error?.message?.includes('local files') ||
+              errorWithResponse?.response?.data?.error?.includes('local files') ||
+              errorWithResponse?.response?.status === 403 ||
+              errorString.includes('local files') ||
+              errorString.includes('403');
+
+            return isLocalFileError
+              ? localize('com_sources_download_local_unavailable')
+              : localize('com_sources_download_failed');
+          })()}
+        </div>
       )}
     </button>
   );
