@@ -928,7 +928,6 @@ class AgentClient extends BaseClient {
           this.user ?? this.options.req.user?.id,
           this.conversationId,
           this.contentParts,
-          this.res, // Pass res for streaming
         );
 
         // Update artifact promises with any new attachments from agent response

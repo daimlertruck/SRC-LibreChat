@@ -8,16 +8,9 @@ const { logger } = require('~/config');
  * @param {string} userId - User ID
  * @param {string} conversationId - Conversation ID
  * @param {Array} contentParts - Content parts from the agent response
- * @param {import('http').ServerResponse} [res] - Server response for streaming
  * @returns {Object} Processed response with attachments
  */
-const processAgentResponse = async (
-  response,
-  userId,
-  conversationId,
-  contentParts = [],
-  res = null,
-) => {
+const processAgentResponse = async (response, userId, conversationId, contentParts = []) => {
   try {
     if (!response.messageId) {
       logger.warn('[processAgentResponse] No messageId in response');
@@ -152,15 +145,6 @@ const processAgentResponse = async (
       // Add to response attachments array for processing (only once per message)
       response.attachments = response.attachments || [];
       response.attachments.push(fileSearchAttachment);
-
-      // Stream file search results immediately if res is available
-      if (res && !res.headersSent) {
-        try {
-          res.write(`event: attachment\ndata: ${JSON.stringify(fileSearchAttachment)}\n\n`);
-        } catch (streamError) {
-          logger.error('[processAgentResponse] Error streaming file search results:', streamError);
-        }
-      }
     }
 
     return response;
