@@ -17,9 +17,9 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
       return response;
     }
 
-    // Get configurable max file search results from librechat.yaml
+    // Get configurable max citations from librechat.yaml
     const customConfig = await getCustomConfig();
-    const maxFileSearchResults = customConfig?.endpoints?.agents?.maxFileSearchResults ?? 10;
+    const maxCitations = customConfig?.endpoints?.agents?.maxCitations ?? 30;
 
     // Look for file search tool calls in content parts
     const fileSearchResults = [];
@@ -82,11 +82,11 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
     const selectedResults = [...fileRepresentatives];
 
     // If we have room for more results, add additional high-relevance results
-    if (selectedResults.length < maxFileSearchResults) {
+    if (selectedResults.length < maxCitations) {
       const allResultsSorted = fileSearchResults.sort((a, b) => b.relevance - a.relevance);
 
       for (const result of allResultsSorted) {
-        if (selectedResults.length >= maxFileSearchResults) break;
+        if (selectedResults.length >= maxCitations) break;
 
         // Check if this exact result is already included (avoid duplicates)
         const alreadyIncluded = selectedResults.some(
@@ -103,7 +103,7 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
     }
 
     // Look up storage metadata from LibreChat database in batch
-    const finalResults = selectedResults.slice(0, maxFileSearchResults);
+    const finalResults = selectedResults.slice(0, maxCitations);
     const fileIds = [...new Set(finalResults.map((result) => result.file_id))];
     // Batch lookup all files at once
     let fileMetadataMap = {};

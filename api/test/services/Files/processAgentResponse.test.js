@@ -33,7 +33,7 @@ describe('processAgentResponse', () => {
   });
 
   it('should return response unchanged when no file search results', async () => {
-    getCustomConfig.mockResolvedValue({ endpoints: { agents: { maxFileSearchResults: 10 } } });
+    getCustomConfig.mockResolvedValue({ endpoints: { agents: { maxCitations: 10 } } });
 
     const response = { messageId: 'msg123' };
     const contentParts = [{ type: 'text', content: 'some text' }];
@@ -44,7 +44,7 @@ describe('processAgentResponse', () => {
 
   it('should process file search results and create attachments', async () => {
     getCustomConfig.mockResolvedValue({
-      endpoints: { agents: { maxFileSearchResults: 10 } },
+      endpoints: { agents: { maxCitations: 10 } },
       fileStrategy: 's3',
     });
 
@@ -89,7 +89,7 @@ Content: Test content`,
 
   it('should use configured fileStrategy when file metadata is missing', async () => {
     getCustomConfig.mockResolvedValue({
-      endpoints: { agents: { maxFileSearchResults: 10 } },
+      endpoints: { agents: { maxCitations: 10 } },
       fileStrategy: 's3',
     });
 
@@ -122,7 +122,7 @@ Content: Test content`,
 
   it('should handle file diversity by including at least one result per file', async () => {
     getCustomConfig.mockResolvedValue({
-      endpoints: { agents: { maxFileSearchResults: 3 } },
+      endpoints: { agents: { maxCitations: 3 } },
       fileStrategy: 's3',
     });
 

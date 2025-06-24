@@ -207,6 +207,25 @@ const FileItem = React.memo(function FileItem({
     onError: (_error) => {},
   });
 
+  // Extract error message logic to avoid duplication
+  const getErrorMessage = useCallback(
+    (error: any) => {
+      const errorString = JSON.stringify(error);
+      const errorWithResponse = error as any;
+      const isLocalFileError =
+        error?.message?.includes('local files') ||
+        errorWithResponse?.response?.data?.error?.includes('local files') ||
+        errorWithResponse?.response?.status === 403 ||
+        errorString.includes('local files') ||
+        errorString.includes('403');
+
+      return isLocalFileError
+        ? localize('com_sources_download_local_unavailable')
+        : localize('com_sources_download_failed');
+    },
+    [localize],
+  );
+
   // Check if file is from local storage
   const isLocalFile = file.metadata?.storageType === 'local';
 
@@ -278,24 +297,7 @@ const FileItem = React.memo(function FileItem({
             </span>
           )}
         </div>
-        {error && (
-          <div className="mt-1 text-xs text-red-500">
-            {(() => {
-              const errorString = JSON.stringify(error);
-              const errorWithResponse = error as any;
-              const isLocalFileError =
-                error?.message?.includes('local files') ||
-                errorWithResponse?.response?.data?.error?.includes('local files') ||
-                errorWithResponse?.response?.status === 403 ||
-                errorString.includes('local files') ||
-                errorString.includes('403');
-
-              return isLocalFileError
-                ? localize('com_sources_download_local_unavailable')
-                : localize('com_sources_download_failed');
-            })()}
-          </div>
-        )}
+        {error && <div className="mt-1 text-xs text-red-500">{getErrorMessage(error)}</div>}
       </button>
     );
   }
@@ -329,24 +331,7 @@ const FileItem = React.memo(function FileItem({
           </span>
         )}
       </div>
-      {error && (
-        <div className="mt-1 text-xs text-red-500">
-          {(() => {
-            const errorString = JSON.stringify(error);
-            const errorWithResponse = error as any;
-            const isLocalFileError =
-              error?.message?.includes('local files') ||
-              errorWithResponse?.response?.data?.error?.includes('local files') ||
-              errorWithResponse?.response?.status === 403 ||
-              errorString.includes('local files') ||
-              errorString.includes('403');
-
-            return isLocalFileError
-              ? localize('com_sources_download_local_unavailable')
-              : localize('com_sources_download_failed');
-          })()}
-        </div>
-      )}
+      {error && <div className="mt-1 text-xs text-red-500">{getErrorMessage(error)}</div>}
     </button>
   );
 });
@@ -560,105 +545,86 @@ function SourcesComponent({ messageId, conversationId }: SourcesProps = {}) {
   const localize = useLocalize();
   const { searchResults } = useSearchContext();
 
+  // Simple search results processing with good memoization
   const { organicSources, topStories, images, hasAnswerBox, agentFiles } = useMemo(() => {
     const organicSourcesMap = new Map<string, ValidSource>();
     const topStoriesMap = new Map<string, ValidSource>();
     const imagesMap = new Map<string, ImageResult>();
+    const agentFilesMap = new Map<string, AgentFileSource>();
     let hasAnswerBox = false;
 
-    // Collect agent files with deduplication by file_id
-    const agentFilesMap = new Map<string, AgentFileSource>();
+    if (!searchResults) {
+      return {
+        organicSources: [],
+        topStories: [],
+        images: [],
+        hasAnswerBox: false,
+        agentFiles: [],
+      };
+    }
 
     // Process search results
-    if (searchResults) {
-      Object.values(searchResults).forEach((result) => {
-        if (!result) return;
+    for (const result of Object.values(searchResults)) {
+      if (!result) continue;
 
-        if (result.organic?.length) {
-          result.organic.forEach((source) => {
-            if (source.link) {
-              organicSourcesMap.set(source.link, source);
-            }
-          });
-        }
-        if (result.references?.length) {
-          result.references.forEach((source) => {
-            if (source.type === 'image') {
-              imagesMap.set(source.link, {
-                ...source,
-                imageUrl: source.link,
-              });
-              return;
-            }
-            if ((source as any).type === 'file') {
-              const fileId = (source as any).fileId || 'unknown';
-              const fileName = source.title || 'Unknown File';
+      // Process organic sources
+      result.organic?.forEach((source) => {
+        if (source.link) organicSourcesMap.set(source.link, source);
+      });
 
-              // Create a more unique key using both fileId and filename to avoid incorrect merging
-              const uniqueKey = `${fileId}_${fileName}`;
+      // Process references
+      result.references?.forEach((source) => {
+        if (source.type === 'image') {
+          imagesMap.set(source.link, { ...source, imageUrl: source.link });
+        } else if ((source as any).type === 'file') {
+          const fileId = (source as any).fileId || 'unknown';
+          const fileName = source.title || 'Unknown File';
+          const uniqueKey = `${fileId}_${fileName}`;
 
-              // Check if we already have this exact file
-              if (agentFilesMap.has(uniqueKey)) {
-                // Merge pages for the same file
-                const existing = agentFilesMap.get(uniqueKey)!;
-                const existingPages = existing.pages || [];
-                const newPages = (source as any).pages || [];
-                const allPages = [...existingPages, ...newPages];
-                // Remove duplicates and sort
-                const uniquePages = [...new Set(allPages)].sort((a, b) => a - b);
+          if (agentFilesMap.has(uniqueKey)) {
+            // Merge pages for the same file
+            const existing = agentFilesMap.get(uniqueKey)!;
+            const existingPages = existing.pages || [];
+            const newPages = (source as any).pages || [];
+            const uniquePages = [...new Set([...existingPages, ...newPages])].sort((a, b) => a - b);
 
-                // Merge page relevance mappings
-                const existingPageRelevance = existing.pageRelevance || {};
-                const newPageRelevance = (source as any).pageRelevance || {};
-                const mergedPageRelevance = { ...existingPageRelevance, ...newPageRelevance };
-
-                existing.pages = uniquePages;
-                existing.relevance = Math.max(
-                  existing.relevance || 0,
-                  (source as any).relevance || 0,
-                );
-                existing.pageRelevance = mergedPageRelevance;
-              } else {
-                // Handle agent file references from searchResults
-                const agentFile: AgentFileSource = {
-                  type: Tools.file_search,
-                  file_id: fileId,
-                  filename: fileName,
-                  bytes: undefined,
-                  metadata: (source as any).metadata,
-                  pages: (source as any).pages,
-                  relevance: (source as any).relevance,
-                  pageRelevance: (source as any).pageRelevance,
-                  messageId: messageId || '',
-                  toolCallId: 'file_search_results',
-                };
-                agentFilesMap.set(uniqueKey, agentFile);
-              }
-              return;
-            }
-            if (source.link) {
-              organicSourcesMap.set(source.link, source);
-            }
-          });
-        }
-        if (result.topStories?.length) {
-          result.topStories.forEach((source) => {
-            if (source.link) {
-              topStoriesMap.set(source.link, source);
-            }
-          });
-        }
-        if (result.images?.length) {
-          result.images.forEach((image) => {
-            if (image.imageUrl) {
-              imagesMap.set(image.imageUrl, image);
-            }
-          });
-        }
-        if (result.answerBox) {
-          hasAnswerBox = true;
+            existing.pages = uniquePages;
+            existing.relevance = Math.max(existing.relevance || 0, (source as any).relevance || 0);
+            existing.pageRelevance = {
+              ...existing.pageRelevance,
+              ...(source as any).pageRelevance,
+            };
+          } else {
+            const agentFile: AgentFileSource = {
+              type: Tools.file_search,
+              file_id: fileId,
+              filename: fileName,
+              bytes: undefined,
+              metadata: (source as any).metadata,
+              pages: (source as any).pages,
+              relevance: (source as any).relevance,
+              pageRelevance: (source as any).pageRelevance,
+              messageId: messageId || '',
+              toolCallId: 'file_search_results',
+            };
+            agentFilesMap.set(uniqueKey, agentFile);
+          }
+        } else if (source.link) {
+          organicSourcesMap.set(source.link, source);
         }
       });
+
+      // Process top stories
+      result.topStories?.forEach((source) => {
+        if (source.link) topStoriesMap.set(source.link, source);
+      });
+
+      // Process images
+      result.images?.forEach((image) => {
+        if (image.imageUrl) imagesMap.set(image.imageUrl, image);
+      });
+
+      if (result.answerBox) hasAnswerBox = true;
     }
 
     return {
