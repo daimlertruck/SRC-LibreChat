@@ -28,7 +28,6 @@ jest.mock('../../../server/utils/files', () => ({
   cleanFileName: jest.fn((name) => name),
 }));
 
-
 jest.mock('../../../config', () => ({
   logger: {
     warn: jest.fn(),

@@ -658,7 +658,6 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     filepath = result.filepath;
   }
 
-
   const fileInfo = removeNullishValues({
     user: req.user.id,
     file_id,

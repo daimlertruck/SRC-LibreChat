@@ -548,6 +548,7 @@ export default function useEventHandlers({
       queryClient,
       location.pathname,
       navigate,
+      attachmentHandler,
     ],
   );
 
