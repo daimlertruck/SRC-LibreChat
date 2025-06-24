@@ -14,7 +14,7 @@ const { logger } = require('~/config');
 const bucketName = process.env.AWS_BUCKET_NAME;
 const defaultBasePath = 'images';
 
-let s3UrlExpirySeconds = 7 * 24 * 60 * 60;
+let s3UrlExpirySeconds = 2 * 60; // 2 minutes
 let s3RefreshExpiryMs = null;
 
 if (process.env.S3_URL_EXPIRY_SECONDS !== undefined) {
@@ -24,7 +24,7 @@ if (process.env.S3_URL_EXPIRY_SECONDS !== undefined) {
     s3UrlExpirySeconds = Math.min(parsed, 7 * 24 * 60 * 60);
   } else {
     logger.warn(
-      `[S3] Invalid S3_URL_EXPIRY_SECONDS value: "${process.env.S3_URL_EXPIRY_SECONDS}". Using 7-day expiry.`,
+      `[S3] Invalid S3_URL_EXPIRY_SECONDS value: "${process.env.S3_URL_EXPIRY_SECONDS}". Using 2-minute expiry.`,
     );
   }
 }
