@@ -180,10 +180,7 @@ interface FileItemProps {
 /**
  * Sorts page numbers by their relevance scores in descending order (highest first)
  */
-function sortPagesByRelevance(
-  pages: number[],
-  pageRelevance?: Record<number, number>,
-): number[] {
+function sortPagesByRelevance(pages: number[], pageRelevance?: Record<number, number>): number[] {
   if (!pageRelevance || Object.keys(pageRelevance).length === 0) {
     return pages; // Return original order if no relevance data
   }
@@ -210,14 +207,22 @@ const FileItem = React.memo(function FileItem({
     onError: (_error) => {},
   });
 
+  // Check if file is from local storage
+  const isLocalFile = file.metadata?.storageType === 'local';
+
   const handleDownload = useCallback(
     async (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
 
+      // Don't allow download for local files
+      if (isLocalFile) {
+        return;
+      }
+
       await downloadFile(file.file_id, messageId, file.filename);
     },
-    [downloadFile, file.file_id, file.filename, messageId],
+    [downloadFile, file.file_id, file.filename, messageId, isLocalFile],
   );
 
   // Memoize file icon computation for performance
@@ -241,17 +246,21 @@ const FileItem = React.memo(function FileItem({
   if (expanded) {
     return (
       <button
-        onClick={handleDownload}
+        onClick={isLocalFile ? undefined : handleDownload}
         disabled={isLoading}
-        className="flex w-full flex-col rounded-lg bg-surface-primary-contrast px-3 py-2 text-sm transition-all duration-300 hover:bg-surface-tertiary disabled:opacity-50"
-        aria-label={downloadAriaLabel}
+        className={`flex w-full flex-col rounded-lg bg-surface-primary-contrast px-3 py-2 text-sm transition-all duration-300 disabled:opacity-50 ${
+          isLocalFile ? 'cursor-default' : 'hover:bg-surface-tertiary'
+        }`}
+        aria-label={
+          isLocalFile ? localize('com_sources_download_local_unavailable') : downloadAriaLabel
+        }
       >
         <div className="flex items-center gap-2">
           <span className="text-lg">{fileIcon}</span>
           <span className="truncate text-xs font-medium text-text-secondary">
             {localize('com_sources_agent_file')}
           </span>
-          <Download className="ml-auto h-3 w-3" />
+          {!isLocalFile && <Download className="ml-auto h-3 w-3" />}
         </div>
         <div className="mt-1 min-w-0">
           <span className="line-clamp-2 break-all text-left text-sm font-medium text-text-primary md:line-clamp-3">
@@ -293,17 +302,21 @@ const FileItem = React.memo(function FileItem({
 
   return (
     <button
-      onClick={handleDownload}
+      onClick={isLocalFile ? undefined : handleDownload}
       disabled={isLoading}
-      className="flex h-full w-full flex-col rounded-lg bg-surface-primary-contrast px-3 py-2 text-sm transition-all duration-300 hover:bg-surface-tertiary disabled:opacity-50"
-      aria-label={downloadAriaLabel}
+      className={`flex h-full w-full flex-col rounded-lg bg-surface-primary-contrast px-3 py-2 text-sm transition-all duration-300 disabled:opacity-50 ${
+        isLocalFile ? 'cursor-default' : 'hover:bg-surface-tertiary'
+      }`}
+      aria-label={
+        isLocalFile ? localize('com_sources_download_local_unavailable') : downloadAriaLabel
+      }
     >
       <div className="flex items-center gap-2">
         <span className="text-lg">{fileIcon}</span>
         <span className="truncate text-xs font-medium text-text-secondary">
           {localize('com_sources_agent_file')}
         </span>
-        <Download className="ml-auto h-3 w-3" />
+        {!isLocalFile && <Download className="ml-auto h-3 w-3" />}
       </div>
       <div className="mt-1 min-w-0">
         <span className="line-clamp-2 break-all text-left text-sm font-medium text-text-primary md:line-clamp-3">
@@ -577,7 +590,7 @@ function SourcesComponent({ messageId, conversationId }: SourcesProps = {}) {
               });
               return;
             }
-            if (source.type === 'file') {
+            if ((source as any).type === 'file') {
               const fileId = (source as any).fileId || 'unknown';
               const fileName = source.title || 'Unknown File';
 
