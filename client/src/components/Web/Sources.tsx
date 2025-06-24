@@ -256,7 +256,7 @@ const FileItem = React.memo(function FileItem({
         }
       >
         <div className="flex items-center gap-2">
-          <span className="text-lg">{fileIcon}</span>
+          <span className="text-base">{fileIcon}</span>
           <span className="truncate text-xs font-medium text-text-secondary">
             {localize('com_sources_agent_file')}
           </span>
@@ -312,7 +312,7 @@ const FileItem = React.memo(function FileItem({
       }
     >
       <div className="flex items-center gap-2">
-        <span className="text-lg">{fileIcon}</span>
+        <span className="text-base">{fileIcon}</span>
         <span className="truncate text-xs font-medium text-text-secondary">
           {localize('com_sources_agent_file')}
         </span>
