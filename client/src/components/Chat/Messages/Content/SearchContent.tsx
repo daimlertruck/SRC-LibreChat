@@ -27,14 +27,14 @@ const SearchContent = ({
   searchResults?: { [key: string]: SearchResultData };
 }) => {
   const enableUserMsgMarkdown = useRecoilValue(store.enableUserMsgMarkdown);
-  const { messageId, conversationId } = message;
+  const { messageId } = message;
 
   const attachmentMap = useMemo(() => mapAttachments(attachments ?? []), [attachments]);
 
   if (Array.isArray(message.content) && message.content.length > 0) {
     return (
       <SearchContext.Provider value={{ searchResults }}>
-        <Sources messageId={messageId} conversationId={conversationId} />
+        <Sources />
         {message.content
           .filter((part: TMessageContentParts | undefined) => part)
           .map((part: TMessageContentParts | undefined, idx: number) => {

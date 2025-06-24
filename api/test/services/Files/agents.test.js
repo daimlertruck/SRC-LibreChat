@@ -28,9 +28,6 @@ jest.mock('../../../server/utils/files', () => ({
   cleanFileName: jest.fn((name) => name),
 }));
 
-jest.mock('../../../server/utils/url', () => ({
-  createAbsoluteUrl: jest.fn((req, path) => `http://localhost${path}`),
-}));
 
 jest.mock('../../../config', () => ({
   logger: {

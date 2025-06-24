@@ -10,7 +10,6 @@ import { useSearchContext } from '~/Providers';
 import { AnimatedTabs } from '~/components/ui';
 import useLocalize from '~/hooks/useLocalize';
 import { useAgentFileDownload } from '~/hooks/useAgentFileDownload';
-import { sortPagesByRelevance } from '~/utils/fileSorting';
 import {
   OGDialog,
   OGDialogClose,
@@ -176,6 +175,24 @@ interface FileItemProps {
   messageId: string;
   conversationId: string;
   expanded?: boolean;
+}
+
+/**
+ * Sorts page numbers by their relevance scores in descending order (highest first)
+ */
+function sortPagesByRelevance(
+  pages: number[],
+  pageRelevance?: Record<number, number>,
+): number[] {
+  if (!pageRelevance || Object.keys(pageRelevance).length === 0) {
+    return pages; // Return original order if no relevance data
+  }
+
+  return [...pages].sort((a, b) => {
+    const relevanceA = pageRelevance[a] || 0;
+    const relevanceB = pageRelevance[b] || 0;
+    return relevanceB - relevanceA; // Highest relevance first
+  });
 }
 
 const FileItem = React.memo(function FileItem({

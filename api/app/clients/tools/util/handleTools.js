@@ -30,7 +30,6 @@ const { primeFiles: primeCodeFiles } = require('~/server/services/Files/Code/pro
 const { createFileSearchTool, primeFiles: primeSearchFiles } = require('./fileSearch');
 const { getUserPluginAuthValue } = require('~/server/services/PluginService');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
-const { getCachedTools } = require('~/server/services/Config');
 const { createMCPTool } = require('~/server/services/MCP');
 
 /**
@@ -235,7 +234,7 @@ const loadTools = async ({
 
   /** @type {Record<string, string>} */
   const toolContextMap = {};
-  const appTools = (await getCachedTools({ includeGlobal: true })) ?? {};
+  const appTools = options.req?.app?.locals?.availableTools ?? {};
 
   for (const tool of tools) {
     if (tool === Tools.execute_code) {

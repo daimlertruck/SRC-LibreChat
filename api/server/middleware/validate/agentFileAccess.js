@@ -3,7 +3,6 @@ const { Message } = require('~/db/models');
 const { Tools } = require('librechat-data-provider');
 const { getS3URL } = require('~/server/services/Files/S3/crud');
 const { cleanFileName } = require('~/server/utils/files');
-const { createAbsoluteUrl } = require('~/server/utils/url');
 const { logger } = require('~/config');
 
 /**
@@ -137,17 +136,17 @@ const generateAgentSourceUrl = async (req, res) => {
       } catch (s3Error) {
         logger.error('[generateAgentSourceUrl] Error generating S3 URL:', s3Error);
         // Fallback to local download with absolute URL
-        downloadUrl = createAbsoluteUrl(req, `/api/files/download/${userId}/${file.file_id}`);
+        downloadUrl = `${req.protocol}://${req.get('host')}/api/files/download/${userId}/${file.file_id}`;
       }
     } else if (file.source === 'vectordb') {
       // Vector database files - use existing download endpoint with absolute URL
-      downloadUrl = createAbsoluteUrl(req, `/api/files/download/${userId}/${file.file_id}`);
+      downloadUrl = `${req.protocol}://${req.get('host')}/api/files/download/${userId}/${file.file_id}`;
     } else if (file.source === 'local') {
       // Local files - disable download functionality
       return res.status(403).json({ error: 'Download not available for local files' });
     } else {
       // Fallback to local download endpoint with absolute URL
-      downloadUrl = createAbsoluteUrl(req, `/api/files/download/${userId}/${file.file_id}`);
+      downloadUrl = `${req.protocol}://${req.get('host')}/api/files/download/${userId}/${file.file_id}`;
     }
 
     const response = {

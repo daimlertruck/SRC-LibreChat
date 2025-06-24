@@ -438,17 +438,13 @@ export default function useEventHandlers({
         isTemporary = false,
       } = submission;
 
-
-      // CRITICAL FIX: Process attachments from responseMessage into messageAttachmentsMap
       if (responseMessage?.attachments && responseMessage.attachments.length > 0) {
-
         // Process each attachment through the attachmentHandler
         responseMessage.attachments.forEach((attachment) => {
           const attachmentData = {
             ...attachment,
             messageId: responseMessage.messageId,
           };
-
 
           attachmentHandler({
             data: attachmentData,
