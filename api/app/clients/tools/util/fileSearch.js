@@ -117,10 +117,7 @@ const createFileSearchTool = async ({ req, files, entity_id }) => {
               file_id: file?.file_id,
               relevance: 1.0 - distance,
               page: docInfo.metadata.page || null,
-              // Extract S3 metadata from RAG API if available
               storage_type: docInfo.metadata.storage_type || docInfo.metadata.storageType,
-              s3_bucket: docInfo.metadata.s3_bucket || docInfo.metadata.s3Bucket,
-              s3_key: docInfo.metadata.s3_key || docInfo.metadata.s3Key,
             };
           }),
         )

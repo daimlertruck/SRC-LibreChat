@@ -103,10 +103,10 @@ describe('File Processing - Filename Sanitization', () => {
       const originalFilename = 'My Document.pdf';
 
       const sanitizedFilename = sanitizeFilename(originalFilename);
-      const s3Key = `${basePath}/${userId}/${fileId}__${sanitizedFilename}`;
+      const localPath = `${basePath}/${userId}/${fileId}__${sanitizedFilename}`;
 
-      expect(s3Key).toBe('uploads/user-123/file-456__My_Document.pdf');
-      expect(s3Key).not.toContain(' ');
+      expect(localPath).toBe('uploads/user-123/file-456__My_Document.pdf');
+      expect(localPath).not.toContain(' ');
     });
 
     it('should prevent NoSuchKey errors', () => {
@@ -118,10 +118,10 @@ describe('File Processing - Filename Sanitization', () => {
 
       filenames.forEach((filename) => {
         const sanitized = sanitizeFilename(filename);
-        const s3Key = `uploads/user/file__${sanitized}`;
+        const localPath = `uploads/user/file__${sanitized}`;
 
-        expect(s3Key).not.toContain(' ');
-        expect(s3Key).toMatch(/^uploads\/user\/file__[\w\-_.]+$/);
+        expect(localPath).not.toContain(' ');
+        expect(localPath).toMatch(/^uploads\/user\/file__[\w\-_.]+$/);
       });
     });
   });

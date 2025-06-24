@@ -51,9 +51,7 @@ describe('processAgentResponse', () => {
     Files.find.mockResolvedValue([
       {
         file_id: 'file123',
-        source: 's3',
-        s3Bucket: 'test-bucket',
-        s3Key: 'uploads/user123/file123__test.pdf',
+        source: 'local',
       },
     ]);
 
@@ -87,8 +85,6 @@ Content: Test content`,
     expect(source.fileId).toBe('file123');
     expect(source.fileName).toBe('test.pdf');
     expect(source.metadata.storageType).toBe('s3');
-    expect(source.metadata.s3Bucket).toBe('test-bucket');
-    expect(source.metadata.s3Key).toBe('uploads/user123/file123__test.pdf');
   });
 
   it('should use configured fileStrategy when file metadata is missing', async () => {
@@ -101,8 +97,6 @@ Content: Test content`,
       {
         file_id: 'file123',
         // source is undefined, should fallback to fileStrategy
-        s3Bucket: null,
-        s3Key: null,
       },
     ]);
 
@@ -133,8 +127,8 @@ Content: Test content`,
     });
 
     Files.find.mockResolvedValue([
-      { file_id: 'file1', source: 's3', s3Bucket: 'bucket', s3Key: 'key1' },
-      { file_id: 'file2', source: 's3', s3Bucket: 'bucket', s3Key: 'key2' },
+      { file_id: 'file1', source: 'local' },
+      { file_id: 'file2', source: 'local' },
     ]);
 
     const response = { messageId: 'msg123' };

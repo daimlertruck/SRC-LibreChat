@@ -65,9 +65,6 @@ const file: Schema<IMongoFile> = new Schema(
     model: {
       type: String,
     },
-    s3Key: String,
-    s3Bucket: String,
-    vectorEmbedded: Boolean,
     width: Number,
     height: Number,
     metadata: {

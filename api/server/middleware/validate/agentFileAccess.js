@@ -103,49 +103,33 @@ const generateAgentSourceUrl = async (req, res) => {
     const expiryMinutes = parseInt(process.env.AGENT_FILE_URL_EXPIRY) || 5;
     let downloadUrl;
 
-    // Generate URL based on storage type
-    const storageType = fileSource.metadata?.storageType || file.source;
-    const s3Key = fileSource.metadata?.s3Key || file.metadata?.s3Key;
-    const s3Bucket = fileSource.metadata?.s3Bucket || file.metadata?.s3Bucket;
-
-    if (
-      (storageType === 's3' && s3Key && s3Bucket) ||
-      (file.source === 's3' && s3Key && s3Bucket)
-    ) {
-      // S3 stored files - use enhanced getS3URL with clean filename
+    // Handle S3 files - generate fresh URL with clean filename
+    if (file.source === 's3' && file.filepath && file.filepath.includes('amazonaws.com')) {
       try {
-        // Extract parts from s3Key: "basePath/userId/fileName"
-        const keyParts = s3Key.split('/');
-        if (keyParts.length >= 3) {
-          const basePath = keyParts[0]; // e.g., "uploads"
-          const extractedUserId = keyParts[1]; // e.g., "67f2bbc8e0ed32a5fd0e39c9"
-          const fileName = keyParts.slice(2).join('/'); // e.g., "bc8245e6-df02-4947-9675-06dd03e352b8__mars.pptx"
-
-          // Get clean filename for download
-          const cleanedFilename = cleanFileName(fileSource.fileName);
-
-          downloadUrl = await getS3URL({
-            userId: extractedUserId,
-            fileName: fileName,
-            basePath: basePath,
-            customFilename: cleanedFilename,
-          });
-        } else {
-          throw new Error(`Invalid S3 key format: ${s3Key}`);
+        let s3Key = file.s3Key;
+        if (!s3Key) {
+          // Extract key from presigned URL, removing query parameters
+          const url = new URL(file.filepath);
+          s3Key = url.pathname.substring(1); // Remove leading slash
         }
-      } catch (s3Error) {
-        logger.error('[generateAgentSourceUrl] Error generating S3 URL:', s3Error);
-        // Fallback to local download with absolute URL
-        downloadUrl = `${req.protocol}://${req.get('host')}/api/files/download/${userId}/${file.file_id}`;
+        const keyParts = s3Key.split('/');
+        const basePath = keyParts[0];
+        const extractedUserId = keyParts[1];
+        const fileName = keyParts.slice(2).join('/');
+        const cleanedFilename = cleanFileName(fileSource.fileName);
+
+        downloadUrl = await getS3URL({
+          userId: extractedUserId,
+          fileName: fileName,
+          basePath: basePath,
+          customFilename: cleanedFilename,
+        });
+      } catch (error) {
+        logger.error(`[generateAgentSourceUrl] Error generating S3 URL: ${error.message}`);
+        downloadUrl = file.filepath; // Fallback to existing URL
       }
-    } else if (file.source === 'vectordb') {
-      // Vector database files - use existing download endpoint with absolute URL
-      downloadUrl = `${req.protocol}://${req.get('host')}/api/files/download/${userId}/${file.file_id}`;
-    } else if (file.source === 'local') {
-      // Local files - disable download functionality
-      return res.status(403).json({ error: 'Download not available for local files' });
     } else {
-      // Fallback to local download endpoint with absolute URL
+      // Fallback to API endpoint for non-S3 files
       downloadUrl = `${req.protocol}://${req.get('host')}/api/files/download/${userId}/${file.file_id}`;
     }
 

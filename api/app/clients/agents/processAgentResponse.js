@@ -25,7 +25,24 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
     const fileSearchResults = [];
 
     for (const part of contentParts) {
-      const toolResult = extractToolResult(part);
+      // Extract tool result
+      let toolResult = null;
+      if (part.type === 'tool_call' && part.tool_call?.name === 'file_search') {
+        toolResult = part.tool_result || part.tool_call?.output;
+      } else if (part.type === 'tool_result' || part.type === 'tool_call') {
+        const resultContent =
+          part.tool_result || part.content || part.text || part.result || part.tool_call?.output;
+        if (resultContent && typeof resultContent === 'string' && resultContent.includes('File:')) {
+          toolResult = resultContent;
+        }
+      } else if (
+        part.content &&
+        typeof part.content === 'string' &&
+        part.content.includes('File:')
+      ) {
+        toolResult = part.content;
+      }
+
       if (toolResult) {
         const results = parseFileSearchResults(toolResult);
         fileSearchResults.push(...results);
@@ -115,8 +132,6 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
         pageRelevance: result.pageRelevance || {},
         metadata: {
           storageType: configuredStorageType,
-          s3Bucket: fileRecord.s3Bucket,
-          s3Key: fileRecord.s3Key,
         },
       };
     });
@@ -188,10 +203,6 @@ const parseFileSearchResults = (formattedResults) => {
       let content = '';
       let page = null;
 
-      let storage_type = null;
-      let s3_bucket = null;
-      let s3_key = null;
-
       for (const line of lines) {
         const trimmedLine = line.trim();
         if (trimmedLine.startsWith('File: ')) {
@@ -205,15 +216,6 @@ const parseFileSearchResults = (formattedResults) => {
         } else if (trimmedLine.startsWith('Page: ')) {
           const pageStr = trimmedLine.replace('Page: ', '').trim();
           page = pageStr !== 'N/A' && pageStr !== '' ? parseInt(pageStr) : null;
-        } else if (trimmedLine.startsWith('Storage_Type: ')) {
-          const storageStr = trimmedLine.replace('Storage_Type: ', '').trim();
-          storage_type = storageStr !== 'N/A' && storageStr !== '' ? storageStr : null;
-        } else if (trimmedLine.startsWith('S3_Bucket: ')) {
-          const bucketStr = trimmedLine.replace('S3_Bucket: ', '').trim();
-          s3_bucket = bucketStr !== 'N/A' && bucketStr !== '' ? bucketStr : null;
-        } else if (trimmedLine.startsWith('S3_Key: ')) {
-          const keyStr = trimmedLine.replace('S3_Key: ', '').trim();
-          s3_key = keyStr !== 'N/A' && keyStr !== '' ? keyStr : null;
         } else if (trimmedLine.startsWith('Content: ')) {
           content = trimmedLine.replace('Content: ', '').trim();
         }
@@ -221,7 +223,7 @@ const parseFileSearchResults = (formattedResults) => {
 
       if (filename && (relevance > 0 || file_id)) {
         // Use extracted file_id or generate one as fallback
-        const finalFileId = file_id || extractFileIdFromFilename(filename);
+        const finalFileId = file_id || filename.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
 
         const parsedResult = {
           file_id: finalFileId,
@@ -231,10 +233,6 @@ const parseFileSearchResults = (formattedResults) => {
           page,
           // Store page-specific relevance for sorting
           pageRelevance: page ? { [page]: relevance || 0.5 } : {},
-          // Include RAG API storage metadata
-          storage_type,
-          s3_bucket,
-          s3_key,
         };
 
         results.push(parsedResult);
@@ -268,45 +266,6 @@ const extractOriginalFilename = (internalFilename) => {
 
   // If it doesn't match the pattern, return as-is
   return internalFilename;
-};
-
-/**
- * Extracts or generates a file ID from filename
- * @param {string} filename - The filename
- * @returns {string} File ID
- */
-const extractFileIdFromFilename = (filename) => {
-  // This is a simple implementation - in production you might want to
-  // maintain a mapping of filenames to file IDs or extract from metadata
-  return filename.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-};
-
-/**
- * Extracts tool result from content part, handling multiple formats
- * @param {Object} part - Content part to extract from
- * @returns {string|null} Tool result string or null if not found
- */
-const extractToolResult = (part) => {
-  // Direct tool_call with file_search name
-  if (part.type === 'tool_call' && part.tool_call?.name === 'file_search') {
-    return part.tool_result || part.tool_call?.output;
-  }
-
-  // Check tool result content for file search patterns
-  if (part.type === 'tool_result' || part.type === 'tool_call') {
-    const resultContent =
-      part.tool_result || part.content || part.text || part.result || part.tool_call?.output;
-    if (resultContent && typeof resultContent === 'string' && resultContent.includes('File:')) {
-      return resultContent;
-    }
-  }
-
-  // Check direct content for file search patterns
-  if (part.content && typeof part.content === 'string' && part.content.includes('File:')) {
-    return part.content;
-  }
-
-  return null;
 };
 
 module.exports = {

@@ -102,9 +102,7 @@ describe('Agent File Services', () => {
 
       Files.findOne.mockResolvedValue({
         file_id: 'file123',
-        source: 's3',
-        s3Bucket: 'test-bucket',
-        s3Key: 'uploads/user123/file123__test.pdf',
+        source: 'local',
       });
 
       await validateAgentFileAccess(req, res, next);
@@ -220,8 +218,7 @@ describe('Agent File Services', () => {
           file_id: 'file123',
           source: 's3',
           metadata: {
-            s3Bucket: 'test-bucket',
-            s3Key: 'uploads/user123/file123__test.pdf',
+            storageType: 'local',
           },
         },
         message: {
@@ -234,9 +231,7 @@ describe('Agent File Services', () => {
                     fileId: 'file123',
                     fileName: 'test.pdf',
                     metadata: {
-                      storageType: 's3',
-                      s3Bucket: 'test-bucket',
-                      s3Key: 'uploads/user123/file123__test.pdf',
+                      storageType: 'local',
                     },
                   },
                 ],

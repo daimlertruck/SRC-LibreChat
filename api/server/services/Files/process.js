@@ -658,28 +658,6 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     filepath = result.filepath;
   }
 
-  // Extract S3 details for root-level storage
-  let s3Bucket = null;
-  let s3Key = null;
-
-  if (source === 's3') {
-    // First try environment variable
-    s3Bucket = process.env.S3_BUCKET_NAME;
-
-    // If env var is not set, extract bucket from storage result filepath
-    if (!s3Bucket && storageResult.filepath) {
-      try {
-        const url = new URL(storageResult.filepath);
-        if (url.hostname.includes('.s3.')) {
-          s3Bucket = url.hostname.split('.')[0];
-        }
-      } catch (error) {
-        logger.error('[processAgentFileUpload] Error extracting S3 bucket from URL:', error);
-      }
-    }
-
-    s3Key = `${basePath}/${req.user.id}/${file_id}__${sanitizeFilename(file.originalname)}`;
-  }
 
   const fileInfo = removeNullishValues({
     user: req.user.id,
@@ -694,10 +672,6 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     type: file.mimetype,
     embedded,
     source,
-    s3Bucket,
-    s3Key,
-    vectorEmbedded:
-      tool_resource === EToolResources.file_search ? embeddingResult?.embedded : undefined,
     height,
     width,
   });

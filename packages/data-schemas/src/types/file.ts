@@ -16,9 +16,6 @@ export interface IMongoFile extends Omit<Document, 'model'> {
   usage: number;
   source: string;
   model?: string;
-  s3Key?: string;
-  s3Bucket?: string;
-  vectorEmbedded?: boolean;
   width?: number;
   height?: number;
   metadata?: {

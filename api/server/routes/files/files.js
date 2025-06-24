@@ -340,30 +340,10 @@ router.get('/download/:userId/:file_id', async (req, res) => {
   }
 });
 
-// Simple rate limiting middleware
-const rateLimitMiddleware = async (req, res, next) => {
-  try {
-    if (agentFileRateLimiter.consume) {
-      await agentFileRateLimiter.consume(req.user.id);
-    }
-    next();
-  } catch (rejRes) {
-    logger.warn(`Rate limit exceeded for agent file access`, {
-      userId: req.user.id,
-      retryAfter: rejRes.msBeforeNext,
-    });
-
-    res.status(429).json({
-      error: 'Too many requests',
-      retryAfter: Math.round(rejRes.msBeforeNext / 1000) || 900,
-    });
-  }
-};
-
 // Simplified agent source URL endpoint
 router.post(
   '/agent-source-url',
-  rateLimitMiddleware,
+  agentFileRateLimiter,
   validateAgentFileRequest,
   validateAgentFileAccess,
   generateAgentSourceUrl,
