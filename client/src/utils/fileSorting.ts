@@ -6,12 +6,12 @@
  */
 export function sortPagesByRelevance(
   pages: number[],
-  pageRelevance?: Record<number, number>
+  pageRelevance?: Record<number, number>,
 ): number[] {
   if (!pageRelevance || Object.keys(pageRelevance).length === 0) {
     return pages; // Return original order if no relevance data
   }
-  
+
   return [...pages].sort((a, b) => {
     const relevanceA = pageRelevance[a] || 0;
     const relevanceB = pageRelevance[b] || 0;

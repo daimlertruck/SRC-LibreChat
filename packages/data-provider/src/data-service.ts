@@ -524,22 +524,6 @@ export const getCodeOutputDownload = async (url: string): Promise<AxiosResponse>
   });
 };
 
-export const getAgentSourceDownload = async ({
-  fileId,
-  messageId,
-  conversationId,
-}: {
-  fileId: string;
-  messageId: string;
-  conversationId: string;
-}): Promise<{ downloadUrl: string; fileName?: string; mimeType?: string }> => {
-  return request.post(`${endpoints.files()}/agent-source-url`, {
-    fileId,
-    messageId,
-    conversationId,
-  });
-};
-
 export const deleteFiles = async (payload: {
   files: f.BatchFile[];
   agent_id?: string;

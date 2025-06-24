@@ -2,7 +2,7 @@ const {
   validateAgentFileAccess,
   validateAgentFileRequest,
   generateAgentSourceUrl,
-} = require('../../../server/services/Files/agents');
+} = require('../../../server/middleware/validate/agentFileAccess');
 const { Files } = require('../../../models');
 const { Message } = require('../../../db/models');
 const { Tools } = require('librechat-data-provider');

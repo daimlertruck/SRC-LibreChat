@@ -23,6 +23,7 @@ export const ErrorMessage = ({
 }) => {
   const localize = useLocalize();
   if (text === 'Error connecting to server, try refreshing the page.') {
+    console.log('error message', message);
     return (
       <Suspense
         fallback={
@@ -124,6 +125,7 @@ const MessageContent = ({
   ...props
 }: TMessageContentProps) => {
   const { message } = props;
+  const { messageId } = message;
 
   const { thinkingContent, regularContent } = useMemo(() => {
     const thinkingMatch = text.match(/:::thinking([\s\S]*?):::/);
@@ -156,9 +158,14 @@ const MessageContent = ({
   return (
     <>
       {thinkingContent.length > 0 && (
-        <Thinking key={`thinking-${message.messageId}`}>{thinkingContent}</Thinking>
+        <Thinking key={`thinking-${messageId}`}>{thinkingContent}</Thinking>
       )}
-      <DisplayMessage showCursor={showRegularCursor} text={regularContent} {...props} />
+      <DisplayMessage
+        key={`display-${messageId}`}
+        showCursor={showRegularCursor}
+        text={regularContent}
+        {...props}
+      />
       {unfinishedMessage}
     </>
   );

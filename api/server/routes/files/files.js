@@ -34,7 +34,7 @@ const {
   generateAgentSourceUrl,
   validateAgentFileAccess,
   validateAgentFileRequest,
-} = require('~/server/services/Files/agents');
+} = require('~/server/middleware/validate/agentFileAccess');
 
 const router = express.Router();
 

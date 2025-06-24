@@ -1,6 +1,10 @@
-import { QueryKeys, dataService, EModelEndpoint, defaultOrderQuery } from 'librechat-data-provider';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { QueryObserverResult, UseQueryOptions } from '@tanstack/react-query';
+import { QueryKeys, dataService, EModelEndpoint, defaultOrderQuery, request } from 'librechat-data-provider';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type {
+  QueryObserverResult,
+  UseQueryOptions,
+  UseMutationResult,
+} from '@tanstack/react-query';
 import type t from 'librechat-data-provider';
 
 /**
@@ -73,5 +77,31 @@ export const useGetAgentByIdQuery = (
       retry: false,
       ...config,
     },
+  );
+};
+
+export const getAgentSourceDownload = async ({
+  fileId,
+  messageId,
+  conversationId,
+}: {
+  fileId: string;
+  messageId: string;
+  conversationId: string;
+}): Promise<{ downloadUrl: string; fileName?: string; mimeType?: string }> => {
+  return request.post('/api/files/agent-source-url', {
+    fileId,
+    messageId,
+    conversationId,
+  });
+};
+
+export const useAgentSourceDownload = (): UseMutationResult<
+  { downloadUrl: string; fileName?: string; mimeType?: string },
+  Error,
+  { fileId: string; messageId: string; conversationId: string }
+> => {
+  return useMutation((params: { fileId: string; messageId: string; conversationId: string }) =>
+    getAgentSourceDownload(params),
   );
 };

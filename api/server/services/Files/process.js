@@ -2,8 +2,6 @@ const fs = require('fs');
 const path = require('path');
 const mime = require('mime');
 const { v4 } = require('uuid');
-
-// LibreChat data provider imports
 const {
   isUUID,
   megabyte,
@@ -20,8 +18,6 @@ const {
 } = require('librechat-data-provider');
 const { sanitizeFilename } = require('@librechat/api');
 const { EnvVar } = require('@librechat/agents');
-
-// Local service imports
 const {
   convertImage,
   resizeAndConvert,

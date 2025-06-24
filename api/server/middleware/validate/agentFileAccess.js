@@ -1,7 +1,7 @@
 const { Files } = require('~/models');
 const { Message } = require('~/db/models');
 const { Tools } = require('librechat-data-provider');
-const { getS3URL } = require('./S3/crud');
+const { getS3URL } = require('~/server/services/Files/S3/crud');
 const { cleanFileName } = require('~/server/utils/files');
 const { createAbsoluteUrl } = require('~/server/utils/url');
 const { logger } = require('~/config');
