@@ -219,6 +219,7 @@ router.get('/code/download/:session_id/:fileId', async (req, res) => {
 
 router.get('/download/:userId/:file_id', async (req, res) => {
   try {
+    //this shouldbe in normal middleware check
     const { userId, file_id } = req.params;
     logger.debug(`File download requested by user ${userId}: ${file_id}`);
 
@@ -245,7 +246,9 @@ router.get('/download/:userId/:file_id', async (req, res) => {
       logger.warn(`${errorPrefix} has no associated model: ${file_id}`);
       return res.status(400).send('The model used when creating this file is not available');
     }
+    //middle ware stops here
 
+    //controller function logic starts here
     const { getDownloadStream } = getStrategyFunctions(file.source);
     if (!getDownloadStream) {
       logger.warn(`${errorPrefix} has no stream method implemented: ${file.source}`);
@@ -280,36 +283,6 @@ router.get('/download/:userId/:file_id', async (req, res) => {
       setHeaders();
       logger.debug(`File ${file_id} downloaded from OpenAI`);
       passThrough.body.pipe(res);
-    } else if (file.source === FileSources.s3) {
-      // For S3 files, redirect to fresh presigned URL instead of streaming
-      logger.debug('[DOWNLOAD ROUTE] S3 file detected, generating fresh presigned URL');
-      try {
-        // Extract S3 key from the stored filepath
-        const s3Key = file.filepath.split('/').slice(3).join('/'); // Remove https://bucket.s3.region.amazonaws.com/
-        const fileName = file.filename;
-
-        logger.debug('[DOWNLOAD ROUTE] Extracting S3 info:', {
-          originalFilepath: file.filepath,
-          extractedKey: s3Key,
-          fileName,
-        });
-
-        // Generate fresh presigned URL with cleaned filename
-        const cleanedFilename = cleanFileName(fileName);
-        const freshPresignedUrl = await getS3URL({
-          userId: file.user,
-          fileName: `${file.file_id}__${fileName}`,
-          basePath: file.filepath.includes('/images/') ? 'images' : 'uploads',
-          customFilename: cleanedFilename,
-        });
-
-        // Redirect to S3 presigned URL for direct download
-        return res.redirect(302, freshPresignedUrl);
-      } catch (error) {
-        logger.error('[DOWNLOAD ROUTE] Error generating S3 presigned URL:', error);
-        // Fallback to streaming
-        fileStream = await getDownloadStream(req, file.filepath);
-      }
     } else {
       fileStream = await getDownloadStream(req, file.filepath);
 
@@ -325,6 +298,8 @@ router.get('/download/:userId/:file_id', async (req, res) => {
     res.status(500).send('Error downloading file');
   }
 });
+//create a new endpoint download dedicated to agent source URL generation
+// have its own middleware
 
 // Simplified agent source URL endpoint
 router.post(

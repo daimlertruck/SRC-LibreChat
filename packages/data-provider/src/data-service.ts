@@ -526,7 +526,7 @@ export const getAgentSourceDownload = async (params: {
   messageId: string;
   conversationId: string;
 }): Promise<{ downloadUrl: string; fileName: string }> => {
-  return request.post(`${endpoints.agents({ path: 'files/download' })}`, params);
+  return request.post(`/api/files/agent-source-url`, params);
 };
 
 export const deleteFiles = async (payload: {

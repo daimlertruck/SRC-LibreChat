@@ -17,7 +17,10 @@ import {
   OGDialogContent,
   OGDialogTrigger,
 } from '~/components/ui/OriginalDialog';
-
+import { useFileDownload } from '~/data-provider';
+import { useRecoilValue } from 'recoil';
+import store from '~/store';
+import { useToastContext } from '~/Providers';
 interface SourceItemProps {
   source: ValidSource;
   expanded?: boolean;
@@ -199,13 +202,16 @@ const FileItem = React.memo(function FileItem({
   expanded = false,
 }: FileItemProps) {
   const localize = useLocalize();
+  const user = useRecoilValue(store.user);
+  const { showToast } = useToastContext();
 
   // Use simplified download hook
-  const { downloadFile, isLoading, error } = useAgentFileDownload({
-    conversationId,
-    onSuccess: (_fileName) => {},
-    onError: (_error) => {},
-  });
+  // const { downloadFile, isLoading, error } = useAgentFileDownload({
+  //   conversationId,
+  //   onSuccess: (_fileName) => {},
+  //   onError: (_error) => {},
+  // });
+  const { refetch: downloadFile } = useFileDownload(user?.id ?? '', file.file_id);
 
   // Extract error message logic to avoid duplication
   const getErrorMessage = useCallback(
@@ -238,11 +244,31 @@ const FileItem = React.memo(function FileItem({
       if (isLocalFile) {
         return;
       }
-
-      await downloadFile(file.file_id, messageId, file.filename);
+      try {
+        const stream = await downloadFile();
+        if (stream.data == null || stream.data === '') {
+          console.error('Error downloading file: No data found');
+          showToast({
+            status: 'error',
+            message: localize('com_ui_download_error'),
+          });
+          return;
+        }
+        const link = document.createElement('a');
+        link.href = stream.data;
+        link.setAttribute('download', file.filename);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(stream.data);
+      } catch (error) {
+        console.error('Error downloading file:', error);
+      }
+      // await downloadFile(file.file_id, messageId, file.filename);
     },
     [downloadFile, file.file_id, file.filename, messageId, isLocalFile],
   );
+  const isLoading = false; // Replace with actual loading state if needed
 
   // Memoize file icon computation for performance
   const fileIcon = useMemo(() => {
@@ -261,7 +287,7 @@ const FileItem = React.memo(function FileItem({
     filename: file.filename,
     status: isLoading ? localize('com_sources_downloading_status') : '',
   });
-
+  const error = null; // Replace with actual error state if needed
   if (expanded) {
     return (
       <button
