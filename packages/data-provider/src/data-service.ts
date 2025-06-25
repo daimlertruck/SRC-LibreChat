@@ -524,6 +524,14 @@ export const getCodeOutputDownload = async (url: string): Promise<AxiosResponse>
   });
 };
 
+export const getAgentSourceDownload = async (params: {
+  fileId: string;
+  messageId: string;
+  conversationId: string;
+}): Promise<{ downloadUrl: string; fileName: string }> => {
+  return request.post(`${endpoints.agents({ path: 'files/download' })}`, params);
+};
+
 export const deleteFiles = async (payload: {
   files: f.BatchFile[];
   agent_id?: string;

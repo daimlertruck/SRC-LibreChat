@@ -363,3 +363,11 @@ export const useUpdateFeedbackMutation = (
     },
   );
 };
+
+export const useAgentSourceDownload = (): UseMutationResult<
+  { downloadUrl: string; fileName: string },
+  Error,
+  { fileId: string; messageId: string; conversationId: string }
+> => {
+  return useMutation((params) => dataService.getAgentSourceDownload(params));
+};
