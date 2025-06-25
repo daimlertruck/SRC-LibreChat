@@ -6,58 +6,15 @@ const { cleanFileName } = require('~/server/utils/files');
 const { logger } = require('~/config');
 
 /**
- * Simple validation for agent file access using web search pattern
- * Files are stored as attachments in messages
+ * Utility: Check if file exists in attachments (eliminates duplication)
  */
-const validateAgentFileAccess = async (req, res, next) => {
-  try {
-    const { fileId, messageId, conversationId } = req.body;
-    const userId = req.user.id;
-
-    // Find message with file_search attachments
-    const message = await Message.findOne({
-      messageId,
-      conversationId,
-      user: userId,
-    });
-
-    if (!message) {
-      logger.warn(`[validateAgentFileAccess] Message not found: ${messageId}`);
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    // Check for file_search attachments containing the requested fileId
-    const hasFileAccess = message.attachments?.some((attachment) => {
-      if (attachment.type === Tools.file_search && attachment[Tools.file_search]) {
-        return attachment[Tools.file_search].sources?.some((source) => source.fileId === fileId);
-      }
-      return false;
-    });
-
-    if (!hasFileAccess) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    // Find file metadata
-    if (!Files) {
-      logger.error('[validateAgentFileAccess] Files model not available');
-      return res.status(500).json({ error: 'Files model not available' });
-    }
-
-    const file = await Files.findOne({ file_id: fileId });
-
-    if (!file) {
-      return res.status(404).json({ error: 'File not found' });
-    }
-
-    // Store file metadata for next middleware
-    req.file = file;
-    req.message = message;
-    next();
-  } catch (error) {
-    logger.error('[validateAgentFileAccess] Error:', error);
-    res.status(500).json({ error: 'Internal error' });
-  }
+const hasFileInAttachments = (attachments, fileId) => {
+  if (!attachments) return false;
+  return attachments.some(
+    (attachment) =>
+      attachment.type === Tools.file_search &&
+      attachment[Tools.file_search]?.sources?.some((source) => source.fileId === fileId),
+  );
 };
 
 /**
@@ -76,25 +33,51 @@ const validateAgentFileRequest = (req, res, next) => {
 };
 
 /**
+ * Validate user access to agent file
+ */
+const validateAgentFileAccess = async (req, res, next) => {
+  try {
+    const { fileId, messageId, conversationId } = req.body;
+    const userId = req.user.id;
+
+    const [message, file] = await Promise.all([
+      Message.findOne({ messageId, conversationId, user: userId }).select('attachments'),
+      Files.findOne({ file_id: fileId }).select('filename source filepath s3Key type'),
+    ]);
+
+    if (!message) {
+      logger.warn(`[validateAgentFileAccess] Message not found: ${messageId}`);
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (!hasFileInAttachments(message.attachments, fileId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    req.file = file;
+    req.message = message;
+    next();
+  } catch (error) {
+    logger.error('[validateAgentFileAccess] Error:', error);
+    res.status(500).json({ error: 'Internal error' });
+  }
+};
+
+/**
  * Generate download URL for agent file
- * Simple implementation following LibreChat patterns
  */
 const generateAgentSourceUrl = async (req, res) => {
   try {
     const { file, message } = req;
     const { fileId } = req.body;
-    const userId = req.user.id;
 
-    // Find file metadata from message attachments
-    let fileSource = null;
-    message.attachments?.forEach((attachment) => {
-      if (attachment.type === Tools.file_search && attachment[Tools.file_search]) {
-        const source = attachment[Tools.file_search].sources?.find((s) => s.fileId === fileId);
-        if (source) {
-          fileSource = source;
-        }
-      }
-    });
+    const fileSource = message.attachments
+      .find((att) => att.type === Tools.file_search)
+      ?.[Tools.file_search]?.sources?.find((s) => s.fileId === fileId);
 
     if (!fileSource) {
       return res.status(404).json({ error: 'File source not found in message' });
@@ -130,7 +113,7 @@ const generateAgentSourceUrl = async (req, res) => {
       }
     } else {
       // Fallback to API endpoint for non-S3 files
-      downloadUrl = `${req.protocol}://${req.get('host')}/api/files/download/${userId}/${file.file_id}`;
+      downloadUrl = `${req.protocol}://${req.get('host')}/api/files/download/${req.user.id}/${file.file_id}`;
     }
 
     const response = {
@@ -140,9 +123,7 @@ const generateAgentSourceUrl = async (req, res) => {
       mimeType: file.type || 'application/octet-stream',
     };
 
-    // No access tracking needed with simplified architecture
     logger.debug(`[generateAgentSourceUrl] Generated URL for file: ${fileSource.fileName}`);
-
     res.json(response);
   } catch (error) {
     logger.error('[generateAgentSourceUrl] Error:', error);
@@ -151,7 +132,7 @@ const generateAgentSourceUrl = async (req, res) => {
 };
 
 module.exports = {
-  validateAgentFileAccess,
   validateAgentFileRequest,
+  validateAgentFileAccess,
   generateAgentSourceUrl,
 };

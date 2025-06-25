@@ -1,14 +1,11 @@
 const { Files } = require('~/models');
 const { getCustomConfig } = require('~/server/services/Config/getCustomConfig');
+const { nanoid } = require('nanoid');
+const { Tools } = require('librechat-data-provider');
 const { logger } = require('~/config');
 
 /**
  * Processes agent response to extract and capture file references from tool calls
- * @param {Object} response - The agent response object
- * @param {string} userId - User ID
- * @param {string} conversationId - Conversation ID
- * @param {Array} contentParts - Content parts from the agent response
- * @returns {Object} Processed response with attachments
  */
 const processAgentResponse = async (response, userId, conversationId, contentParts = []) => {
   try {
@@ -17,147 +14,33 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
       return response;
     }
 
-    // Get configurable max citations from librechat.yaml
     const customConfig = await getCustomConfig();
     const maxCitations = customConfig?.endpoints?.agents?.maxCitations ?? 30;
 
-    // Look for file search tool calls in content parts
-    const fileSearchResults = [];
-
-    for (const part of contentParts) {
-      // Extract tool result
-      let toolResult = null;
-      if (part.type === 'tool_call' && part.tool_call?.name === 'file_search') {
-        toolResult = part.tool_result || part.tool_call?.output;
-      } else if (part.type === 'tool_result' || part.type === 'tool_call') {
-        const resultContent =
-          part.tool_result || part.content || part.text || part.result || part.tool_call?.output;
-        if (resultContent && typeof resultContent === 'string' && resultContent.includes('File:')) {
-          toolResult = resultContent;
-        }
-      } else if (
-        part.content &&
-        typeof part.content === 'string' &&
-        part.content.includes('File:')
-      ) {
-        toolResult = part.content;
-      }
-
-      if (toolResult) {
-        const results = parseFileSearchResults(toolResult);
-        fileSearchResults.push(...results);
-      }
-    }
-
-    if (fileSearchResults.length === 0) {
-      logger.warn(
-        '[processAgentResponse] No file search results found - no citations will be created',
-      );
+    const fileSearchResults = extractFileResults(contentParts);
+    if (!fileSearchResults.length) {
+      logger.warn('[processAgentResponse] No file search results found');
       return response;
     }
 
-    // Transform results into source format using RAG API metadata as source of truth
-    // Ensure file diversity by including at least one result per file, then fill with highest relevance
-
-    // Group results by file_id to ensure file diversity
-    const resultsByFileId = {};
-    fileSearchResults.forEach((result) => {
-      if (!resultsByFileId[result.file_id]) {
-        resultsByFileId[result.file_id] = [];
-      }
-      resultsByFileId[result.file_id].push(result);
-    });
-
-    // Get the highest relevance result from each file (file representatives)
-    const fileRepresentatives = [];
-    for (const fileId in resultsByFileId) {
-      const fileResults = resultsByFileId[fileId].sort((a, b) => b.relevance - a.relevance);
-      fileRepresentatives.push(fileResults[0]); // Take the best result from each file
-    }
-
-    // Sort file representatives by their highest relevance score
-    fileRepresentatives.sort((a, b) => b.relevance - a.relevance);
-
-    // Start with file representatives, then add remaining high-relevance results up to limit
-    const selectedResults = [...fileRepresentatives];
-
-    // If we have room for more results, add additional high-relevance results
-    if (selectedResults.length < maxCitations) {
-      const allResultsSorted = fileSearchResults.sort((a, b) => b.relevance - a.relevance);
-
-      for (const result of allResultsSorted) {
-        if (selectedResults.length >= maxCitations) break;
-
-        // Check if this exact result is already included (avoid duplicates)
-        const alreadyIncluded = selectedResults.some(
-          (selected) =>
-            selected.file_id === result.file_id &&
-            selected.page === result.page &&
-            Math.abs(selected.relevance - result.relevance) < 0.0001, // Handle floating point precision
-        );
-
-        if (!alreadyIncluded) {
-          selectedResults.push(result);
-        }
-      }
-    }
-
-    // Look up storage metadata from LibreChat database in batch
-    const finalResults = selectedResults.slice(0, maxCitations);
-    const fileIds = [...new Set(finalResults.map((result) => result.file_id))];
-    // Batch lookup all files at once
-    let fileMetadataMap = {};
-    try {
-      const files = await Files.find({ file_id: { $in: fileIds } });
-      fileMetadataMap = files.reduce((map, file) => {
-        // Store full file object to access both metadata and root-level S3 fields
-        map[file.file_id] = file;
-        return map;
-      }, {});
-    } catch (lookupError) {
-      logger.error('[processAgentResponse] Error looking up file metadata:', lookupError);
-    }
-
-    // Create sources with metadata
-    const sources = finalResults.map((result) => {
-      const fileRecord = fileMetadataMap[result.file_id] || {};
-      // Use configured file strategy from librechat.yaml instead of defaulting to 'local'
-      const configuredStorageType = fileRecord.source || customConfig?.fileStrategy || 'local';
-      return {
-        fileId: result.file_id,
-        fileName: fileRecord.filename || 'Unknown File',
-        pages: result.page ? [result.page] : [],
-        relevance: result.relevance,
-        type: 'file',
-        pageRelevance: result.pageRelevance || {},
-        metadata: {
-          storageType: configuredStorageType,
-        },
-      };
-    });
+    const selectedResults = selectBestResults(fileSearchResults, maxCitations);
+    const sources = await createSourcesWithMetadata(selectedResults, customConfig);
 
     if (sources.length > 0) {
-      // File references will be stored as message attachments (following web search pattern)
       logger.debug(
-        '[processAgentResponse] Creating consolidated file search attachment with sources:',
+        '[processAgentResponse] Creating file search attachment with sources:',
         sources.length,
       );
-
-      const { nanoid } = require('nanoid');
-      const { Tools } = require('librechat-data-provider');
 
       const fileSearchAttachment = {
         messageId: response.messageId,
         toolCallId: 'file_search_results',
-        conversationId: conversationId,
+        conversationId,
         name: `${Tools.file_search}_file_search_results_${nanoid()}`,
         type: Tools.file_search,
-        [Tools.file_search]: {
-          sources: sources,
-        },
+        [Tools.file_search]: { sources },
       };
 
-      // Add to response attachments array for processing (only once per message)
       response.attachments = response.attachments || [];
       response.attachments.push(fileSearchAttachment);
     }
@@ -165,32 +48,109 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
     return response;
   } catch (error) {
     logger.error('[processAgentResponse] Error processing agent response:', error);
-    return response; // Return original response on error
+    return response;
   }
 };
 
 /**
- * Parses formatted file search results string into structured data
- * @param {string} formattedResults - The formatted results from file search tool
- * @returns {Array} Array of parsed file results
+ * Extract file results from content parts (simplified)
+ */
+const extractFileResults = (contentParts) => {
+  const results = [];
+
+  for (const part of contentParts) {
+    let toolResult = null;
+
+    if (part.type === 'tool_call' && part.tool_call?.name === 'file_search') {
+      toolResult = part.tool_result || part.tool_call?.output;
+    } else if (
+      (part.type === 'tool_result' || part.type === 'tool_call') &&
+      part.tool_result &&
+      typeof part.tool_result === 'string' &&
+      part.tool_result.includes('File:')
+    ) {
+      toolResult = part.tool_result;
+    } else if (part.content && typeof part.content === 'string' && part.content.includes('File:')) {
+      toolResult = part.content;
+    }
+
+    if (toolResult) {
+      results.push(...parseFileSearchResults(toolResult));
+    }
+  }
+
+  return results;
+};
+
+/**
+ * Select best results with file diversity (simplified algorithm)
+ */
+const selectBestResults = (results, maxCitations) => {
+  const byFile = {};
+  results.forEach((result) => {
+    if (!byFile[result.file_id]) {
+      byFile[result.file_id] = [];
+    }
+    byFile[result.file_id].push(result);
+  });
+
+  const representatives = [];
+  for (const fileId in byFile) {
+    const fileResults = byFile[fileId].sort((a, b) => b.relevance - a.relevance);
+    representatives.push(fileResults[0]);
+  }
+
+  return representatives.sort((a, b) => b.relevance - a.relevance).slice(0, maxCitations);
+};
+
+/**
+ * Create sources with metadata
+ */
+const createSourcesWithMetadata = async (results, customConfig) => {
+  const fileIds = [...new Set(results.map((result) => result.file_id))];
+
+  let fileMetadataMap = {};
+  try {
+    const files = await Files.find({ file_id: { $in: fileIds } });
+    fileMetadataMap = files.reduce((map, file) => {
+      map[file.file_id] = file;
+      return map;
+    }, {});
+  } catch (error) {
+    logger.error('[processAgentResponse] Error looking up file metadata:', error);
+  }
+
+  return results.map((result) => {
+    const fileRecord = fileMetadataMap[result.file_id] || {};
+    const configuredStorageType = fileRecord.source || customConfig?.fileStrategy || 'local';
+
+    return {
+      fileId: result.file_id,
+      fileName: fileRecord.filename || 'Unknown File',
+      pages: result.page ? [result.page] : [],
+      relevance: result.relevance,
+      type: 'file',
+      pageRelevance: result.pageRelevance || {},
+      metadata: { storageType: configuredStorageType },
+    };
+  });
+};
+
+/**
+ * Parse file search results (simplified)
  */
 const parseFileSearchResults = (formattedResults) => {
   const results = [];
 
   try {
-    // Check if there's internal data with page information
     let dataToProcess = formattedResults;
     const internalDataMatch = formattedResults.match(
       /<!-- INTERNAL_DATA_START -->\n(.*?)\n<!-- INTERNAL_DATA_END -->/s,
     );
     if (internalDataMatch) {
-      // Use the internal data which has complete information including pages
       dataToProcess = internalDataMatch[1];
     }
 
-    // Try multiple parsing strategies
-
-    // Strategy 1: Split by multiple newlines or separator
     const sections = dataToProcess.split(/\n\s*\n|\n---\n/);
 
     for (const section of sections) {
@@ -206,13 +166,11 @@ const parseFileSearchResults = (formattedResults) => {
       for (const line of lines) {
         const trimmedLine = line.trim();
         if (trimmedLine.startsWith('File: ')) {
-          const rawFilename = trimmedLine.replace('File: ', '').trim();
-          filename = rawFilename;
+          filename = trimmedLine.replace('File: ', '').trim();
         } else if (trimmedLine.startsWith('File_ID: ')) {
           file_id = trimmedLine.replace('File_ID: ', '').trim();
         } else if (trimmedLine.startsWith('Relevance: ')) {
-          const relevanceStr = trimmedLine.replace('Relevance: ', '').trim();
-          relevance = parseFloat(relevanceStr) || 0;
+          relevance = parseFloat(trimmedLine.replace('Relevance: ', '').trim()) || 0;
         } else if (trimmedLine.startsWith('Page: ')) {
           const pageStr = trimmedLine.replace('Page: ', '').trim();
           page = pageStr !== 'N/A' && pageStr !== '' ? parseInt(pageStr) : null;
@@ -222,20 +180,15 @@ const parseFileSearchResults = (formattedResults) => {
       }
 
       if (filename && (relevance > 0 || file_id)) {
-        // Use extracted file_id or generate one as fallback
         const finalFileId = file_id || filename.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-
-        const parsedResult = {
+        results.push({
           file_id: finalFileId,
           filename,
-          relevance: relevance || 0.5, // Default relevance if not parsed
+          relevance: relevance || 0.5,
           content,
           page,
-          // Store page-specific relevance for sorting
           pageRelevance: page ? { [page]: relevance || 0.5 } : {},
-        };
-
-        results.push(parsedResult);
+        });
       }
     }
   } catch (error) {
@@ -247,5 +200,4 @@ const parseFileSearchResults = (formattedResults) => {
 
 module.exports = {
   processAgentResponse,
-  parseFileSearchResults,
 };
