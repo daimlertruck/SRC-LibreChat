@@ -106,49 +106,37 @@ const createFileSearchTool = async ({ req, files, entity_id }) => {
 
       const formattedResults = validResults
         .flatMap((result, fileIndex) =>
-          result.data.map(([docInfo, distance]) => {
-            const filename = docInfo.metadata.source.split('/').pop();
-            const file = files[fileIndex]; // Get corresponding file info
-
-            return {
-              filename,
-              content: docInfo.page_content,
-              distance,
-              file_id: file?.file_id,
-              relevance: 1.0 - distance,
-              page: docInfo.metadata.page || null,
-              storage_type: docInfo.metadata.storage_type || docInfo.metadata.storageType,
-            };
-          }),
+          result.data.map(([docInfo, distance]) => ({
+            filename: docInfo.metadata.source.split('/').pop(),
+            content: docInfo.page_content,
+            distance,
+            file_id: files[fileIndex]?.file_id,
+            page: docInfo.metadata.page || null,
+          })),
         )
         // TODO: results should be sorted by relevance, not distance
         .sort((a, b) => a.distance - b.distance)
         // TODO: make this configurable
         .slice(0, 10);
 
-      // Format for display (File, Relevance, Content only)
       const formattedString = formattedResults
         .map(
           (result) =>
-            `File: ${result.filename}\nRelevance: ${result.relevance.toFixed(4)}\nContent: ${
+            `File: ${result.filename}\nRelevance: ${(1.0 - result.distance).toFixed(4)}\nContent: ${
               result.content
             }\n`,
         )
         .join('\n---\n');
 
-      // Also store the full results with pages and storage metadata for internal processing
-      // This ensures the processAgentResponse can access all metadata from RAG API
-      const fullResults = formattedResults
+      // Add hidden file_id data for processAgentResponse parsing
+      const internalData = formattedResults
         .map(
           (result) =>
-            `File: ${result.filename}\nFile_ID: ${result.file_id}\nRelevance: ${result.relevance.toFixed(4)}\nPage: ${result.page || 'N/A'}\nStorage_Type: ${result.storage_type || 'N/A'}\nS3_Bucket: ${result.s3_bucket || 'N/A'}\nS3_Key: ${result.s3_key || 'N/A'}\nContent: ${
-              result.content
-            }\n`,
+            `File: ${result.filename}\nFile_ID: ${result.file_id}\nRelevance: ${(1.0 - result.distance).toFixed(4)}\nPage: ${result.page || 'N/A'}\nContent: ${result.content}\n`,
         )
         .join('\n---\n');
 
-      // Return the display format, but include a hidden marker with full data for processing
-      return `${formattedString}\n\n<!-- INTERNAL_DATA_START -->\n${fullResults}\n<!-- INTERNAL_DATA_END -->`;
+      return `${formattedString}\n\n<!-- INTERNAL_DATA_START -->\n${internalData}\n<!-- INTERNAL_DATA_END -->`;
     },
     {
       name: Tools.file_search,

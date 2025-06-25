@@ -125,7 +125,7 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
       const configuredStorageType = fileRecord.source || customConfig?.fileStrategy || 'local';
       return {
         fileId: result.file_id,
-        fileName: result.filename,
+        fileName: fileRecord.filename || 'Unknown File',
         pages: result.page ? [result.page] : [],
         relevance: result.relevance,
         type: 'file',
@@ -207,7 +207,7 @@ const parseFileSearchResults = (formattedResults) => {
         const trimmedLine = line.trim();
         if (trimmedLine.startsWith('File: ')) {
           const rawFilename = trimmedLine.replace('File: ', '').trim();
-          filename = extractOriginalFilename(rawFilename);
+          filename = rawFilename;
         } else if (trimmedLine.startsWith('File_ID: ')) {
           file_id = trimmedLine.replace('File_ID: ', '').trim();
         } else if (trimmedLine.startsWith('Relevance: ')) {
@@ -245,31 +245,7 @@ const parseFileSearchResults = (formattedResults) => {
   return results;
 };
 
-/**
- * Extracts the original filename from internal storage format
- * Internal format: originalname_fileid_timestamp.ext
- * Example: mars_1c6af286_20250616_105837.pptx -> mars.pptx
- * @param {string} internalFilename - The internal storage filename
- * @returns {string} Original filename
- */
-const extractOriginalFilename = (internalFilename) => {
-  if (!internalFilename) return internalFilename;
-
-  // Check if this follows the internal naming pattern: name_id_timestamp.ext
-  const pattern = /^(.+?)_[a-f0-9]{8}_\d{8}_\d{6}\.(.+)$/;
-  const match = internalFilename.match(pattern);
-
-  if (match) {
-    const [, originalName, extension] = match;
-    return `${originalName}.${extension}`;
-  }
-
-  // If it doesn't match the pattern, return as-is
-  return internalFilename;
-};
-
 module.exports = {
   processAgentResponse,
   parseFileSearchResults,
-  extractOriginalFilename,
 };
