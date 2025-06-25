@@ -16,6 +16,7 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
 
     const customConfig = await getCustomConfig();
     const maxCitations = customConfig?.endpoints?.agents?.maxCitations ?? 30;
+    const maxCitationsPerFile = customConfig?.endpoints?.agents?.maxCitationsPerFile ?? 5;
 
     const fileSearchResults = extractFileResults(contentParts);
     if (!fileSearchResults.length) {
@@ -23,7 +24,7 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
       return response;
     }
 
-    const selectedResults = selectBestResults(fileSearchResults, maxCitations);
+    const selectedResults = selectBestResults(fileSearchResults, maxCitations, maxCitationsPerFile);
     const sources = await createSourcesWithMetadata(selectedResults, customConfig);
 
     if (sources.length > 0) {
@@ -83,9 +84,9 @@ const extractFileResults = (contentParts) => {
 };
 
 /**
- * Select best results with file diversity (simplified algorithm)
+ * Select best results with file diversity, allowing multiple pages per file
  */
-const selectBestResults = (results, maxCitations) => {
+const selectBestResults = (results, maxCitations, maxCitationsPerFile = 5) => {
   const byFile = {};
   results.forEach((result) => {
     if (!byFile[result.file_id]) {
@@ -97,7 +98,9 @@ const selectBestResults = (results, maxCitations) => {
   const representatives = [];
   for (const fileId in byFile) {
     const fileResults = byFile[fileId].sort((a, b) => b.relevance - a.relevance);
-    representatives.push(fileResults[0]);
+    // Take up to maxCitationsPerFile results per file instead of just one
+    const selectedFromFile = fileResults.slice(0, maxCitationsPerFile);
+    representatives.push(...selectedFromFile);
   }
 
   return representatives.sort((a, b) => b.relevance - a.relevance).slice(0, maxCitations);

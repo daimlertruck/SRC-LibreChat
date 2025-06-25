@@ -252,6 +252,7 @@ export const agentsEndpointSchema = baseEndpointSchema
       disableBuilder: z.boolean().optional().default(false),
       maxRecursionLimit: z.number().optional(),
       maxCitations: z.number().min(1).max(50).optional().default(30),
+      maxCitationsPerFile: z.number().min(1).max(10).optional().default(7),
       allowedProviders: z.array(z.union([z.string(), eModelEndpointSchema])).optional(),
       capabilities: z
         .array(z.nativeEnum(AgentCapabilities))
@@ -263,6 +264,7 @@ export const agentsEndpointSchema = baseEndpointSchema
     disableBuilder: false,
     capabilities: defaultAgentCapabilities,
     maxCitations: 30,
+    maxCitationsPerFile: 7,
   });
 
 export type TAgentsEndpoint = z.infer<typeof agentsEndpointSchema>;

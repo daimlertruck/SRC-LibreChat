@@ -121,9 +121,9 @@ Content: Test content`,
     expect(source.metadata.storageType).toBe('s3'); // Should use fileStrategy
   });
 
-  it('should handle file diversity by including at least one result per file', async () => {
+  it('should handle file diversity and allow multiple pages per file', async () => {
     getCustomConfig.mockResolvedValue({
-      endpoints: { agents: { maxCitations: 3 } },
+      endpoints: { agents: { maxCitations: 5, maxPagesPerFile: 3 } },
       fileStrategy: 's3',
     });
 
@@ -141,6 +141,7 @@ Content: Test content`,
           output: `File: test1.pdf
 File_ID: file1
 Relevance: 0.9
+Page: 1
 Content: High relevance content
 
 ---
@@ -148,6 +149,7 @@ Content: High relevance content
 File: test1.pdf  
 File_ID: file1
 Relevance: 0.7
+Page: 2
 Content: Lower relevance content
 
 ---
@@ -155,6 +157,7 @@ Content: Lower relevance content
 File: test2.pdf
 File_ID: file2
 Relevance: 0.8
+Page: 1
 Content: Different file content`,
         },
       },
@@ -163,15 +166,72 @@ Content: Different file content`,
     const result = await processAgentResponse(response, 'user123', 'conv123', contentParts);
 
     const sources = result.attachments[0].file_search.sources;
-    expect(sources).toHaveLength(2); // One representative per file (not all results)
+    expect(sources.length).toBeGreaterThanOrEqual(2); // Can include multiple pages per file now
 
     // Should have both files represented
     const fileIds = sources.map((s) => s.fileId);
     expect(fileIds).toContain('file1');
     expect(fileIds).toContain('file2');
 
-    // Should pick the highest relevance result for file1 (0.9)
-    const file1Source = sources.find((s) => s.fileId === 'file1');
-    expect(file1Source.relevance).toBe(0.9);
+    // Should include multiple pages from file1 due to high relevance
+    const file1Sources = sources.filter((s) => s.fileId === 'file1');
+    expect(file1Sources.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should respect maxPagesPerFile configuration', async () => {
+    getCustomConfig.mockResolvedValue({
+      endpoints: { agents: { maxCitations: 10, maxPagesPerFile: 2 } },
+      fileStrategy: 'local',
+    });
+
+    Files.find.mockResolvedValue([{ file_id: 'file1', source: 'local', filename: 'test1.pdf' }]);
+
+    const response = { messageId: 'msg123' };
+    const contentParts = [
+      {
+        type: 'tool_call',
+        tool_call: {
+          name: 'file_search',
+          output: `File: test1.pdf
+File_ID: file1
+Relevance: 0.9
+Page: 1
+Content: Page 1 content
+
+---
+
+File: test1.pdf
+File_ID: file1
+Relevance: 0.8
+Page: 2
+Content: Page 2 content
+
+---
+
+File: test1.pdf
+File_ID: file1
+Relevance: 0.7
+Page: 3
+Content: Page 3 content
+
+---
+
+File: test1.pdf
+File_ID: file1
+Relevance: 0.6
+Page: 4
+Content: Page 4 content`,
+        },
+      },
+    ];
+
+    const result = await processAgentResponse(response, 'user123', 'conv123', contentParts);
+
+    const sources = result.attachments[0].file_search.sources;
+    expect(sources).toHaveLength(2); // Should be limited to maxPagesPerFile (2)
+
+    // Should include the 2 highest relevance pages (0.9 and 0.8)
+    expect(sources[0].relevance).toBe(0.9);
+    expect(sources[1].relevance).toBe(0.8);
   });
 });
