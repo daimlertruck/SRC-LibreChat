@@ -1,0 +1,51 @@
+name: Deploy Librechat AI
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: environment
+        description: Select the environment
+
+jobs:
+  deploy-to-aws-ecr:
+    runs-on:
+      - Linux
+    environment: ${{inputs.environment}}
+    permissions:
+      id-token: write # This is required for requesting the GitHub JWT
+      contents: read # default, but must be specified when other creds are specified (line before)
+
+    env:
+      ACCOUNT_ID: ${{ vars.ACCOUNT_ID }}
+      CICD_ENTRY_ROLE: ${{ vars.CICD_ENTRY_ROLE }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install AWS cli
+        run: |
+          sudo apt update && sudo apt install -y curl unzip
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -qq awscliv2.zip
+          sudo ./aws/install
+
+      - name: Assume Deployment Role
+        uses: dtcloud-actions/aws/login@v1
+        with:
+          client-id: ${{ vars.CICD_CLIENT_ID }}
+          audience: api://arn/aws/iam//${{ vars.ACCOUNT_ID }}/role/${{
+            vars.CICD_ENTRY_ROLE }}
+          arn: arn:aws:iam::${{ vars.ACCOUNT_ID }}:role/${{ vars.CICD_ENTRY_ROLE }}
+
+      - name: build docker image
+        run: |
+          export AWS_REGION=eu-central-1
+          aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.eu-central-1.amazonaws.com"
+          docker build --build-arg REGION="eu-central-1" -t "$ACCOUNT_ID.dkr.ecr.eu-central-1.amazonaws.com/librechat-api:${{ github.ref_name}}" .
+
+      - name: push docker image
+        run: |
+          export AWS_REGION=eu-central-1
+          aws sts get-caller-identity
+          aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.eu-central-1.amazonaws.com"
+          docker push "$ACCOUNT_ID.dkr.ecr.eu-central-1.amazonaws.com/librechat-api:${{ github.ref_name}}"

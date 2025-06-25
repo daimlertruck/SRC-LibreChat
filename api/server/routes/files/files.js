@@ -1,5 +1,7 @@
 const fs = require('fs').promises;
 const express = require('express');
+const rateLimit = require('express-rate-limit');
+const { RedisStore } = require('rate-limit-redis');
 const { EnvVar } = require('@librechat/agents');
 const {
   Time,
@@ -19,14 +21,41 @@ const {
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { getOpenAIClient } = require('~/server/controllers/assistants/helpers');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
-const { refreshS3FileUrls } = require('~/server/services/Files/S3/crud');
+const { refreshS3FileUrls, getS3URL } = require('~/server/services/Files/S3/crud');
 const { getFiles, batchUpdateFiles } = require('~/models/File');
 const { getAssistant } = require('~/models/Assistant');
 const { getAgent } = require('~/models/Agent');
+const { cleanFileName } = require('~/server/utils/files');
 const { getLogStores } = require('~/cache');
+const { removePorts, isEnabled } = require('~/server/utils');
+const ioredisClient = require('~/cache/ioredisClient');
 const { logger } = require('~/config');
+const {
+  generateAgentSourceUrl,
+  validateAgentFileAccess,
+  validateAgentFileRequest,
+} = require('~/server/middleware/validate/agentFileAccess');
 
 const router = express.Router();
+
+// Rate limiter for agent file requests
+const agentFileRateLimiter = rateLimit({
+  windowMs: (parseInt(process.env.AGENT_FILE_RATE_WINDOW) || 15) * 60 * 1000, // 15 minutes
+  max: parseInt(process.env.AGENT_FILE_RATE_LIMIT) || 50,
+  message: 'Too many agent file requests, please try again later.',
+  keyGenerator: removePorts,
+  handler: (req, res) => {
+    logger.warn(`Rate limit exceeded for agent file requests from ${req.ip}`);
+    return res.status(429).json({ error: 'Too many agent file requests, please try again later.' });
+  },
+  store:
+    isEnabled(process.env.USE_REDIS) && ioredisClient
+      ? new RedisStore({
+          sendCommand: (...args) => ioredisClient.call(...args),
+          prefix: 'agent_file_limiter:',
+        })
+      : undefined,
+});
 
 router.get('/', async (req, res) => {
   try {
@@ -193,13 +222,14 @@ router.get('/download/:userId/:file_id', async (req, res) => {
     const { userId, file_id } = req.params;
     logger.debug(`File download requested by user ${userId}: ${file_id}`);
 
+    const errorPrefix = `File download requested by user ${userId}`;
+
     if (userId !== req.user.id) {
       logger.warn(`${errorPrefix} forbidden: ${file_id}`);
       return res.status(403).send('Forbidden');
     }
 
     const [file] = await getFiles({ file_id });
-    const errorPrefix = `File download requested by user ${userId}`;
 
     if (!file) {
       logger.warn(`${errorPrefix} not found: ${file_id}`);
@@ -223,7 +253,8 @@ router.get('/download/:userId/:file_id', async (req, res) => {
     }
 
     const setHeaders = () => {
-      res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+      const cleanedFilename = cleanFileName(file.filename);
+      res.setHeader('Content-Disposition', `attachment; filename="${cleanedFilename}"`);
       res.setHeader('Content-Type', 'application/octet-stream');
       res.setHeader('X-File-Metadata', JSON.stringify(file));
     };
@@ -249,16 +280,60 @@ router.get('/download/:userId/:file_id', async (req, res) => {
       setHeaders();
       logger.debug(`File ${file_id} downloaded from OpenAI`);
       passThrough.body.pipe(res);
+    } else if (file.source === FileSources.s3) {
+      // For S3 files, redirect to fresh presigned URL instead of streaming
+      logger.debug('[DOWNLOAD ROUTE] S3 file detected, generating fresh presigned URL');
+      try {
+        // Extract S3 key from the stored filepath
+        const s3Key = file.filepath.split('/').slice(3).join('/'); // Remove https://bucket.s3.region.amazonaws.com/
+        const fileName = file.filename;
+
+        logger.debug('[DOWNLOAD ROUTE] Extracting S3 info:', {
+          originalFilepath: file.filepath,
+          extractedKey: s3Key,
+          fileName,
+        });
+
+        // Generate fresh presigned URL with cleaned filename
+        const cleanedFilename = cleanFileName(fileName);
+        const freshPresignedUrl = await getS3URL({
+          userId: file.user,
+          fileName: `${file.file_id}__${fileName}`,
+          basePath: file.filepath.includes('/images/') ? 'images' : 'uploads',
+          customFilename: cleanedFilename,
+        });
+
+        // Redirect to S3 presigned URL for direct download
+        return res.redirect(302, freshPresignedUrl);
+      } catch (error) {
+        logger.error('[DOWNLOAD ROUTE] Error generating S3 presigned URL:', error);
+        // Fallback to streaming
+        fileStream = await getDownloadStream(req, file.filepath);
+      }
     } else {
-      fileStream = getDownloadStream(file_id);
+      fileStream = await getDownloadStream(req, file.filepath);
+
+      fileStream.on('error', (streamError) => {
+        logger.error('[DOWNLOAD ROUTE] Stream error:', streamError);
+      });
+
       setHeaders();
       fileStream.pipe(res);
     }
   } catch (error) {
-    logger.error('Error downloading file:', error);
+    logger.error('[DOWNLOAD ROUTE] Error downloading file:', error);
     res.status(500).send('Error downloading file');
   }
 });
+
+// Simplified agent source URL endpoint
+router.post(
+  '/agent-source-url',
+  agentFileRateLimiter,
+  validateAgentFileRequest,
+  validateAgentFileAccess,
+  generateAgentSourceUrl,
+);
 
 router.post('/', async (req, res) => {
   const metadata = req.body;
@@ -290,7 +365,6 @@ router.post('/', async (req, res) => {
       message = error.message;
     }
 
-    // TODO: delete remote file if it exists
     try {
       await fs.unlink(req.file.path);
       cleanup = false;

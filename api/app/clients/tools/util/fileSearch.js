@@ -105,11 +105,13 @@ const createFileSearchTool = async ({ req, files, entity_id }) => {
       }
 
       const formattedResults = validResults
-        .flatMap((result) =>
+        .flatMap((result, fileIndex) =>
           result.data.map(([docInfo, distance]) => ({
             filename: docInfo.metadata.source.split('/').pop(),
             content: docInfo.page_content,
             distance,
+            file_id: files[fileIndex]?.file_id,
+            page: docInfo.metadata.page || null,
           })),
         )
         // TODO: results should be sorted by relevance, not distance
@@ -120,13 +122,21 @@ const createFileSearchTool = async ({ req, files, entity_id }) => {
       const formattedString = formattedResults
         .map(
           (result) =>
-            `File: ${result.filename}\nRelevance: ${1.0 - result.distance.toFixed(4)}\nContent: ${
+            `File: ${result.filename}\nRelevance: ${(1.0 - result.distance).toFixed(4)}\nContent: ${
               result.content
             }\n`,
         )
         .join('\n---\n');
 
-      return formattedString;
+      // Add hidden file_id data for processAgentResponse parsing
+      const internalData = formattedResults
+        .map(
+          (result) =>
+            `File: ${result.filename}\nFile_ID: ${result.file_id}\nRelevance: ${(1.0 - result.distance).toFixed(4)}\nPage: ${result.page || 'N/A'}\nContent: ${result.content}\n`,
+        )
+        .join('\n---\n');
+
+      return `${formattedString}\n\n<!-- INTERNAL_DATA_START -->\n${internalData}\n<!-- INTERNAL_DATA_END -->`;
     },
     {
       name: Tools.file_search,
