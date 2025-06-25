@@ -1,5 +1,7 @@
 import { useState, useRef } from 'react';
 import { useFormContext } from 'react-hook-form';
+import * as Ariakit from '@ariakit/react';
+import { Folder } from 'lucide-react';
 import {
   EModelEndpoint,
   EToolResources,
@@ -8,11 +10,12 @@ import {
   fileConfig as defaultFileConfig,
 } from 'librechat-data-provider';
 import type { ExtendedFile, AgentForm } from '~/common';
-import { useFileHandling, useLocalize, useLazyEffect } from '~/hooks';
+import { useFileHandling, useLocalize, useLazyEffect, useSharePointPicker } from '~/hooks';
+import { DropdownPopup } from '~/components';
 import FileRow from '~/components/Chat/Input/Files/FileRow';
 import FileSearchCheckbox from './FileSearchCheckbox';
-import { useGetFileConfig } from '~/data-provider';
-import { AttachmentIcon } from '~/components/svg';
+import { useGetFileConfig, useGetStartupConfig } from '~/data-provider';
+import { AttachmentIcon, SharePointIcon } from '~/components/svg';
 import { useChatContext } from '~/Providers';
 
 export default function FileSearch({
@@ -27,6 +30,10 @@ export default function FileSearch({
   const { watch } = useFormContext<AgentForm>();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<Map<string, ExtendedFile>>(new Map());
+  const [isPopoverActive, setIsPopoverActive] = useState(false);
+
+  // Get startup configuration for SharePoint feature flag
+  const { data: startupConfig } = useGetStartupConfig();
 
   const { data: fileConfig = defaultFileConfig } = useGetFileConfig({
     select: (data) => mergeFileConfig(data),
@@ -52,7 +59,30 @@ export default function FileSearch({
 
   const endpointFileConfig = fileConfig.endpoints[EModelEndpoint.agents];
   const isUploadDisabled = endpointFileConfig.disabled ?? false;
+  // Check if SharePoint is enabled
+  const sharePointEnabled = startupConfig?.sharePointFilePickerEnabled;
+  const disabledUploadButton = !agent_id || fileSearchChecked === false;
+  // Use SharePoint picker hook
+  const handleSharePointFilesSelected = (sharePointFiles: any[]) => {
+    console.log('SharePoint files selected in FileSearch:', sharePointFiles);
 
+    // For now, just log the files - later we'll integrate with the file handling system
+    sharePointFiles.forEach((file, index) => {
+      console.log(`SharePoint File ${index + 1}:`, {
+        id: file.id,
+        name: file.name,
+        size: file.size,
+        webUrl: file.webUrl,
+        downloadUrl: file.downloadUrl,
+        driveId: file.driveId,
+        itemId: file.itemId,
+      });
+    });
+  };
+  const { openSharePointPicker } = useSharePointPicker({
+    onFilesSelected: handleSharePointFilesSelected,
+    disabled: !agent_id || fileSearchChecked === false,
+  });
   if (isUploadDisabled) {
     return null;
   }
@@ -64,6 +94,38 @@ export default function FileSearch({
     }
     fileInputRef.current?.click();
   };
+
+  const handleLocalFileClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    fileInputRef.current?.click();
+  };
+
+  const dropdownItems = [
+    {
+      label: localize('com_files_upload_local_machine'),
+      onClick: handleLocalFileClick,
+      icon: <Folder className="icon-md" />,
+    },
+    {
+      label: localize('com_files_upload_sharepoint'),
+      onClick: openSharePointPicker,
+      icon: <SharePointIcon className="icon-md" />,
+    },
+  ];
+
+  const menuTrigger = (
+    <Ariakit.MenuButton
+      disabled={disabledUploadButton}
+      className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg font-medium"
+    >
+      <div className="flex w-full items-center justify-center gap-1">
+        <AttachmentIcon className="text-token-text-primary h-4 w-4" />
+        {localize('com_ui_upload_file_search')}
+      </div>
+    </Ariakit.MenuButton>
+  );
 
   return (
     <div className="w-full">
@@ -86,26 +148,41 @@ export default function FileSearch({
           Wrapper={({ children }) => <div className="flex flex-wrap gap-2">{children}</div>}
         />
         <div>
-          <button
-            type="button"
-            disabled={!agent_id || fileSearchChecked === false}
-            className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg font-medium"
-            onClick={handleButtonClick}
-          >
-            <div className="flex w-full items-center justify-center gap-1">
-              <AttachmentIcon className="text-token-text-primary h-4 w-4" />
-              <input
-                multiple={true}
-                type="file"
-                style={{ display: 'none' }}
-                tabIndex={-1}
-                ref={fileInputRef}
-                disabled={!agent_id || fileSearchChecked === false}
-                onChange={handleFileChange}
-              />
-              {localize('com_ui_upload_file_search')}
-            </div>
-          </button>
+          {sharePointEnabled ? (
+            <DropdownPopup
+              gutter={2}
+              menuId="file-search-upload-menu"
+              isOpen={isPopoverActive}
+              setIsOpen={setIsPopoverActive}
+              trigger={menuTrigger}
+              items={dropdownItems}
+              modal={true}
+              unmountOnHide={true}
+            />
+          ) : (
+            <button
+              type="button"
+              disabled={disabledUploadButton}
+              className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg font-medium"
+              onClick={handleButtonClick}
+            >
+              <div className="flex w-full items-center justify-center gap-1">
+                <AttachmentIcon className="text-token-text-primary h-4 w-4" />
+                {localize('com_ui_upload_file_search')}
+              </div>
+            </button>
+          )}
+          {
+            <input
+              multiple={true}
+              type="file"
+              style={{ display: 'none' }}
+              tabIndex={-1}
+              ref={fileInputRef}
+              disabled={disabledUploadButton}
+              onChange={handleFileChange}
+            />
+          }
         </div>
         {/* Disabled Message */}
         {agent_id ? null : (
