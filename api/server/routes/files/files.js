@@ -38,38 +38,24 @@ const {
 
 const router = express.Router();
 
-// Rate limiter using LibreChat patterns
-const createAgentFileRateLimiter = () => {
-  const windowMs = (parseInt(process.env.AGENT_FILE_RATE_WINDOW) || 15) * 60 * 1000; // 15 minutes
-  const max = parseInt(process.env.AGENT_FILE_RATE_LIMIT) || 50;
-  const windowInMinutes = windowMs / 60000;
-  const message = `Too many agent file requests, please try again after ${windowInMinutes} minutes.`;
-
-  const limiterOptions = {
-    windowMs,
-    max,
-    message,
-    keyGenerator: removePorts,
-    handler: (req, res) => {
-      logger.warn(`Rate limit exceeded for agent file requests from ${req.ip}`);
-      return res.status(429).json({ error: message });
-    },
-  };
-
-  // Use Redis store if available
-  if (isEnabled(process.env.USE_REDIS) && ioredisClient) {
-    logger.debug('Using Redis for agent file rate limiter.');
-    const store = new RedisStore({
-      sendCommand: (...args) => ioredisClient.call(...args),
-      prefix: 'agent_file_limiter:',
-    });
-    limiterOptions.store = store;
-  }
-
-  return rateLimit(limiterOptions);
-};
-
-const agentFileRateLimiter = createAgentFileRateLimiter();
+// Rate limiter for agent file requests
+const agentFileRateLimiter = rateLimit({
+  windowMs: (parseInt(process.env.AGENT_FILE_RATE_WINDOW) || 15) * 60 * 1000, // 15 minutes
+  max: parseInt(process.env.AGENT_FILE_RATE_LIMIT) || 50,
+  message: 'Too many agent file requests, please try again later.',
+  keyGenerator: removePorts,
+  handler: (req, res) => {
+    logger.warn(`Rate limit exceeded for agent file requests from ${req.ip}`);
+    return res.status(429).json({ error: 'Too many agent file requests, please try again later.' });
+  },
+  store:
+    isEnabled(process.env.USE_REDIS) && ioredisClient
+      ? new RedisStore({
+          sendCommand: (...args) => ioredisClient.call(...args),
+          prefix: 'agent_file_limiter:',
+        })
+      : undefined,
+});
 
 router.get('/', async (req, res) => {
   try {
