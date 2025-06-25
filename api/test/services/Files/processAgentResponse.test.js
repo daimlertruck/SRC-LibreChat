@@ -51,7 +51,8 @@ describe('processAgentResponse', () => {
     Files.find.mockResolvedValue([
       {
         file_id: 'file123',
-        source: 'local',
+        source: 's3',
+        filename: 'test.pdf',
       },
     ]);
 
@@ -127,8 +128,8 @@ Content: Test content`,
     });
 
     Files.find.mockResolvedValue([
-      { file_id: 'file1', source: 'local' },
-      { file_id: 'file2', source: 'local' },
+      { file_id: 'file1', source: 'local', filename: 'test1.pdf' },
+      { file_id: 'file2', source: 'local', filename: 'test2.pdf' },
     ]);
 
     const response = { messageId: 'msg123' };
@@ -162,11 +163,15 @@ Content: Different file content`,
     const result = await processAgentResponse(response, 'user123', 'conv123', contentParts);
 
     const sources = result.attachments[0].file_search.sources;
-    expect(sources).toHaveLength(3); // All 3 results should be included
+    expect(sources).toHaveLength(2); // One representative per file (not all results)
 
     // Should have both files represented
     const fileIds = sources.map((s) => s.fileId);
     expect(fileIds).toContain('file1');
     expect(fileIds).toContain('file2');
+
+    // Should pick the highest relevance result for file1 (0.9)
+    const file1Source = sources.find((s) => s.fileId === 'file1');
+    expect(file1Source.relevance).toBe(0.9);
   });
 });
