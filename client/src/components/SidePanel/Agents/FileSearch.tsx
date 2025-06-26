@@ -10,8 +10,9 @@ import {
   fileConfig as defaultFileConfig,
 } from 'librechat-data-provider';
 import type { ExtendedFile, AgentForm } from '~/common';
-import { useFileHandling, useLocalize, useLazyEffect, useSharePointPicker } from '~/hooks';
+import { useFileHandling, useLocalize, useLazyEffect } from '~/hooks';
 import { DropdownPopup } from '~/components';
+import { SharePointPickerDialog } from '../../SharePoint';
 import FileRow from '~/components/Chat/Input/Files/FileRow';
 import FileSearchCheckbox from './FileSearchCheckbox';
 import { useGetFileConfig, useGetStartupConfig } from '~/data-provider';
@@ -31,6 +32,7 @@ export default function FileSearch({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<Map<string, ExtendedFile>>(new Map());
   const [isPopoverActive, setIsPopoverActive] = useState(false);
+  const [isSharePointDialogOpen, setIsSharePointDialogOpen] = useState(false);
 
   // Get startup configuration for SharePoint feature flag
   const { data: startupConfig } = useGetStartupConfig();
@@ -62,7 +64,7 @@ export default function FileSearch({
   // Check if SharePoint is enabled
   const sharePointEnabled = startupConfig?.sharePointFilePickerEnabled;
   const disabledUploadButton = !agent_id || fileSearchChecked === false;
-  // Use SharePoint picker hook
+  // Handle SharePoint files selection
   const handleSharePointFilesSelected = (sharePointFiles: any[]) => {
     console.log('SharePoint files selected in FileSearch:', sharePointFiles);
 
@@ -78,11 +80,10 @@ export default function FileSearch({
         itemId: file.itemId,
       });
     });
+
+    // Close dialog after file selection
+    setIsSharePointDialogOpen(false);
   };
-  const { openSharePointPicker } = useSharePointPicker({
-    onFilesSelected: handleSharePointFilesSelected,
-    disabled: !agent_id || fileSearchChecked === false,
-  });
   if (isUploadDisabled) {
     return null;
   }
@@ -110,7 +111,7 @@ export default function FileSearch({
     },
     {
       label: localize('com_files_upload_sharepoint'),
-      onClick: openSharePointPicker,
+      onClick: () => setIsSharePointDialogOpen(true),
       icon: <SharePointIcon className="icon-md" />,
     },
   ];
@@ -191,6 +192,14 @@ export default function FileSearch({
           </div>
         )}
       </div>
+
+      {/* SharePoint Picker Dialog */}
+      <SharePointPickerDialog
+        isOpen={isSharePointDialogOpen}
+        onOpenChange={setIsSharePointDialogOpen}
+        onFilesSelected={handleSharePointFilesSelected}
+        disabled={disabledUploadButton}
+      />
     </div>
   );
 }

@@ -918,5 +918,8 @@
   "com_ui_yes": "Ja",
   "com_ui_zoom": "Zoom",
   "com_user_message": "Du",
-  "com_warning_resubmit_unsupported": "Das erneute Senden der KI-Nachricht wird für diesen Endpunkt nicht unterstützt."
+  "com_warning_resubmit_unsupported": "Das erneute Senden der KI-Nachricht wird für diesen Endpunkt nicht unterstützt.",
+  "com_files_upload_local_machine": "Von lokalem Computer",
+  "com_files_upload_sharepoint": "Von SharePoint",
+  "com_files_sharepoint_picker_title": "Dateien auswählen"
 }

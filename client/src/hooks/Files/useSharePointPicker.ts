@@ -1,32 +1,40 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
+import { useRecoilState } from 'recoil';
 import { useQuery } from '@tanstack/react-query';
 import { useAuthContext } from '~/hooks/AuthContext';
 import { dataService, QueryKeys } from 'librechat-data-provider';
 import { useToastContext } from '~/Providers';
 import { useGetStartupConfig } from '~/data-provider';
+import { useLocalize } from '~/hooks';
 import { SPPickerConfig } from '../../components/SidePanel/Agents/config';
+import store from '~/store';
 
 interface UseSharePointPickerProps {
+  containerNode: HTMLDivElement | null;
   onFilesSelected?: (files: any[]) => void;
+  onClose?: () => void;
   disabled?: boolean;
 }
 
 interface UseSharePointPickerReturn {
   openSharePointPicker: () => void;
-  isPickerOpen: boolean;
-  isLoading: boolean;
+  closeSharePointPicker: () => void;
   error: string | null;
+  cleanup: () => void;
+  isTokenLoading: boolean;
 }
 
 export default function useSharePointPicker({
+  containerNode,
   onFilesSelected,
+  onClose,
   disabled = false,
 }: UseSharePointPickerProps): UseSharePointPickerReturn {
+  const [langcode] = useRecoilState(store.lang);
   const { user } = useAuthContext();
   const { showToast } = useToastContext();
-  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const localize = useLocalize();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const overlayRef = useRef<HTMLDivElement | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const portRef = useRef<MessagePort | null>(null);
   const channelIdRef = useRef<string>('');
@@ -59,15 +67,6 @@ export default function useSharePointPicker({
     staleTime: 50 * 60 * 1000, // 50 minutes (tokens expire in 60 minutes)
     retry: 1,
   });
-
-  // Cleanup on component unmount
-  useEffect(() => {
-    return () => {
-      if (cleanupRef.current) {
-        cleanupRef.current();
-      }
-    };
-  }, []);
 
   // Generate unique channel ID for this picker instance
   const generateChannelId = useCallback(() => {
@@ -105,6 +104,8 @@ export default function useSharePointPicker({
             switch (command.command) {
               case 'authenticate':
                 console.log('Authentication requested, providing token');
+                console.log('Command details:', command); // Add this line
+                console.log('Token available:', !!token?.access_token); // Add this line
                 if (token?.access_token) {
                   port.postMessage({
                     type: 'result',
@@ -142,6 +143,7 @@ export default function useSharePointPicker({
                 if (cleanupRef.current) {
                   cleanupRef.current();
                 }
+                onClose?.();
                 break;
 
               case 'pick': {
@@ -219,7 +221,7 @@ export default function useSharePointPicker({
         console.error('Error processing port message:', error);
       }
     },
-    [token, onFilesSelected, showToast],
+    [token, onFilesSelected, showToast, onClose],
   );
 
   // Initialization message handler - establishes MessagePort communication
@@ -269,9 +271,12 @@ export default function useSharePointPicker({
       return;
     }
 
-    try {
-      setIsPickerOpen(true);
+    if (!containerNode) {
+      console.error('No container ref provided for SharePoint picker');
+      return;
+    }
 
+    try {
       // Generate unique channel ID for this picker instance
       const channelId = generateChannelId();
       channelIdRef.current = channelId;
@@ -312,7 +317,7 @@ export default function useSharePointPicker({
         selection: {
           mode: 'multiple',
         },
-        title: 'LibreChat SharePoint File Picker',
+        title: localize('com_files_sharepoint_picker_title'),
         commands: {
           upload: {
             enabled: false,
@@ -324,32 +329,25 @@ export default function useSharePointPicker({
         search: { enabled: true },
       };
 
-      // Create iframe for picker
+      // Create iframe and inject into container
       const iframe = document.createElement('iframe');
-      iframe.style.width = '1080px';
-      iframe.style.height = '680px';
-      iframe.style.border = '1px solid #ccc';
-      iframe.style.position = 'fixed';
-      iframe.style.top = '50%';
-      iframe.style.left = '50%';
-      iframe.style.transform = 'translate(-50%, -50%)';
-      iframe.style.zIndex = '10000';
-      iframe.style.backgroundColor = 'white';
+      iframe.style.width = '100%';
+      iframe.style.height = '100%';
+      iframe.style.background = '#F5F5F5';
+      iframe.style.border = 'none';
+      iframe.title = 'SharePoint File Picker';
+      iframe.setAttribute(
+        'sandbox',
+        'allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox',
+      );
       iframeRef.current = iframe;
 
-      // Create overlay
-      const overlay = document.createElement('div');
-      overlay.style.position = 'fixed';
-      overlay.style.top = '0';
-      overlay.style.left = '0';
-      overlay.style.width = '100%';
-      overlay.style.height = '100%';
-      overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
-      overlay.style.zIndex = '9999';
-      overlayRef.current = overlay;
+      // Clear container and add iframe
+      containerNode.innerHTML = '';
+      containerNode.appendChild(iframe);
 
-      document.body.appendChild(overlay);
-      overlay.appendChild(iframe);
+      // Add initialization message listener
+      window.addEventListener('message', initMessageHandler);
 
       // Set iframe src to about:blank and wait for load
       iframe.src = 'about:blank';
@@ -360,7 +358,7 @@ export default function useSharePointPicker({
         // Construct query string following Microsoft docs
         const queryString = new URLSearchParams({
           filePicker: JSON.stringify(pickerOptions),
-          locale: 'en-us',
+          locale: langcode || 'en-US',
         });
 
         // Create the absolute URL
@@ -382,69 +380,45 @@ export default function useSharePointPicker({
         win.document.body.appendChild(form);
         form.submit();
       };
-
-      const cleanup = () => {
-        // Remove initialization message listener
-        window.removeEventListener('message', initMessageHandler);
-
-        // Close MessagePort if it exists
-        if (portRef.current) {
-          portRef.current.removeEventListener('message', portMessageHandler);
-          portRef.current.close();
-          portRef.current = null;
-        }
-
-        // Remove DOM elements
-        if (overlayRef.current && overlayRef.current.parentNode) {
-          document.body.removeChild(overlayRef.current);
-        }
-
-        // Reset refs
-        overlayRef.current = null;
-        iframeRef.current = null;
-        channelIdRef.current = '';
-        cleanupRef.current = null;
-        setIsPickerOpen(false);
-      };
-
-      cleanupRef.current = cleanup;
-
-      // Add close button to overlay
-      const closeButton = document.createElement('button');
-      closeButton.textContent = '×';
-      closeButton.style.position = 'absolute';
-      closeButton.style.top = '20px';
-      closeButton.style.right = '20px';
-      closeButton.style.background = 'white';
-      closeButton.style.border = '1px solid #ccc';
-      closeButton.style.borderRadius = '50%';
-      closeButton.style.width = '30px';
-      closeButton.style.height = '30px';
-      closeButton.style.cursor = 'pointer';
-      closeButton.style.fontSize = '20px';
-      closeButton.style.zIndex = '10001';
-      closeButton.onclick = cleanup;
-      overlayRef.current?.appendChild(closeButton);
-
-      // Add initialization message listener to establish MessagePort communication
-      window.addEventListener('message', initMessageHandler);
     } catch (error) {
       console.error('SharePoint file picker error:', error);
       showToast({
         message: 'Failed to open SharePoint file picker.',
         status: 'error',
       });
-      setIsPickerOpen(false);
     }
   };
+  const cleanup = useCallback(() => {
+    // Remove message listener
+    window.removeEventListener('message', initMessageHandler);
+
+    // Close MessagePort if it exists
+    if (portRef.current) {
+      portRef.current.removeEventListener('message', portMessageHandler);
+      portRef.current.close();
+      portRef.current = null;
+    }
+
+    // Clear container
+    if (containerNode) {
+      containerNode.innerHTML = '';
+    }
+    console.log('SharePoint picker cleanup completed');
+  }, [containerNode, initMessageHandler, portMessageHandler]);
+
+  const handleDialogClose = useCallback(() => {
+    // Remove message listener
+    cleanup();
+  }, [cleanup]);
 
   // Check if SharePoint is enabled and user is authenticated
   const isAvailable = startupConfig?.sharePointFilePickerEnabled && isEntraIdUser && !tokenError;
 
   return {
     openSharePointPicker: isAvailable ? openSharePointPicker : () => {},
-    isPickerOpen,
-    isLoading: isTokenLoading,
+    closeSharePointPicker: handleDialogClose,
     error: tokenError ? 'Failed to authenticate with SharePoint' : null,
+    cleanup,
+    isTokenLoading,
   };
 }

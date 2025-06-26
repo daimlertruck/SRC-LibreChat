@@ -1021,6 +1021,7 @@
   "com_ui_usage": "Usage",
   "com_files_upload_local_machine": "From Local Machine",
   "com_files_upload_sharepoint": "From SharePoint",
+  "com_files_sharepoint_picker_title": "Pick Files",
   "com_ui_use_2fa_code": "Use 2FA Code Instead",
   "com_ui_use_backup_code": "Use Backup Code Instead",
   "com_ui_use_memory": "Use memory",
