@@ -173,17 +173,15 @@ export default function FileSearch({
               </div>
             </button>
           )}
-          {
-            <input
-              multiple={true}
-              type="file"
-              style={{ display: 'none' }}
-              tabIndex={-1}
-              ref={fileInputRef}
-              disabled={disabledUploadButton}
-              onChange={handleFileChange}
-            />
-          }
+          <input
+            multiple={true}
+            type="file"
+            style={{ display: 'none' }}
+            tabIndex={-1}
+            ref={fileInputRef}
+            disabled={disabledUploadButton}
+            onChange={handleFileChange}
+          />
         </div>
         {/* Disabled Message */}
         {agent_id ? null : (
@@ -193,7 +191,6 @@ export default function FileSearch({
         )}
       </div>
 
-      {/* SharePoint Picker Dialog */}
       <SharePointPickerDialog
         isOpen={isSharePointDialogOpen}
         onOpenChange={setIsSharePointDialogOpen}
