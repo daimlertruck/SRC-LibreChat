@@ -5,6 +5,7 @@ const { RedisStore } = require('rate-limit-redis');
 const { EnvVar } = require('@librechat/agents');
 const {
   Time,
+  Tools,
   isUUID,
   CacheKeys,
   FileSources,
@@ -21,10 +22,11 @@ const {
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { getOpenAIClient } = require('~/server/controllers/assistants/helpers');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
-const { refreshS3FileUrls, getS3URL } = require('~/server/services/Files/S3/crud');
+const { refreshS3FileUrls } = require('~/server/services/Files/S3/crud');
 const { getFiles, batchUpdateFiles } = require('~/models/File');
 const { getAssistant } = require('~/models/Assistant');
 const { getAgent } = require('~/models/Agent');
+const { Message } = require('~/db/models');
 const { cleanFileName } = require('~/server/utils/files');
 const { getLogStores } = require('~/cache');
 const { removePorts, isEnabled } = require('~/server/utils');
@@ -35,6 +37,25 @@ const {
   validateAgentFileAccess,
   validateAgentFileRequest,
 } = require('~/server/middleware/validate/agentFileAccess');
+
+/**
+ * Checks if user has access to shared agent file through conversation ownership
+ */
+const checkSharedFileAccess = async (userId, fileId) => {
+  try {
+    const messagesWithFile = await Message.find({
+      'attachments.type': Tools.file_search,
+      [`attachments.${Tools.file_search}.sources.fileId`]: fileId,
+    })
+      .select('conversationId user')
+      .lean();
+
+    return messagesWithFile.some((message) => message.user === userId);
+  } catch (error) {
+    logger.error('[checkSharedFileAccess] Error:', error);
+    return false;
+  }
+};
 
 const router = express.Router();
 
@@ -219,17 +240,10 @@ router.get('/code/download/:session_id/:fileId', async (req, res) => {
 
 router.get('/download/:userId/:file_id', async (req, res) => {
   try {
-    //this shouldbe in normal middleware check
     const { userId, file_id } = req.params;
     logger.debug(`File download requested by user ${userId}: ${file_id}`);
 
     const errorPrefix = `File download requested by user ${userId}`;
-
-    if (userId !== req.user.id) {
-      logger.warn(`${errorPrefix} forbidden: ${file_id}`);
-      return res.status(403).send('Forbidden');
-    }
-
     const [file] = await getFiles({ file_id });
 
     if (!file) {
@@ -237,8 +251,24 @@ router.get('/download/:userId/:file_id', async (req, res) => {
       return res.status(404).send('File not found');
     }
 
-    if (!file.filepath.includes(userId)) {
-      logger.warn(`${errorPrefix} forbidden: ${file_id}`);
+    // Extract actual file owner from S3 filepath (e.g., /uploads/ownerId/filename)
+    let actualFileOwner = userId;
+    if (file.filepath && file.filepath.includes('/uploads/')) {
+      const pathMatch = file.filepath.match(/\/uploads\/([^/]+)\//);
+      if (pathMatch) {
+        actualFileOwner = pathMatch[1];
+      }
+    }
+
+    // Check access: either own the file or have shared access through conversations
+    const isFileOwner = req.user.id === actualFileOwner;
+    const hasSharedAccess = !isFileOwner && (await checkSharedFileAccess(req.user.id, file_id));
+
+    if (!isFileOwner && !hasSharedAccess) {
+      return res.status(403).send('Forbidden');
+    }
+
+    if (isFileOwner && userId !== actualFileOwner) {
       return res.status(403).send('Forbidden');
     }
 
@@ -246,9 +276,7 @@ router.get('/download/:userId/:file_id', async (req, res) => {
       logger.warn(`${errorPrefix} has no associated model: ${file_id}`);
       return res.status(400).send('The model used when creating this file is not available');
     }
-    //middle ware stops here
 
-    //controller function logic starts here
     const { getDownloadStream } = getStrategyFunctions(file.source);
     if (!getDownloadStream) {
       logger.warn(`${errorPrefix} has no stream method implemented: ${file.source}`);
@@ -298,8 +326,6 @@ router.get('/download/:userId/:file_id', async (req, res) => {
     res.status(500).send('Error downloading file');
   }
 });
-//create a new endpoint download dedicated to agent source URL generation
-// have its own middleware
 
 // Simplified agent source URL endpoint
 router.post(

@@ -266,7 +266,7 @@ export const agentsEndpointSchema = baseEndpointSchema
     capabilities: defaultAgentCapabilities,
     maxCitations: 30,
     maxCitationsPerFile: 7,
-    minRelevanceScore: 0.45,
+    minRelevanceScore: 0.01,
   });
 
 export type TAgentsEndpoint = z.infer<typeof agentsEndpointSchema>;

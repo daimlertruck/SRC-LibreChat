@@ -17,6 +17,8 @@ interface SourceHovercardProps {
   label: string;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
+  onClick?: (e: React.MouseEvent) => void;
+  isFile?: boolean;
   children?: ReactNode;
 }
 
@@ -46,6 +48,8 @@ export function SourceHovercard({
   label,
   onMouseEnter,
   onMouseLeave,
+  onClick,
+  isFile = false,
   children,
 }: SourceHovercardProps) {
   const localize = useLocalize();
@@ -57,16 +61,27 @@ export function SourceHovercard({
         <span className="flex items-center">
           <Ariakit.HovercardAnchor
             render={
-              <a
-                href={source.link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="ml-1 inline-block h-5 max-w-36 cursor-pointer items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-xl border border-border-heavy bg-surface-secondary px-2 text-xs font-medium no-underline transition-colors hover:bg-surface-hover dark:border-border-medium dark:hover:bg-surface-tertiary"
-                onMouseEnter={onMouseEnter}
-                onMouseLeave={onMouseLeave}
-              >
-                {label}
-              </a>
+              isFile ? (
+                <button
+                  onClick={onClick}
+                  className="ml-1 inline-block h-5 max-w-36 cursor-pointer items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-xl border border-border-heavy bg-surface-secondary px-2 text-xs font-medium text-blue-600 no-underline transition-colors hover:bg-surface-hover dark:border-border-medium dark:text-blue-400 dark:hover:bg-surface-tertiary"
+                  onMouseEnter={onMouseEnter}
+                  onMouseLeave={onMouseLeave}
+                >
+                  {label}
+                </button>
+              ) : (
+                <a
+                  href={source.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-1 inline-block h-5 max-w-36 cursor-pointer items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-xl border border-border-heavy bg-surface-secondary px-2 text-xs font-medium no-underline transition-colors hover:bg-surface-hover dark:border-border-medium dark:hover:bg-surface-tertiary"
+                  onMouseEnter={onMouseEnter}
+                  onMouseLeave={onMouseLeave}
+                >
+                  {label}
+                </a>
+              )
             }
           />
           <Ariakit.HovercardDisclosure className="ml-0.5 rounded-full text-text-primary focus:outline-none focus:ring-2 focus:ring-ring">
@@ -85,23 +100,44 @@ export function SourceHovercard({
               <>
                 <span className="mb-2 flex items-center">
                   <FaviconImage domain={domain} className="mr-2" />
-                  <a
-                    href={source.link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="line-clamp-2 cursor-pointer overflow-hidden text-sm font-bold text-[#0066cc] hover:underline dark:text-blue-400 md:line-clamp-3"
-                  >
-                    {source.attribution || domain}
-                  </a>
+                  {isFile ? (
+                    <button
+                      onClick={onClick}
+                      className="line-clamp-2 cursor-pointer overflow-hidden text-left text-sm font-bold text-[#0066cc] hover:underline dark:text-blue-400 md:line-clamp-3"
+                    >
+                      {source.attribution || source.title || localize('com_file_source')}
+                    </button>
+                  ) : (
+                    <a
+                      href={source.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="line-clamp-2 cursor-pointer overflow-hidden text-sm font-bold text-[#0066cc] hover:underline dark:text-blue-400 md:line-clamp-3"
+                    >
+                      {source.attribution || domain}
+                    </a>
+                  )}
                 </span>
 
-                <h4 className="mb-1.5 mt-0 text-xs text-text-primary md:text-sm">
-                  {source.title || source.link}
-                </h4>
-                {source.snippet && (
-                  <span className="my-2 text-ellipsis break-all text-xs text-text-secondary md:text-sm">
-                    {source.snippet}
-                  </span>
+                {isFile ? (
+                  <>
+                    {source.snippet && (
+                      <span className="my-2 text-ellipsis break-all text-xs text-text-secondary md:text-sm">
+                        {source.snippet}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <h4 className="mb-1.5 mt-0 text-xs text-text-primary md:text-sm">
+                      {source.title || source.link}
+                    </h4>
+                    {source.snippet && (
+                      <span className="my-2 text-ellipsis break-all text-xs text-text-secondary md:text-sm">
+                        {source.snippet}
+                      </span>
+                    )}
+                  </>
                 )}
               </>
             )}

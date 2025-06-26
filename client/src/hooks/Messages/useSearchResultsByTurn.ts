@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { TAttachment, Tools, SearchResultData } from 'librechat-data-provider';
+import { useLocalize } from '~/hooks';
 
 interface FileSource {
   fileId: string;
@@ -25,6 +26,7 @@ interface DeduplicatedSource {
  * @returns A map of turn numbers to their corresponding search result data
  */
 export function useSearchResultsByTurn(attachments?: TAttachment[]) {
+  const localize = useLocalize();
   const searchResultsByTurn = useMemo(() => {
     const turnMap: { [key: string]: SearchResultData } = {};
     let agentFileSearchTurn = 0;
@@ -87,9 +89,13 @@ export function useSearchResultsByTurn(attachments?: TAttachment[]) {
           references: Array.from(deduplicatedSources.values()).map(
             (source) =>
               ({
-                title: source.fileName || 'Unknown File',
+                title: source.fileName || localize('com_file_unknown'),
                 link: `#file-${source.fileId}`, // Create a pseudo-link for file references
-                attribution: `File ID: ${source.fileId}${source.pages && source.pages.length > 0 ? `, Pages: ${source.pages.join(', ')}` : ''}`,
+                attribution: source.fileName || localize('com_file_unknown'), // Show filename in inline display
+                snippet:
+                  source.pages && source.pages.length > 0
+                    ? localize('com_file_pages', { pages: source.pages.join(', ') })
+                    : '', // Only page numbers for hover
                 type: 'file' as const,
                 // Store additional agent-specific data as properties on the reference
                 fileId: source.fileId,
@@ -107,7 +113,7 @@ export function useSearchResultsByTurn(attachments?: TAttachment[]) {
     });
 
     return turnMap;
-  }, [attachments]);
+  }, [attachments, localize]);
 
   return searchResultsByTurn;
 }
