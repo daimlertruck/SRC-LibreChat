@@ -17,6 +17,7 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
     const customConfig = await getCustomConfig();
     const maxCitations = customConfig?.endpoints?.agents?.maxCitations ?? 30;
     const maxCitationsPerFile = customConfig?.endpoints?.agents?.maxCitationsPerFile ?? 5;
+    const minRelevanceScore = customConfig?.endpoints?.agents?.minRelevanceScore ?? 0.45;
 
     const fileSearchResults = extractFileResults(contentParts);
     if (!fileSearchResults.length) {
@@ -24,7 +25,26 @@ const processAgentResponse = async (response, userId, conversationId, contentPar
       return response;
     }
 
-    const selectedResults = selectBestResults(fileSearchResults, maxCitations, maxCitationsPerFile);
+    // Filter results based on relevance score cutoff
+    const filteredResults = fileSearchResults.filter(
+      (result) => result.relevance >= minRelevanceScore,
+    );
+
+    const filteredCount = fileSearchResults.length - filteredResults.length;
+    if (filteredCount > 0) {
+      logger.debug(
+        `[processAgentResponse] Filtered out ${filteredCount} sources below relevance threshold of ${minRelevanceScore}`,
+      );
+    }
+
+    if (filteredResults.length === 0) {
+      logger.debug(
+        `[processAgentResponse] No results above relevance threshold of ${minRelevanceScore} (filtered ${fileSearchResults.length} total results)`,
+      );
+      return response;
+    }
+
+    const selectedResults = selectBestResults(filteredResults, maxCitations, maxCitationsPerFile);
     const sources = await createSourcesWithMetadata(selectedResults, customConfig);
 
     if (sources.length > 0) {

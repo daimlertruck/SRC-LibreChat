@@ -181,6 +181,9 @@ endpoints:
   #   maxCitations: 30
   #   # (optional) Maximum citations per file to include in agent responses, defaults to 7
   #   maxCitationsPerFile: 7
+  #   # (optional) Minimum relevance score for sources to be included in responses, defaults to 0.45 (45% relevance threshold)
+  #   # Set to 0.0 to show all sources (no filtering), or higher like 0.7 for stricter filtering
+  #   minRelevanceScore: 0.45
   #   # (optional) Agent Capabilities available to all users. Omit the ones you wish to exclude. Defaults to list below.
   #   capabilities: ["execute_code", "file_search", "actions", "tools"]
   custom:
