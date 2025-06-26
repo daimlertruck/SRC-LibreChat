@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import * as Ariakit from '@ariakit/react';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Paperclip } from 'lucide-react';
 import { VisuallyHidden } from '@ariakit/react';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
@@ -99,7 +99,13 @@ export function SourceHovercard({
             {!children && (
               <>
                 <span className="mb-2 flex items-center">
-                  <FaviconImage domain={domain} className="mr-2" />
+                  {isFile ? (
+                    <div className="mr-2 flex h-4 w-4 items-center justify-center">
+                      <Paperclip className="h-3 w-3 text-text-secondary" />
+                    </div>
+                  ) : (
+                    <FaviconImage domain={domain} className="mr-2" />
+                  )}
                   {isFile ? (
                     <button
                       onClick={onClick}
