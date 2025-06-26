@@ -9,7 +9,6 @@ import SourcesErrorBoundary from './SourcesErrorBoundary';
 import { useSearchContext } from '~/Providers';
 import { AnimatedTabs } from '~/components/ui';
 import useLocalize from '~/hooks/useLocalize';
-import { useAgentFileDownload } from '~/hooks/useAgentFileDownload';
 import {
   OGDialog,
   OGDialogClose,
@@ -197,20 +196,14 @@ function sortPagesByRelevance(pages: number[], pageRelevance?: Record<number, nu
 
 const FileItem = React.memo(function FileItem({
   file,
-  messageId,
-  conversationId,
+  messageId: _messageId,
+  conversationId: _conversationId,
   expanded = false,
 }: FileItemProps) {
   const localize = useLocalize();
   const user = useRecoilValue(store.user);
   const { showToast } = useToastContext();
 
-  // Use simplified download hook
-  // const { downloadFile, isLoading, error } = useAgentFileDownload({
-  //   conversationId,
-  //   onSuccess: (_fileName) => {},
-  //   onError: (_error) => {},
-  // });
   const { refetch: downloadFile } = useFileDownload(user?.id ?? '', file.file_id);
 
   // Extract error message logic to avoid duplication
@@ -264,11 +257,10 @@ const FileItem = React.memo(function FileItem({
       } catch (error) {
         console.error('Error downloading file:', error);
       }
-      // await downloadFile(file.file_id, messageId, file.filename);
     },
-    [downloadFile, file.file_id, file.filename, messageId, isLocalFile],
+    [downloadFile, file.filename, isLocalFile, localize, showToast],
   );
-  const isLoading = false; // Replace with actual loading state if needed
+  const isLoading = false;
 
   // Memoize file icon computation for performance
   const fileIcon = useMemo(() => {
@@ -287,7 +279,7 @@ const FileItem = React.memo(function FileItem({
     filename: file.filename,
     status: isLoading ? localize('com_sources_downloading_status') : '',
   });
-  const error = null; // Replace with actual error state if needed
+  const error = null;
   if (expanded) {
     return (
       <button

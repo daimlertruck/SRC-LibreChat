@@ -123,7 +123,7 @@ Content: Test content`,
 
   it('should handle file diversity and allow multiple pages per file', async () => {
     getCustomConfig.mockResolvedValue({
-      endpoints: { agents: { maxCitations: 5, maxPagesPerFile: 3 } },
+      endpoints: { agents: { maxCitations: 5, maxCitationsPerFile: 3 } },
       fileStrategy: 's3',
     });
 
@@ -178,9 +178,9 @@ Content: Different file content`,
     expect(file1Sources.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('should respect maxPagesPerFile configuration', async () => {
+  it('should respect maxCitationsPerFile configuration', async () => {
     getCustomConfig.mockResolvedValue({
-      endpoints: { agents: { maxCitations: 10, maxPagesPerFile: 2 } },
+      endpoints: { agents: { maxCitations: 10, maxCitationsPerFile: 2 } },
       fileStrategy: 'local',
     });
 
@@ -228,7 +228,7 @@ Content: Page 4 content`,
     const result = await processAgentResponse(response, 'user123', 'conv123', contentParts);
 
     const sources = result.attachments[0].file_search.sources;
-    expect(sources).toHaveLength(2); // Should be limited to maxPagesPerFile (2)
+    expect(sources).toHaveLength(2); // Should be limited to maxCitationsPerFile (2)
 
     // Should include the 2 highest relevance pages (0.9 and 0.8)
     expect(sources[0].relevance).toBe(0.9);

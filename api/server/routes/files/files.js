@@ -1,7 +1,5 @@
 const fs = require('fs').promises;
 const express = require('express');
-const rateLimit = require('express-rate-limit');
-const { RedisStore } = require('rate-limit-redis');
 const { EnvVar } = require('@librechat/agents');
 const {
   Time,
@@ -29,14 +27,7 @@ const { getAgent } = require('~/models/Agent');
 const { Message } = require('~/db/models');
 const { cleanFileName } = require('~/server/utils/files');
 const { getLogStores } = require('~/cache');
-const { removePorts, isEnabled } = require('~/server/utils');
-const ioredisClient = require('~/cache/ioredisClient');
 const { logger } = require('~/config');
-const {
-  generateAgentSourceUrl,
-  validateAgentFileAccess,
-  validateAgentFileRequest,
-} = require('~/server/middleware/validate/agentFileAccess');
 
 /**
  * Checks if user has access to shared agent file through conversation ownership
@@ -58,25 +49,6 @@ const checkSharedFileAccess = async (userId, fileId) => {
 };
 
 const router = express.Router();
-
-// Rate limiter for agent file requests
-const agentFileRateLimiter = rateLimit({
-  windowMs: (parseInt(process.env.AGENT_FILE_RATE_WINDOW) || 15) * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.AGENT_FILE_RATE_LIMIT) || 50,
-  message: 'Too many agent file requests, please try again later.',
-  keyGenerator: removePorts,
-  handler: (req, res) => {
-    logger.warn(`Rate limit exceeded for agent file requests from ${req.ip}`);
-    return res.status(429).json({ error: 'Too many agent file requests, please try again later.' });
-  },
-  store:
-    isEnabled(process.env.USE_REDIS) && ioredisClient
-      ? new RedisStore({
-          sendCommand: (...args) => ioredisClient.call(...args),
-          prefix: 'agent_file_limiter:',
-        })
-      : undefined,
-});
 
 router.get('/', async (req, res) => {
   try {
@@ -326,15 +298,6 @@ router.get('/download/:userId/:file_id', async (req, res) => {
     res.status(500).send('Error downloading file');
   }
 });
-
-// Simplified agent source URL endpoint
-router.post(
-  '/agent-source-url',
-  agentFileRateLimiter,
-  validateAgentFileRequest,
-  validateAgentFileAccess,
-  generateAgentSourceUrl,
-);
 
 router.post('/', async (req, res) => {
   const metadata = req.body;
