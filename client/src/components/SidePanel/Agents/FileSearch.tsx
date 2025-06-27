@@ -11,6 +11,7 @@ import {
 } from 'librechat-data-provider';
 import type { ExtendedFile, AgentForm } from '~/common';
 import { useFileHandling, useLocalize, useLazyEffect } from '~/hooks';
+import useSharePointFileHandling from '~/hooks/Files/useSharePointFileHandling';
 import { DropdownPopup } from '~/components';
 import { SharePointPickerDialog } from '../../SharePoint';
 import FileRow from '~/components/Chat/Input/Files/FileRow';
@@ -47,6 +48,12 @@ export default function FileSearch({
     fileSetter: setFiles,
   });
 
+  const { handleSharePointFiles } = useSharePointFileHandling({
+    overrideEndpoint: EModelEndpoint.agents,
+    additionalMetadata: { agent_id, tool_resource: EToolResources.file_search },
+    fileSetter: setFiles,
+  });
+
   useLazyEffect(
     () => {
       if (_files) {
@@ -65,24 +72,19 @@ export default function FileSearch({
   const sharePointEnabled = startupConfig?.sharePointFilePickerEnabled;
   const disabledUploadButton = !agent_id || fileSearchChecked === false;
   // Handle SharePoint files selection
-  const handleSharePointFilesSelected = (sharePointFiles: any[]) => {
+  const handleSharePointFilesSelected = async (sharePointFiles: any[]) => {
     console.log('SharePoint files selected in FileSearch:', sharePointFiles);
 
-    // For now, just log the files - later we'll integrate with the file handling system
-    sharePointFiles.forEach((file, index) => {
-      console.log(`SharePoint File ${index + 1}:`, {
-        id: file.id,
-        name: file.name,
-        size: file.size,
-        webUrl: file.webUrl,
-        downloadUrl: file.downloadUrl,
-        driveId: file.driveId,
-        itemId: file.itemId,
-      });
-    });
+    try {
+      // Use the integrated hook - this will download and process files automatically
+      await handleSharePointFiles(sharePointFiles);
 
-    // Close dialog after file selection
-    setIsSharePointDialogOpen(false);
+      // Close dialog after successful processing
+      setIsSharePointDialogOpen(false);
+    } catch (error) {
+      console.error('SharePoint file processing error:', error);
+      // Dialog stays open on error so user can retry
+    }
   };
   if (isUploadDisabled) {
     return null;

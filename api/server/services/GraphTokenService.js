@@ -1,6 +1,5 @@
 const { getOpenIdConfig } = require('~/strategies/openidStrategy');
 const { logger } = require('~/config');
-const { isEnabled } = require('~/server/utils');
 const { CacheKeys } = require('librechat-data-provider');
 const getLogStores = require('~/cache/getLogStores');
 const client = require('openid-client');
@@ -82,26 +81,6 @@ async function getGraphApiToken(user, accessToken, scopes, fromCache = true) {
   }
 }
 
-/**
- * Check if SharePoint integration is properly configured
- * @returns {boolean} Whether SharePoint integration is available
- */
-function isSharePointConfigured() {
-  const requiredEnvVars = ['OPENID_CLIENT_ID', 'OPENID_CLIENT_SECRET', 'OPENID_ISSUER'];
-
-  const missingVars = requiredEnvVars.filter((varName) => !process.env[varName]);
-
-  if (missingVars.length > 0) {
-    logger.warn(
-      `[GraphTokenService] Missing required environment variables for SharePoint: ${missingVars.join(', ')}`,
-    );
-    return false;
-  }
-
-  return true;
-}
-
 module.exports = {
   getGraphApiToken,
-  isSharePointConfigured,
 };

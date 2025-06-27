@@ -594,6 +594,7 @@ export type TStartupConfig = {
   sharePointFilePickerEnabled?: boolean;
   sharePointBaseUrl?: string;
   sharePointPickerGraphScope?: string;
+  sharePointPickerSharePointScope?: string;
   openidReuseTokens?: boolean;
   webSearch?: {
     searchProvider?: SearchProviders;

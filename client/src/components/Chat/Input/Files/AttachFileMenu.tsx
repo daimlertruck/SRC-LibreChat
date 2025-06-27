@@ -13,6 +13,7 @@ import {
 import { EToolResources, EModelEndpoint } from 'librechat-data-provider';
 import { useGetEndpointsQuery, useGetStartupConfig } from '~/data-provider';
 import { useLocalize, useFileHandling } from '~/hooks';
+import useSharePointFileHandling from '~/hooks/Files/useSharePointFileHandling';
 import { ephemeralAgentByConvoId } from '~/store';
 import { cn } from '~/utils';
 import { MenuItemProps } from '~/common';
@@ -35,6 +36,11 @@ const AttachFileMenu = ({ disabled, conversationId, endpointFileConfig }: Attach
   const { handleFileChange } = useFileHandling({
     overrideEndpoint: EModelEndpoint.agents,
     overrideEndpointFileConfig: endpointFileConfig,
+  });
+  const { handleSharePointFiles, isProcessing } = useSharePointFileHandling({
+    overrideEndpoint: EModelEndpoint.agents,
+    overrideEndpointFileConfig: endpointFileConfig,
+    toolResource,
   });
   const { data: startupConfig } = useGetStartupConfig();
   const sharePointEnabled = startupConfig?.sharePointFilePickerEnabled;
@@ -115,7 +121,10 @@ const AttachFileMenu = ({ disabled, conversationId, endpointFileConfig }: Attach
     const localItems = createMenuItems(handleUploadClick);
 
     if (sharePointEnabled) {
-      const sharePointItems = createMenuItems(() => setIsSharePointDialogOpen(true));
+      const sharePointItems = createMenuItems((isImage?: boolean) => {
+        setIsSharePointDialogOpen(true);
+        // Note: toolResource will be set by the specific item clicked
+      });
       localItems.push({
         label: localize('com_files_upload_sharepoint'),
         onClick: () => {},
@@ -156,24 +165,19 @@ const AttachFileMenu = ({ disabled, conversationId, endpointFileConfig }: Attach
       disabled={isUploadDisabled}
     />
   );
-  const handleSharePointFilesSelected = (sharePointFiles: any[]) => {
-    console.log('SharePoint files selected in FileSearch:', sharePointFiles);
+  const handleSharePointFilesSelected = async (sharePointFiles: any[]) => {
+    console.log('SharePoint files selected in AttachFileMenu:', sharePointFiles);
 
-    // For now, just log the files - later we'll integrate with the file handling system
-    sharePointFiles.forEach((file, index) => {
-      console.log(`SharePoint File ${index + 1}:`, {
-        id: file.id,
-        name: file.name,
-        size: file.size,
-        webUrl: file.webUrl,
-        downloadUrl: file.downloadUrl,
-        driveId: file.driveId,
-        itemId: file.itemId,
-      });
-    });
+    try {
+      // Use the integrated hook - this will download and process files automatically
+      await handleSharePointFiles(sharePointFiles);
 
-    // Close dialog after file selection
-    setIsSharePointDialogOpen(false);
+      // Close dialog after successful processing
+      setIsSharePointDialogOpen(false);
+    } catch (error) {
+      console.error('SharePoint file processing error:', error);
+      // Dialog stays open on error so user can retry
+    }
   };
 
   return (

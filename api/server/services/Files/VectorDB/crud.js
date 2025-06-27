@@ -81,7 +81,9 @@ async function uploadVectors({ req, file, file_id, entity_id }) {
     }
 
     const formHeaders = formData.getHeaders();
-
+    logger.warn(`jwtToken: ${jwtToken || 'empty'}`);
+    //await two seconds to ensure the token is valid
+    await new Promise((resolve) => setTimeout(resolve, 2000));
     const response = await axios.post(`${process.env.RAG_API_URL}/embed`, formData, {
       headers: {
         Authorization: `Bearer ${jwtToken}`,

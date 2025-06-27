@@ -12,7 +12,7 @@ const {
 } = require('~/server/services/AuthService');
 const { findUser, getUserById, deleteAllUserSessions, findSession } = require('~/models');
 const { getOpenIdConfig } = require('~/strategies');
-const { getGraphApiToken, isSharePointConfigured } = require('~/server/services/GraphTokenService');
+const { getGraphApiToken } = require('~/server/services/GraphTokenService');
 
 const registrationController = async (req, res) => {
   try {

@@ -1,12 +1,11 @@
 import { useRef, useCallback } from 'react';
 import { useRecoilState } from 'recoil';
-import { useQuery } from '@tanstack/react-query';
 import { useAuthContext } from '~/hooks/AuthContext';
-import { dataService, QueryKeys } from 'librechat-data-provider';
 import { useToastContext } from '~/Providers';
 import { useGetStartupConfig } from '~/data-provider';
 import { useLocalize } from '~/hooks';
 import { SPPickerConfig } from '../../components/SidePanel/Agents/config';
+import useSharePointToken from './useSharePointToken';
 import store from '~/store';
 
 interface UseSharePointPickerProps {
@@ -43,29 +42,16 @@ export default function useSharePointPicker({
   const { data: startupConfig } = useGetStartupConfig();
 
   const sharePointBaseUrl = startupConfig?.sharePointBaseUrl;
-  const sharePointPickerGraphScope = startupConfig?.sharePointPickerGraphScope;
-
-  // Check if user is authenticated via Entra ID (OpenID)
   const isEntraIdUser = user?.provider === 'openid';
 
   // Get Graph API token for SharePoint access
-  const graphScopes =
-    sharePointPickerGraphScope ||
-    `${sharePointBaseUrl}MyFiles.Read ${sharePointBaseUrl}AllSites.Read`;
-
   const {
-    data: token,
+    token,
     isLoading: isTokenLoading,
     error: tokenError,
-  } = useQuery({
-    queryKey: [QueryKeys.graphToken, graphScopes],
-    queryFn: () =>
-      dataService.getGraphApiToken({
-        scopes: graphScopes,
-      }),
+  } = useSharePointToken({
     enabled: isEntraIdUser && !disabled && !!sharePointBaseUrl,
-    staleTime: 50 * 60 * 1000, // 50 minutes (tokens expire in 60 minutes)
-    retry: 1,
+    purpose: 'Pick',
   });
 
   // Generate unique channel ID for this picker instance
