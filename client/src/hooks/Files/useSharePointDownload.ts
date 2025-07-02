@@ -1,7 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useToastContext } from '~/Providers';
 import { useSharePointBatchDownload } from '~/data-provider/Files/sharepoint';
-import useSharePointToken from './useSharePointToken';
 import type { SharePointFile, SharePointBatchProgress } from '~/data-provider/Files/sharepoint';
 
 interface UseSharePointDownloadProps {
@@ -24,11 +23,6 @@ export default function useSharePointDownload({
   const [downloadProgress, setDownloadProgress] = useState<SharePointBatchProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const { token, refetch: refetchToken } = useSharePointToken({
-    enabled: false,
-    purpose: 'Download',
-  });
-
   const batchDownloadMutation = useSharePointBatchDownload();
 
   const downloadSharePointFiles = useCallback(
@@ -41,22 +35,6 @@ export default function useSharePointDownload({
       setDownloadProgress({ completed: 0, total: files.length, failed: [] });
 
       try {
-        let accessToken = token?.access_token;
-        if (!accessToken) {
-          showToast({
-            message: 'Getting SharePoint access token...',
-            status: 'info',
-            duration: 2000,
-          });
-
-          const tokenResult = await refetchToken();
-          accessToken = tokenResult.data?.access_token;
-
-          if (!accessToken) {
-            throw new Error('Failed to obtain SharePoint access token');
-          }
-        }
-
         showToast({
           message: `Downloading ${files.length} file(s) from SharePoint...`,
           status: 'info',
@@ -65,7 +43,6 @@ export default function useSharePointDownload({
 
         const downloadedFiles = await batchDownloadMutation.mutateAsync({
           files,
-          accessToken,
           onProgress: (progress) => {
             setDownloadProgress(progress);
 
@@ -117,7 +94,7 @@ export default function useSharePointDownload({
         throw error;
       }
     },
-    [token, showToast, batchDownloadMutation, onFilesDownloaded, onError, refetchToken],
+    [showToast, batchDownloadMutation, onFilesDownloaded, onError],
   );
 
   return {

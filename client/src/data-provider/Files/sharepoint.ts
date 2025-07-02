@@ -32,21 +32,17 @@ export const useSharePointFileDownload = (): UseMutationResult<
   unknown,
   {
     file: SharePointFile;
-    accessToken: string;
     onProgress?: (progress: SharePointDownloadProgress) => void;
   }
 > => {
   return useMutation({
-    mutationFn: async ({ file, accessToken, onProgress }) => {
-      const downloadUrl =
-        file.downloadUrl ||
-        `https://graph.microsoft.com/v1.0/drives/${file.driveId}/items/${file.itemId}/content`;
+    mutationFn: async ({ file, onProgress }) => {
+      if (!file.downloadUrl) {
+        throw new Error(`Download URL not provided for file: ${file.name}`);
+      }
+      const downloadUrl = file.downloadUrl;
 
-      const response = await fetch(downloadUrl, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      });
+      const response = await fetch(downloadUrl);
 
       if (!response.ok) {
         throw new Error(`Download failed: ${response.status} ${response.statusText}`);
@@ -107,13 +103,12 @@ export const useSharePointBatchDownload = (): UseMutationResult<
   unknown,
   {
     files: SharePointFile[];
-    accessToken: string;
     onProgress?: (progress: SharePointBatchProgress) => void;
   },
   unknown
 > => {
   return useMutation({
-    mutationFn: async ({ files, accessToken, onProgress }) => {
+    mutationFn: async ({ files, onProgress }) => {
       const downloadedFiles: File[] = [];
       const failed: string[] = [];
       let completed = 0;
@@ -127,15 +122,12 @@ export const useSharePointBatchDownload = (): UseMutationResult<
       for (const chunk of chunks) {
         const chunkPromises = chunk.map(async (file) => {
           try {
-            const downloadUrl =
-              file.downloadUrl ||
-              `https://graph.microsoft.com/v1.0/drives/${file.driveId}/items/${file.itemId}/content`;
+            if (!file.downloadUrl) {
+              throw new Error(`Download URL not provided for file: ${file.name}`);
+            }
+            const downloadUrl = file.downloadUrl;
 
-            const response = await fetch(downloadUrl, {
-              headers: {
-                Authorization: `Bearer ${accessToken}`,
-              },
-            });
+            const response = await fetch(downloadUrl);
 
             if (!response.ok) {
               throw new Error(`${response.status} ${response.statusText}`);

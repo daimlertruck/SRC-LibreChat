@@ -50,7 +50,6 @@ export default function useSharePointPicker({
     error: tokenError,
   } = useSharePointToken({
     enabled: isEntraIdUser && !disabled && !!sharePointBaseUrl,
-    purpose: 'Pick',
   });
 
   const generateChannelId = useCallback(() => {
@@ -136,7 +135,9 @@ export default function useSharePointPicker({
                     size: item.size || item.driveItem?.size,
                     webUrl: item.webUrl || item.driveItem?.webUrl,
                     downloadUrl:
-                      item.downloadUrl || item.driveItem?.['@microsoft.graph.downloadUrl'],
+                      item.downloadUrl ||
+                      item.driveItem?.['@microsoft.graph.downloadUrl'] ||
+                      item['@content.downloadUrl'],
                     driveId:
                       item.driveId ||
                       item.parentReference?.driveId ||
@@ -280,7 +281,7 @@ export default function useSharePointPicker({
             recent: true,
             shared: true,
             sharedLibraries: true,
-            myOrganization: true,
+            myOrganization: false,
             site: true,
           },
         },
@@ -295,6 +296,14 @@ export default function useSharePointPicker({
           },
           createFolder: {
             enabled: false,
+          },
+          pick: {
+            action: 'select',
+            select: {
+              urls: {
+                download: true, // Request download URLs to be included in the response
+              },
+            },
           },
         },
         search: { enabled: true },

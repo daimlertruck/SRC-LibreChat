@@ -102,7 +102,6 @@ router.get('/', async function (req, res) {
       staticBundlerURL: process.env.SANDPACK_STATIC_BUNDLER_URL,
       sharePointFilePickerEnabled,
       sharePointBaseUrl: process.env.SHAREPOINT_BASE_URL,
-      sharePointPickerGraphScope: process.env.SHAREPOINT_PICKER_GRAPH_SCOPE,
       sharePointPickerSharePointScope: process.env.SHAREPOINT_PICKER_SHAREPOINT_SCOPE,
       openidReuseTokens,
     };
