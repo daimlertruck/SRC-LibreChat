@@ -1,5 +1,6 @@
-import { useMutation } from '@tanstack/react-query';
-import type { UseMutationResult } from '@tanstack/react-query';
+import { useMutation, useInfiniteQuery } from '@tanstack/react-query';
+import type { UseMutationResult, UseInfiniteQueryResult } from '@tanstack/react-query';
+import { parseSearchResponse, SharePointSite } from '~/utils/sharepoint';
 
 export interface SharePointFile {
   id: string;
@@ -222,3 +223,79 @@ function getMimeTypeFromFileName(fileName: string): string {
 }
 
 export { getMimeTypeFromFileName };
+
+export interface UseSharePointSitesQueryParams {
+  baseUrl: string;
+  accessToken: string;
+  searchQuery?: string;
+  rowsPerPage?: number;
+  enabled?: boolean;
+}
+
+export const useSharePointSitesInfiniteQuery = ({
+  baseUrl,
+  accessToken,
+  searchQuery = '',
+  rowsPerPage = 10,
+  enabled = true,
+}: UseSharePointSitesQueryParams): UseInfiniteQueryResult<
+  { sites: SharePointSite[]; hasMore: boolean; total: number },
+  Error
+> => {
+  return useInfiniteQuery({
+    queryKey: ['sharepoint-sites', baseUrl, accessToken, searchQuery],
+    queryFn: async ({ pageParam = 0 }) => {
+      if (!baseUrl || !accessToken) {
+        throw new Error('SharePoint configuration or access token not available');
+      }
+
+      // Build search query
+      let spSearchQuery = 'contentclass:STS_Site OR contentclass:STS_Web';
+      if (searchQuery && searchQuery.trim().length > 0) {
+        const trimmedQuery = searchQuery.trim();
+        spSearchQuery = `(${spSearchQuery}) AND (Title:${trimmedQuery}* OR SiteDescription:${trimmedQuery}*)`;
+      }
+
+      // Build search URL
+      const searchUrl =
+        `${baseUrl}/_api/search/query` +
+        `?querytext='${encodeURIComponent(spSearchQuery)}'` +
+        `&startrow=${pageParam}` +
+        `&rowlimit=${rowsPerPage}` +
+        `&selectproperties='Title,SiteName,SiteDescription,SPWebUrl,Path,SiteId,UniqueId,WebTemplate,contentclass'`;
+
+      // Execute search
+      const response = await fetch(searchUrl, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json;odata=verbose',
+          'Content-Type': 'application/json;odata=verbose',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`SharePoint search failed: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const sites = parseSearchResponse(data);
+      const totalRows = data?.d?.query?.PrimaryQueryResult?.RelevantResults?.TotalRows || 0;
+
+      return {
+        sites,
+        hasMore: pageParam + sites.length < totalRows,
+        total: totalRows,
+      };
+    },
+    getNextPageParam: (lastPage, allPages) => {
+      if (lastPage.hasMore) {
+        return allPages.reduce((acc, page) => acc + page.sites.length, 0);
+      }
+      return undefined;
+    },
+    enabled: Boolean(baseUrl && accessToken && enabled),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    retry: 2,
+  });
+};

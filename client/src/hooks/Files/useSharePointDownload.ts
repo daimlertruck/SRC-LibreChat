@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useToastContext } from '~/Providers';
-import { useSharePointBatchDownload } from '~/data-provider/Files/sharepoint';
-import type { SharePointFile, SharePointBatchProgress } from '~/data-provider/Files/sharepoint';
+import { useSharePointBatchDownload } from '~/data-provider';
+import type { SharePointFile, SharePointBatchProgress } from '~/data-provider';
 
 interface UseSharePointDownloadProps {
   onFilesDownloaded?: (files: File[]) => void | Promise<void>;

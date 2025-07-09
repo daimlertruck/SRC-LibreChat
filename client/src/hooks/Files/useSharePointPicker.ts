@@ -8,16 +8,25 @@ import { SPPickerConfig } from '../../components/SidePanel/Agents/config';
 import useSharePointToken from './useSharePointToken';
 import store from '~/store';
 
+export interface CustomCommand {
+  key: string;
+  label: string;
+  icon?: string;
+  action: 'custom';
+  handler: () => void;
+}
+
 interface UseSharePointPickerProps {
   containerNode: HTMLDivElement | null;
   onFilesSelected?: (files: any[]) => void;
   onClose?: () => void;
   disabled?: boolean;
   maxSelectionCount?: number;
+  customCommands?: CustomCommand[];
 }
 
 interface UseSharePointPickerReturn {
-  openSharePointPicker: () => void;
+  openSharePointPicker: (entryWeb?: string) => void;
   closeSharePointPicker: () => void;
   error: string | null;
   cleanup: () => void;
@@ -30,6 +39,7 @@ export default function useSharePointPicker({
   onClose,
   disabled = false,
   maxSelectionCount = 10,
+  customCommands,
 }: UseSharePointPickerProps): UseSharePointPickerReturn {
   const [langcode] = useRecoilState(store.lang);
   const { user } = useAuthContext();
@@ -167,6 +177,24 @@ export default function useSharePointPicker({
                 });
                 break;
               }
+              case 'custom': {
+                console.log('Custom command received');
+                console.log('Custom command message:', command.key);
+
+                const customCommand = customCommands?.find((cmd) => cmd.key === command.key);
+                if (customCommand && customCommand.handler) {
+                  customCommand.handler();
+                }
+
+                port.postMessage({
+                  type: 'result',
+                  id: message.data.id,
+                  data: {
+                    result: 'success',
+                  },
+                });
+                break;
+              }
 
               default:
                 console.warn(`Unsupported command: ${command.command}`);
@@ -194,7 +222,7 @@ export default function useSharePointPicker({
         console.error('Error processing port message:', error);
       }
     },
-    [token, onFilesSelected, showToast, onClose],
+    [token, onFilesSelected, showToast, onClose, customCommands],
   );
 
   // Initialization message handler - establishes MessagePort communication
@@ -235,7 +263,7 @@ export default function useSharePointPicker({
     [portMessageHandler],
   );
 
-  const openSharePointPicker = async () => {
+  const openSharePointPicker = async (entryWeb?: string) => {
     if (!token) {
       showToast({
         message: 'Unable to access SharePoint. Please ensure you are logged in with Microsoft.',
@@ -262,11 +290,40 @@ export default function useSharePointPicker({
       });
       console.log('Channel ID:', channelId);
 
+      // Configure entry based on provided entryWeb parameter
+      const entryConfig = entryWeb
+        ? {
+            sharePoint: {
+              byPath: {
+                web: entryWeb,
+              },
+            },
+          }
+        : {
+            sharePoint: {}, // Empty config for organization-wide browsing
+          };
+
+      // Configure custom commands or use default
+      const leftNavCommands =
+        customCommands && customCommands.length > 0
+          ? customCommands.map((cmd) => ({
+              key: cmd.key,
+              action: cmd.action,
+              label: cmd.label,
+              icon: cmd.icon || 'BulletedList2',
+            }))
+          : [
+              {
+                key: 'browse-all-sites',
+                action: 'custom' as const,
+                label: 'Browse All SP Sites',
+                icon: 'BulletedList2',
+              },
+            ];
+
       const pickerOptions: SPPickerConfig = {
         sdk: '8.0',
-        entry: {
-          sharePoint: {},
-        },
+        entry: entryConfig,
         messaging: {
           origin: window.location.origin,
           channelId: channelId,
@@ -307,6 +364,10 @@ export default function useSharePointPicker({
           },
         },
         search: { enabled: true },
+        leftNav: {
+          preset: 'current-site',
+          commands: leftNavCommands,
+        },
       };
 
       const iframe = document.createElement('iframe');
