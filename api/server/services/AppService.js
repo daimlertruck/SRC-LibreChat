@@ -84,7 +84,7 @@ const AppService = async (app) => {
     config?.registration?.socialLogins ?? configDefaults?.registration?.socialLogins;
   const interfaceConfig = await loadDefaultInterface(config, configDefaults);
   const turnstileConfig = loadTurnstileConfig(config, configDefaults);
-
+  const builtinToolsConfig = config?.builtinToolsConfig ?? configDefaults.builtinToolsConfig;
   const defaultLocals = {
     ocr,
     paths,
@@ -99,6 +99,7 @@ const AppService = async (app) => {
     turnstileConfig,
     balance,
     mcpConfig,
+    builtinToolsConfig,
   };
 
   const agentsDefaults = agentsConfigSetup(config);

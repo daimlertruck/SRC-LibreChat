@@ -9,6 +9,19 @@ cache: true
 
 # File strategy s3/firebase
 # fileStrategy: "s3"
+# builtinToolsConfig:
+#   file_search:
+#     description:  | 
+#       Performs semantic search across attached file_search documents using natural language queries. This tool analyzes the content of uploaded files to find relevant information, quotes, and passages that best match your query. Use this to extract specific information or find relevant sections within the available documents.
+#       **CITE FILE SEARCH RESULTS:**
+#       Use anchor markers immediately after statements derived from file content. Reference the filename in your text:
+#       - File citation: "The document.pdf states that... \\ue202turn0file0"  
+#       - Page reference: "According to report.docx... \\ue202turn0file1"
+#       - Multi-file: "Multiple sources confirm... \\ue200\\ue202turn0file0\\ue202turn0file1\\ue201"
+
+#       **ALWAYS mention the filename in your text before the citation marker. NEVER use markdown links or footnotes.**
+#     schemaDescription:
+#       query: "A natural language query to search for relevant information in the files. Be specific and use keywords related to the information you're looking for. The query will be used for semantic similarity matching against the file contents."
 
 # Custom interface configuration
 interface:

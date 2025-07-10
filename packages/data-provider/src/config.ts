@@ -757,6 +757,21 @@ export const configSchema = z.object({
       message: 'At least one `endpoints` field must be provided.',
     })
     .optional(),
+  builtinToolsConfig: z
+    .object({
+      file_search: z
+        .object({
+          description: z.string().optional(),
+          schemaDescription: z
+            .object({
+              query: z.string().optional(),
+            })
+            .optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  // Add other built-in tools here
 });
 
 export const getConfigDefaults = () => getSchemaDefaults(configSchema);

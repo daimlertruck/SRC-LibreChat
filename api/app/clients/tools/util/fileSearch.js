@@ -55,6 +55,10 @@ const primeFiles = async (options) => {
  * @returns
  */
 const createFileSearchTool = async ({ req, files, entity_id }) => {
+  const { builtinToolsConfig } = req.app.locals;
+  const toolConfig = builtinToolsConfig?.[Tools.file_search] ?? {};
+  const { description, schemaDescription } = toolConfig || {};
+  const { query: querySchemaDescription } = schemaDescription || {};
   return tool(
     async ({ query }) => {
       if (files.length === 0) {
@@ -131,12 +135,15 @@ const createFileSearchTool = async ({ req, files, entity_id }) => {
     },
     {
       name: Tools.file_search,
-      description: `Performs semantic search across attached "${Tools.file_search}" documents using natural language queries. This tool analyzes the content of uploaded files to find relevant information, quotes, and passages that best match your query. Use this to extract specific information or find relevant sections within the available documents.`,
+      description:
+        description ||
+        `Performs semantic search across attached "${Tools.file_search}" documents using natural language queries. This tool analyzes the content of uploaded files to find relevant information, quotes, and passages that best match your query. Use this to extract specific information or find relevant sections within the available documents.`,
       schema: z.object({
         query: z
           .string()
           .describe(
-            "A natural language query to search for relevant information in the files. Be specific and use keywords related to the information you're looking for. The query will be used for semantic similarity matching against the file contents.",
+            querySchemaDescription ||
+              "A natural language query to search for relevant information in the files. Be specific and use keywords related to the information you're looking for. The query will be used for semantic similarity matching against the file contents.",
           ),
       }),
     },
