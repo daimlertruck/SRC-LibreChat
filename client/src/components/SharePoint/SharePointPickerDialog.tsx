@@ -87,6 +87,7 @@ export default function SharePointPickerDialog({
 
   useEffect(() => {
     if (containerNode && isOpen) {
+      cleanup();
       openSharePointPicker(selectedEntryWeb);
     }
     return () => {
