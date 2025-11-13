@@ -184,5 +184,42 @@ describe('standardCache', () => {
       await new Promise((resolve) => setTimeout(resolve, 1100));
       expect(await testCache.get(testKey)).toBeUndefined();
     });
+
+    test('clear() should only clear keys in its own namespace', async () => {
+      process.env.USE_REDIS = 'true';
+      process.env.USE_REDIS_CLUSTER = 'false';
+      process.env.REDIS_URI = 'redis://127.0.0.1:6379';
+      process.env.REDIS_KEY_PREFIX = 'Cache-Integration-Test';
+
+      const cacheFactory = await import('../../cacheFactory');
+
+      const cache1 = cacheFactory.standardCache('namespace-clear-test-1');
+      const cache2 = cacheFactory.standardCache('namespace-clear-test-2');
+
+      // Add data to both caches
+      await cache1.set('key1', 'value1-cache1');
+      await cache1.set('key2', 'value2-cache1');
+      await cache2.set('key1', 'value1-cache2');
+      await cache2.set('key2', 'value2-cache2');
+
+      // Verify both caches have their data
+      expect(await cache1.get('key1')).toBe('value1-cache1');
+      expect(await cache1.get('key2')).toBe('value2-cache1');
+      expect(await cache2.get('key1')).toBe('value1-cache2');
+      expect(await cache2.get('key2')).toBe('value2-cache2');
+
+      // Clear cache1 only
+      await cache1.clear();
+      // cache1 should be empty
+      expect(await cache1.get('key1')).toBeUndefined();
+      expect(await cache1.get('key2')).toBeUndefined();
+
+      // cache2 should still have its data
+      expect(await cache2.get('key1')).toBe('value1-cache2');
+      expect(await cache2.get('key2')).toBe('value2-cache2');
+
+      // Cleanup
+      await cache2.clear();
+    });
   });
 });
