@@ -25,6 +25,7 @@ function AuthLayout({
   error: TranslationKeys | null;
 }) {
   const localize = useLocalize();
+  
 
   const hasStartupConfigError = startupConfigError !== null && startupConfigError !== undefined;
   const DisplayError = () => {
@@ -55,14 +56,18 @@ function AuthLayout({
     }
     return null;
   };
+  
+  console.log("Full startup config:", startupConfig);
+console.log("Interface config:", startupConfig?.interface);
+console.log("LOGIN URL", startupConfig?.loginImageUrl);
 
   return (
     <div className="relative flex min-h-screen flex-col bg-white dark:bg-gray-900">
       <Banner />
       <BlinkAnimation active={isFetching}>
-        <div className="mt-6 h-10 w-full bg-cover">
+        <div className="mt-6 h-64 w-full bg-cover">
           <img
-            src="assets/logo.svg"
+            src={startupConfig?.loginImageUrl ?? '/assets/Librechat.png'}
             className="h-full w-full object-contain"
             alt={localize('com_ui_logo', { 0: startupConfig?.appTitle ?? 'LibreChat' })}
           />
