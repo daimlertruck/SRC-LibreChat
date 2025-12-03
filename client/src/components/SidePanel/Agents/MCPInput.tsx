@@ -16,17 +16,17 @@ function useUpdateAgentMCP({
 }) {
   return {
     mutate: async ({
-      mcp_id,
+      serverName,
       metadata,
       agent_id,
     }: {
-      mcp_id?: string;
+      serverName?: string;
       metadata: MCP['metadata'];
       agent_id: string;
     }) => {
       try {
         // TODO: Implement MCP endpoint
-        onSuccess(['success', { mcp_id, metadata, agent_id } as MCP]);
+        onSuccess(['success', { serverName, metadata, agent_id } as MCP]);
       } catch (error) {
         onError(error as Error);
       }
@@ -56,7 +56,7 @@ export default function MCPInput({ mcp, agent_id, setMCP }: MCPInputProps) {
 
   // Initialize tools list if editing existing MCP
   useEffect(() => {
-    if (mcp?.mcp_id && mcp.metadata.tools) {
+    if (mcp?.serverName && mcp.metadata.tools) {
       setShowTools(true);
       setSelectedTools(mcp.metadata.tools);
     }
@@ -87,7 +87,7 @@ export default function MCPInput({ mcp, agent_id, setMCP }: MCPInputProps) {
     try {
       const response = await updateAgentMCP.mutate({
         agent_id: agent_id ?? '',
-        mcp_id: mcp?.mcp_id,
+        serverName: mcp?.serverName,
         metadata: {
           ...data,
           tools: selectedTools,
@@ -139,7 +139,7 @@ export default function MCPInput({ mcp, agent_id, setMCP }: MCPInputProps) {
       reader.onloadend = () => {
         const base64String = reader.result as string;
         setMCP({
-          mcp_id: mcp?.mcp_id ?? '',
+          serverName: mcp?.serverName ?? '',
           agent_id: agent_id ?? '',
           metadata: {
             ...mcp?.metadata,
@@ -241,7 +241,7 @@ export default function MCPInput({ mcp, agent_id, setMCP }: MCPInputProps) {
             if (isLoading) {
               return <Spinner className="icon-md" />;
             }
-            return mcp?.mcp_id ? localize('com_ui_update') : localize('com_ui_create');
+            return mcp?.serverName ? localize('com_ui_update') : localize('com_ui_create');
           })()}
         </button>
       </div>

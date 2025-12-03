@@ -29,9 +29,9 @@ function useDeleteAgentMCP({
   onError: (error: Error) => void;
 }) {
   return {
-    mutate: async ({ mcp_id, agent_id }: { mcp_id: string; agent_id: string }) => {
+    mutate: async ({ serverName, agent_id }: { serverName: string; agent_id: string }) => {
       try {
-        console.log('Mock delete MCP:', { mcp_id, agent_id });
+        console.log('Mock delete MCP:', { serverName, agent_id });
         onSuccess();
       } catch (error) {
         onError(error as Error);
@@ -125,7 +125,7 @@ export default function MCPPanel() {
                   <div className="absolute right-0 top-6">
                     <button
                       type="button"
-                      disabled={isEphemeralAgent(agent_id) || !mcp.mcp_id}
+                      disabled={isEphemeralAgent(agent_id) || !mcp.serverName}
                       className="btn btn-neutral border-token-border-light relative h-9 rounded-lg font-medium"
                     >
                       <TrashIcon className="text-red-500" />
@@ -150,7 +150,7 @@ export default function MCPPanel() {
                         });
                       }
                       deleteAgentMCP.mutate({
-                        mcp_id: mcp.mcp_id,
+                        serverName: mcp.serverName,
                         agent_id: agent_id || '',
                       });
                     },
