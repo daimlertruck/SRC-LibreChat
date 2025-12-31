@@ -71,8 +71,8 @@ describe('AgentInformationButton', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Agent Settings' }));
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Agent Name')).toHaveValue('Agent One');
-      expect(screen.getByLabelText('Agent Description')).toHaveValue('First agent');
+      expect(screen.getByLabelText('com_ui_agent_name')).toHaveValue('Agent One');
+      expect(screen.getByLabelText('com_ui_agent_description')).toHaveValue('First agent');
     });
   });
 
@@ -86,13 +86,13 @@ describe('AgentInformationButton', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent Settings' }));
 
-    const nameInput = await screen.findByLabelText('Agent Name');
-    const descInput = screen.getByLabelText('Agent Description');
+    const nameInput = await screen.findByLabelText('com_ui_agent_name');
+    const descInput = screen.getByLabelText('com_ui_agent_description');
 
     fireEvent.change(nameInput, { target: { value: 'Updated Name' } });
     fireEvent.change(descInput, { target: { value: 'Updated Description' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_save_changes' }));
 
     await waitFor(() => {
       expect(mockUpdateMutation).toHaveBeenCalledWith({
