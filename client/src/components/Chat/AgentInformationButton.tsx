@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import { TooltipAnchor, useToastContext, GearIcon, useMediaQuery } from '@librechat/client';
 import { useChatContext } from '~/Providers';
+import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 import { useGetAgentByIdQuery, useUpdateAgentMutation } from '~/data-provider';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
@@ -55,11 +56,13 @@ function GeneralTab({
   agentDescription: string;
   setAgentDescription: (value: string) => void;
 }) {
+  const localize = useLocalize();
+
   return (
     <div className="space-y-4">
       <div>
         <label htmlFor="agent-name" className="block text-sm font-medium text-text-primary">
-          Agent Name
+          {localize('com_ui_agent_name')}
         </label>
         <input
           id="agent-name"
@@ -73,7 +76,7 @@ function GeneralTab({
 
       <div>
         <label htmlFor="agent-description" className="block text-sm font-medium text-text-primary">
-          Agent Description
+          {localize('com_ui_agent_description')}
         </label>
         <textarea
           id="agent-description"
@@ -89,6 +92,7 @@ function GeneralTab({
 }
 
 export function AgentInformationButton() {
+  const localize = useLocalize();
   const isSmallScreen = useMediaQuery('(max-width: 767px)');
   const { conversation } = useChatContext();
   const [isOpen, setIsOpen] = useState(false);
@@ -152,7 +156,9 @@ export function AgentInformationButton() {
 
       <DialogContent className="min-h-[500px] w-full max-w-2xl overflow-hidden rounded-xl bg-background pb-6 shadow-2xl md:min-h-[400px] md:w-[680px]">
         <div className="mb-1 flex items-center justify-between border-b border-border-medium pb-5">
-          <h2 className="text-lg font-medium leading-6 text-text-primary">Agent Settings</h2>
+          <h2 className="text-lg font-medium leading-6 text-text-primary">
+            {localize('com_nav_settings')}
+          </h2>
           <button
             type="button"
             className="rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-border-xheavy focus:ring-offset-2 disabled:pointer-events-none"
@@ -173,7 +179,7 @@ export function AgentInformationButton() {
               <line x1="18" x2="6" y1="6" y2="18"></line>
               <line x1="6" x2="18" y1="6" y2="18"></line>
             </svg>
-            <span className="sr-only">Close</span>
+            <span className="sr-only">{localize('com_ui_close')}</span>
           </button>
         </div>
 
@@ -203,7 +209,7 @@ export function AgentInformationButton() {
                 )}
               >
                 <GearIcon />
-                General
+                {localize('com_ui_agent_category_general')}
               </Tabs.Trigger>
             </Tabs.List>
 
@@ -225,14 +231,14 @@ export function AgentInformationButton() {
             onClick={() => setIsOpen(false)}
             className="inline-flex h-10 items-center justify-center rounded-lg border border-border-medium bg-surface-primary px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-surface-hover"
           >
-            Cancel
+            {localize('com_ui_cancel')}
           </button>
           <button
             onClick={handleSave}
             disabled={updateAgentMutation.isLoading || !agentName.trim()}
             className="inline-flex h-10 items-center justify-center rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Save Changes
+            {localize('com_ui_save_changes')}
           </button>
         </div>
       </DialogContent>
