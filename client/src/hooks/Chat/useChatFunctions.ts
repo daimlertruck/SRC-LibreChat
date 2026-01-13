@@ -69,6 +69,7 @@ export default function useChatFunctions({
   const setFilesToDelete = useSetFilesToDelete();
   const getEphemeralAgent = useGetEphemeralAgent();
   const isTemporary = useRecoilValue(store.isTemporary);
+  const isDeepResearch = useRecoilValue(store.isDeepResearch);
   const { getExpiry } = useUserKey(immutableConversation?.endpoint ?? '');
   const setIsSubmitting = useSetRecoilState(store.isSubmittingFamily(index));
   const setShowStopButton = useSetRecoilState(store.showStopButtonByIndex(index));
@@ -324,6 +325,7 @@ export default function useChatFunctions({
       isRegenerate,
       initialResponse,
       isTemporary,
+      isDeepResearch,
       ephemeralAgent,
       editedContent,
       addedConvo,

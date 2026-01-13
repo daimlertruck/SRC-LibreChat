@@ -45,6 +45,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     isContinued = false,
     editedContent = null,
     parentMessageId = null,
+    isDeepResearch = false,
     overrideParentMessageId = null,
     responseMessageId: editedResponseMessageId = null,
   } = req.body;
@@ -491,6 +492,7 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
       req,
       res,
       endpointOption,
+      isDeepResearch,
       signal: prelimAbortController.signal,
     });
 
@@ -574,6 +576,7 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
       isEdited: !!editedContent,
       userMCPAuthMap: result.userMCPAuthMap,
       responseMessageId: editedResponseMessageId,
+      isDeepResearch,
       progressOptions: {
         res,
       },
