@@ -348,6 +348,7 @@
   "com_ui_agent_category_general": "Algemeen",
   "com_ui_agent_duplicate_error": "Er is een fout opgetreden bij het dupliceren van de agent",
   "com_ui_agent_duplicated": "Agent succesvol gedupliceerd",
+  "com_ui_agent_name": "Agentnaam",
   "com_ui_agent_name_is_required": "Agentnaam is verplicht",
   "com_ui_agent_recursion_limit": "Max. Agent Stappen",
   "com_ui_all": "alle",
