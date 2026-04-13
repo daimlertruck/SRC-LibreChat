@@ -42,6 +42,8 @@ const baseAppConfig = {
   interfaceConfig: {
     privacyPolicy: { externalUrl: 'https://example.com/privacy' },
     termsOfService: { externalUrl: 'https://example.com/tos' },
+    loginImageUrl: 'https://example.com/login.png',
+    loginText: '# Welcome',
     modelSelect: true,
   },
   turnstileConfig: { siteKey: 'test-key' },
@@ -150,7 +152,7 @@ describe('GET /api/config', () => {
       expect(response.body.turnstile).toEqual({ siteKey: 'test-key' });
     });
 
-    it('should include only privacyPolicy and termsOfService from interface config', async () => {
+    it('should include only public login-page interface fields for unauthenticated rendering', async () => {
       mockGetAppConfig.mockResolvedValue(baseAppConfig);
       const app = createApp(null);
 
@@ -159,11 +161,13 @@ describe('GET /api/config', () => {
       expect(response.body.interface).toEqual({
         privacyPolicy: { externalUrl: 'https://example.com/privacy' },
         termsOfService: { externalUrl: 'https://example.com/tos' },
+        loginImageUrl: 'https://example.com/login.png',
+        loginText: '# Welcome',
       });
       expect(response.body.interface).not.toHaveProperty('modelSelect');
     });
 
-    it('should not include interface if no privacyPolicy or termsOfService', async () => {
+    it('should not include interface if no public interface fields exist', async () => {
       mockGetAppConfig.mockResolvedValue({
         ...baseAppConfig,
         interfaceConfig: { modelSelect: true },

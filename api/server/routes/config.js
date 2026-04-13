@@ -132,13 +132,24 @@ router.get('/', async function (req, res) {
       };
 
       const interfaceConfig = baseConfig?.interfaceConfig;
-      if (interfaceConfig?.privacyPolicy || interfaceConfig?.termsOfService) {
+      if (
+        interfaceConfig?.privacyPolicy ||
+        interfaceConfig?.termsOfService ||
+        interfaceConfig?.loginImageUrl ||
+        interfaceConfig?.loginText
+      ) {
         payload.interface = {};
         if (interfaceConfig.privacyPolicy) {
           payload.interface.privacyPolicy = interfaceConfig.privacyPolicy;
         }
         if (interfaceConfig.termsOfService) {
           payload.interface.termsOfService = interfaceConfig.termsOfService;
+        }
+        if (interfaceConfig.loginImageUrl) {
+          payload.interface.loginImageUrl = interfaceConfig.loginImageUrl;
+        }
+        if (interfaceConfig.loginText) {
+          payload.interface.loginText = interfaceConfig.loginText;
         }
       }
 
