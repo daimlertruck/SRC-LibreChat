@@ -14,14 +14,27 @@ export {
   cacheTokenValues,
   premiumTokenValues,
   defaultRate,
+  createTxMethods,
+  permissionBitSupersets,
+  partitionIssues,
+  validateSkillName,
+  validateSkillBody,
+  validateRelativePath,
+  inferSkillFileCategory,
+  validateSkillFrontmatter,
+  validateSkillDescription,
+  deriveStructuredFrontmatterFields,
 } from './methods';
 export type * from './types';
 export type * from './methods';
 export { default as logger } from './config/winston';
 export { default as meiliLogger } from './config/meiliLogger';
+export { redactMessage } from './config/parsers';
 export {
   tenantStorage,
   getTenantId,
+  getUserId,
+  getRequestId,
   runAsSystem,
   scopedCacheKey,
   SYSTEM_TENANT_ID,

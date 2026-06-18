@@ -1,10 +1,11 @@
+import { useMemo, useState, useRef, memo, useEffect, MemoExoticComponent } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { matchSorter } from 'match-sorter';
 import { Search, ChevronDown } from 'lucide-react';
-import { useMemo, useState, useRef, memo, useEffect } from 'react';
 import { SelectRenderer } from '@ariakit/react-core/select/select-renderer';
 import type { OptionWithIcon } from '~/common';
 import './AnimatePopover.css';
+import { JSX } from 'react/jsx-runtime';
 import { cn } from '~/utils';
 
 interface ControlComboboxProps {
@@ -24,6 +25,7 @@ interface ControlComboboxProps {
   disabled?: boolean;
   iconSide?: 'left' | 'right';
   selectId?: string;
+  placement?: Ariakit.SelectStoreProps['placement'];
 }
 
 const ROW_HEIGHT = 36;
@@ -45,7 +47,8 @@ function ControlCombobox({
   iconClassName,
   iconSide = 'left',
   selectId,
-}: ControlComboboxProps) {
+  placement,
+}: ControlComboboxProps): JSX.Element {
   const [searchValue, setSearchValue] = useState('');
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [buttonWidth, setButtonWidth] = useState<number | null>(null);
@@ -69,6 +72,7 @@ function ControlCombobox({
     defaultItems: items.map(getItem),
     value: selectedValue,
     setValue,
+    placement,
   });
 
   const matches = useMemo(() => {
@@ -80,9 +84,30 @@ function ControlCombobox({
   }, [searchValue, items]);
 
   useEffect(() => {
-    if (buttonRef.current && !isCollapsed) {
-      setButtonWidth(buttonRef.current.offsetWidth);
+    const button = buttonRef.current;
+    if (!button || isCollapsed) {
+      return;
     }
+
+    setButtonWidth(button.offsetWidth);
+
+    if (typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) {
+        return;
+      }
+      const width = entry.borderBoxSize?.[0]?.inlineSize ?? button.offsetWidth;
+      if (width > 0) {
+        setButtonWidth(width);
+      }
+    });
+
+    observer.observe(button);
+    return () => observer.disconnect();
   }, [isCollapsed]);
 
   const selectIconClassName = cn(
@@ -180,4 +205,5 @@ function ControlCombobox({
   );
 }
 
-export default memo(ControlCombobox);
+const ControlComboboxMemo: MemoExoticComponent<typeof ControlCombobox> = memo(ControlCombobox);
+export default ControlComboboxMemo;

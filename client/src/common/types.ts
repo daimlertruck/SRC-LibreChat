@@ -16,6 +16,8 @@ export function isEphemeralAgent(agentId: string | null | undefined): boolean {
 export interface ConfigFieldDetail {
   title: string;
   description: string;
+  /** Whether the field holds a secret and should be masked (defaults to masked when omitted). */
+  sensitive?: boolean;
 }
 
 export type CodeBarProps = {
@@ -349,11 +351,25 @@ export type TOptions = {
   isResubmission?: boolean;
   /** Currently only utilized when `isResubmission === true`, uses that message's currently attached files */
   overrideFiles?: t.TMessage['files'];
+  /**
+   * Assistant message being regenerated. Used to derive the optimistic response
+   * id for non-tail regenerations without accidentally keying the stream to the
+   * conversation tail.
+   */
+  targetResponseMessageId?: string | null;
+  /**
+   * Carry forward a user message's manually-invoked skills when the caller
+   * is resubmitting / regenerating that same message — the compose-time
+   * atom has already been drained on the original submit, so without this
+   * the second turn would run without any manual priming even though the
+   * pills are still visible on the user bubble.
+   */
+  overrideManualSkills?: string[];
   /** Added conversation for multi-convo feature - sent to server as part of submission payload */
   addedConvo?: t.TConversation;
 };
 
-export type TAskFunction = (props: TAskProps, options?: TOptions) => void;
+export type TAskFunction = (props: TAskProps, options?: TOptions) => false | void;
 
 /**
  * Stable context object passed from non-memo'd wrapper components (Message, MessageContent)
@@ -596,7 +612,6 @@ export type NewConversationParams = {
   preset?: Partial<t.TPreset>;
   modelsData?: t.TModelsConfig;
   buildDefault?: boolean;
-  keepLatestMessage?: boolean;
   keepAddedConvos?: boolean;
   disableParams?: boolean;
 };
@@ -643,5 +658,8 @@ export type TThread = { id: string; createdAt: string };
 declare global {
   interface Window {
     google_tag_manager?: unknown;
+    __LIBRECHAT_CONFIG__?: {
+      enableQueryDevtools?: boolean;
+    };
   }
 }

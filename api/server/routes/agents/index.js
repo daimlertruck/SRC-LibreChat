@@ -1,5 +1,11 @@
 const express = require('express');
-const { isEnabled, GenerationJobManager } = require('@librechat/api');
+const {
+  isEnabled,
+  GenerationJobManager,
+  hasPersistableAbortContent,
+  buildAbortedResponseMetadata,
+} = require('@librechat/api');
+const { createSseStreamTelemetry } = require('@librechat/api/telemetry');
 const { logger } = require('@librechat/data-schemas');
 const {
   uaParser,
@@ -42,8 +48,6 @@ router.use(requireJwtAuth);
 router.use(checkBan);
 router.use(uaParser);
 
-router.use('/', v1);
-
 /**
  * Stream endpoints - mounted before chatRouter to bypass rate limiters
  * These are GET requests and don't need message body validation or rate limiting
@@ -76,35 +80,43 @@ router.get('/chat/stream/:streamId', async (req, res) => {
     return res.status(403).json({ error: 'Unauthorized' });
   }
 
+  const streamTelemetry = createSseStreamTelemetry({ req, res, streamId, isResume });
+
   res.setHeader('Content-Encoding', 'identity');
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
+  streamTelemetry.recordHeadersFlushed();
 
   logger.debug(`[AgentStream] Client subscribed to ${streamId}, resume: ${isResume}`);
 
-  const writeEvent = (event) => {
+  const writeEvent = (event, options = {}) => {
     if (!res.writableEnded) {
-      res.write(`event: message\ndata: ${JSON.stringify(event)}\n\n`);
+      const eventName = options.eventName ?? 'message';
+      const payload = `event: ${eventName}\ndata: ${JSON.stringify(event)}\n\n`;
+      res.write(payload);
+      streamTelemetry.recordWrite(payload, { final: options.final });
       if (typeof res.flush === 'function') {
         res.flush();
       }
+      return true;
     }
+
+    return false;
   };
 
   const onDone = (event) => {
-    writeEvent(event);
+    streamTelemetry.recordFinalEventEmitted();
+    writeEvent(event, { final: true });
     res.end();
   };
 
   const onError = (error) => {
     if (!res.writableEnded) {
-      res.write(`event: error\ndata: ${JSON.stringify({ error })}\n\n`);
-      if (typeof res.flush === 'function') {
-        res.flush();
-      }
+      streamTelemetry.recordErrorEventEmitted();
+      writeEvent({ error }, { eventName: 'error' });
       res.end();
     }
   };
@@ -117,12 +129,7 @@ router.get('/chat/stream/:streamId', async (req, res) => {
 
     if (!res.writableEnded) {
       if (resumeState) {
-        res.write(
-          `event: message\ndata: ${JSON.stringify({ sync: true, resumeState, pendingEvents })}\n\n`,
-        );
-        if (typeof res.flush === 'function') {
-          res.flush();
-        }
+        writeEvent({ sync: true, resumeState, pendingEvents });
         GenerationJobManager.markSyncSent(streamId);
         logger.debug(
           `[AgentStream] Sent sync event for ${streamId} with ${resumeState.runSteps.length} run steps, ${pendingEvents.length} pending events`,
@@ -143,7 +150,9 @@ router.get('/chat/stream/:streamId', async (req, res) => {
   }
 
   if (!result) {
-    return res.status(404).json({ error: 'Failed to subscribe to stream' });
+    streamTelemetry.recordSubscribeFailed();
+    onError('Failed to subscribe to stream');
+    return;
   }
 
   req.on('close', () => {
@@ -267,7 +276,8 @@ router.post('/chat/abort', async (req, res) => {
     if (
       abortResult.success &&
       abortResult.jobData?.userMessage?.messageId &&
-      abortResult.jobData?.responseMessageId
+      abortResult.jobData?.responseMessageId &&
+      hasPersistableAbortContent(abortResult.content)
     ) {
       const { jobData, content, text } = abortResult;
       const responseMessage = {
@@ -278,12 +288,22 @@ router.post('/chat/abort', async (req, res) => {
         text: text || '',
         sender: jobData.sender || 'AI',
         endpoint: jobData.endpoint,
+        iconURL: jobData.iconURL,
         model: jobData.model,
         unfinished: true,
         error: false,
         isCreatedByUser: false,
         user: userId,
       };
+
+      /** Persist the usage/cost rollup + context breakdown for the stopped
+       *  response (from the job's tracked tokenUsage/contextUsage) so its
+       *  branch/total cost and granular rows survive a reload — parity with the
+       *  normal completion path. */
+      const abortMetadata = buildAbortedResponseMetadata(jobData);
+      if (abortMetadata) {
+        responseMessage.metadata = abortMetadata;
+      }
 
       try {
         await saveMessage(
@@ -307,6 +327,8 @@ router.post('/chat/abort', async (req, res) => {
   logger.warn(`[AgentStream] Job not found for streamId: ${jobStreamId}`);
   return res.status(404).json({ error: 'Job not found', streamId: jobStreamId });
 });
+
+router.use('/', v1);
 
 const chatRouter = express.Router();
 chatRouter.use(configMiddleware);

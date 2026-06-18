@@ -1,10 +1,16 @@
+import { logger } from '@librechat/data-schemas';
 import { Constants } from 'librechat-data-provider';
 import type { JsonSchemaType } from '@librechat/data-schemas';
 import type { MCPConnection } from '~/mcp/connection';
 import type * as t from '~/mcp/types';
+import {
+  hasCustomUserVars,
+  hasRuntimeContextPlaceholders,
+  hasRuntimeUrlPlaceholders,
+  isUserSourced,
+} from '~/mcp/utils';
 import { isMCPDomainAllowed, extractMCPServerDomain } from '~/auth/domain';
 import { MCPConnectionFactory } from '~/mcp/MCPConnectionFactory';
-import { hasCustomUserVars, isUserSourced } from '~/mcp/utils';
 import { MCPDomainNotAllowedError } from '~/mcp/errors';
 import { detectOAuthRequirement } from '~/mcp/oauth';
 import { isEnabled } from '~/utils';
@@ -21,6 +27,7 @@ export class MCPServerInspector {
     private connection: MCPConnection | undefined,
     private readonly useSSRFProtection: boolean = false,
     private readonly allowedDomains?: string[] | null,
+    private readonly allowedAddresses?: string[] | null,
   ) {}
 
   /**
@@ -37,9 +44,10 @@ export class MCPServerInspector {
     rawConfig: t.MCPOptions,
     connection?: MCPConnection,
     allowedDomains?: string[] | null,
+    allowedAddresses?: string[] | null,
   ): Promise<t.ParsedServerConfig> {
     // Validate domain against allowlist BEFORE attempting connection
-    const isDomainAllowed = await isMCPDomainAllowed(rawConfig, allowedDomains);
+    const isDomainAllowed = await isMCPDomainAllowed(rawConfig, allowedDomains, allowedAddresses);
     if (!isDomainAllowed) {
       const domain = extractMCPServerDomain(rawConfig);
       throw new MCPDomainNotAllowedError(domain ?? 'unknown');
@@ -53,6 +61,7 @@ export class MCPServerInspector {
       connection,
       useSSRFProtection,
       allowedDomains,
+      allowedAddresses,
     );
     await inspector.inspectServer();
     inspector.config.initDuration = Date.now() - start;
@@ -60,12 +69,15 @@ export class MCPServerInspector {
   }
 
   private async inspectServer(): Promise<void> {
+    this.warnOnUnrestrictedRuntimeUrl();
     await this.detectOAuth();
 
     if (
       this.config.startup !== false &&
       !this.config.requiresOAuth &&
-      !hasCustomUserVars(this.config)
+      !hasCustomUserVars(this.config) &&
+      !hasRuntimeContextPlaceholders(this.config) &&
+      !this.config.obo
     ) {
       let tempConnection = false;
       if (!this.connection) {
@@ -76,6 +88,7 @@ export class MCPServerInspector {
           dbSourced: isUserSourced(this.config),
           useSSRFProtection: this.useSSRFProtection,
           allowedDomains: this.allowedDomains,
+          allowedAddresses: this.allowedAddresses,
         });
       }
 
@@ -89,8 +102,25 @@ export class MCPServerInspector {
     }
   }
 
+  /**
+   * Runtime placeholders in the URL make the resolved connection target partially
+   * user/request-controlled. The resolved URL is validated against the domain
+   * allowlist at request time, but without one only private-range SSRF protection
+   * limits where it can point.
+   */
+  private warnOnUnrestrictedRuntimeUrl(): void {
+    if (!hasRuntimeUrlPlaceholders(this.config)) return;
+    if (Array.isArray(this.allowedDomains) && this.allowedDomains.length > 0) return;
+
+    logger.warn(
+      `[MCP][${this.serverName}] Server URL contains runtime placeholders but no domain allowlist is configured; ` +
+        'the resolved URL is partially user/request-controlled. Set mcpSettings.allowedDomains to restrict targets.',
+    );
+  }
+
   private async detectOAuth(): Promise<void> {
     if (this.config.requiresOAuth != null) return;
+    if (hasRuntimeUrlPlaceholders(this.config)) return;
     if (this.config.url == null || this.config.startup === false) {
       this.config.requiresOAuth = false;
       return;
@@ -102,7 +132,11 @@ export class MCPServerInspector {
       return;
     }
 
-    const result = await detectOAuthRequirement(this.config.url);
+    const result = await detectOAuthRequirement(
+      this.config.url,
+      this.allowedDomains,
+      this.allowedAddresses,
+    );
     this.config.requiresOAuth = result.requiresOAuth;
     this.config.oauthMetadata = result.metadata;
   }

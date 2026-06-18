@@ -1,6 +1,7 @@
 import {
   EModelEndpoint,
   getConfigDefaults,
+  skillSyncConfigSchema,
   summarizationConfigSchema,
 } from 'librechat-data-provider';
 import type { TCustomConfig, FileSources, DeepPartial } from 'librechat-data-provider';
@@ -15,9 +16,27 @@ import { loadEndpoints } from './endpoints';
 import { loadOCRConfig } from './ocr';
 import logger from '~/config/winston';
 
-function loadSummarizationConfig(config: DeepPartial<TCustomConfig>): AppConfig['summarization'] {
+export function loadSummarizationConfig(
+  config: DeepPartial<TCustomConfig>,
+): AppConfig['summarization'] {
   const raw = config.summarization;
   if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+
+  if (
+    raw.trigger &&
+    typeof raw.trigger === 'object' &&
+    (raw.trigger as { type?: unknown }).type === 'token_count'
+  ) {
+    logger.warn(
+      "[AppService] `summarization.trigger.type: 'token_count'` is no longer supported. " +
+        "Use 'token_ratio' (0-1), 'remaining_tokens' (positive integer), or " +
+        "'messages_to_refine' (positive integer). Your `summarization` config will be " +
+        'ignored and summarization will fall back to self-summarize defaults (the ' +
+        "agent's own provider/model, fires on every pruning event) until this is " +
+        'corrected.',
+    );
     return undefined;
   }
 
@@ -31,6 +50,21 @@ function loadSummarizationConfig(config: DeepPartial<TCustomConfig>): AppConfig[
     ...parsed.data,
     enabled: parsed.data.enabled !== false,
   };
+}
+
+export function loadSkillSyncConfig(config: DeepPartial<TCustomConfig>): AppConfig['skillSync'] {
+  const raw = config.skillSync;
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+
+  const parsed = skillSyncConfigSchema.safeParse(raw);
+  if (!parsed.success) {
+    logger.warn('[AppService] Invalid skill sync config', parsed.error.flatten());
+    return undefined;
+  }
+
+  return parsed.data;
 }
 
 export type Paths = {
@@ -65,13 +99,15 @@ export const AppService = async (params?: {
   const webSearch = loadWebSearchConfig(config.webSearch);
   const memory = loadMemoryConfig(config.memory);
   const summarization = loadSummarizationConfig(config);
+  const skillSync = loadSkillSyncConfig(config);
   const filteredTools = config.filteredTools;
   const includedTools = config.includedTools;
   const fileStrategy = (config.fileStrategy ?? configDefaults.fileStrategy) as
     | FileSources.local
     | FileSources.s3
     | FileSources.firebase
-    | FileSources.azure_blob;
+    | FileSources.azure_blob
+    | FileSources.cloudfront;
   const startBalance = process.env.START_BALANCE;
   const balance = config.balance ?? {
     enabled: process.env.CHECK_BALANCE?.toLowerCase().trim() === 'true',
@@ -91,6 +127,7 @@ export const AppService = async (params?: {
   const interfaceConfig = await loadDefaultInterface({ config, configDefaults });
   const turnstileConfig = loadTurnstileConfig(config, configDefaults);
   const speech = config.speech;
+  const messageFilter = config.messageFilter;
 
   const defaultConfig = {
     ocr,
@@ -98,15 +135,17 @@ export const AppService = async (params?: {
     config,
     memory,
     speech,
-    balance,
     actions,
+    balance,
+    skillSync,
     webSearch,
     mcpSettings,
-    transactions,
     fileStrategy,
     registration,
+    transactions,
     filteredTools,
     includedTools,
+    messageFilter,
     summarization,
     availableTools,
     imageOutputType,
@@ -114,6 +153,7 @@ export const AppService = async (params?: {
     turnstileConfig,
     mcpConfig: mcpServersConfig,
     fileStrategies: config.fileStrategies,
+    cloudfront: config.cloudfront as AppConfig['cloudfront'],
   };
 
   const agentsDefaults = agentsConfigSetup(config);

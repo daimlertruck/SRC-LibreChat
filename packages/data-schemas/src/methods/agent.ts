@@ -1,10 +1,32 @@
 import crypto from 'node:crypto';
-import { Constants, ResourceType, actionDelimiter } from 'librechat-data-provider';
+import {
+  Constants,
+  EToolResources,
+  ResourceType,
+  actionDelimiter,
+  isActionTool,
+} from 'librechat-data-provider';
+import type { AgentToolResources } from 'librechat-data-provider';
 import type { FilterQuery, Model, Types } from 'mongoose';
 import type { IAgent, IAclEntry } from '~/types';
+import { filterExistingSkillIds } from './skill';
 import logger from '~/config/winston';
 
 const { mcp_delimiter } = Constants;
+
+/**
+ * Mirrors `TOOL_RESOURCE_KEYS` in `@librechat/api` — the subset of
+ * `EToolResources` that actually carries `file_ids` on an agent document.
+ * `code_interpreter` is excluded (it belongs to the Assistants API, not
+ * `AgentToolResources`) to avoid emitting dead MongoDB clauses.
+ */
+const TOOL_RESOURCE_KEYS: ReadonlyArray<keyof AgentToolResources> = [
+  EToolResources.execute_code,
+  EToolResources.file_search,
+  EToolResources.image_edit,
+  EToolResources.context,
+  EToolResources.ocr,
+];
 
 export interface AgentDeps {
   /** Removes all ACL permissions for a resource. Injected from PermissionService. */
@@ -31,7 +53,7 @@ function extractMCPServerNames(tools: string[] | undefined | null): string[] {
   }
   const serverNames = new Set<string>();
   for (const tool of tools) {
-    if (!tool || !tool.includes(mcp_delimiter)) {
+    if (!tool || !tool.includes(mcp_delimiter) || isActionTool(tool)) {
       continue;
     }
     const parts = tool.split(mcp_delimiter);
@@ -225,7 +247,83 @@ async function generateActionMetadataHash(
   return hashHex;
 }
 
-export function createAgentMethods(mongoose: typeof import('mongoose'), deps: AgentDeps) {
+export function createAgentMethods(
+  mongoose: typeof import('mongoose'),
+  deps: AgentDeps,
+): {
+  getAgent: (searchParameter: FilterQuery<IAgent>) => Promise<IAgent | null>;
+  getAgents: (searchParameter: FilterQuery<IAgent>) => Promise<IAgent[]>;
+  createAgent: (agentData: Record<string, unknown>) => Promise<IAgent>;
+  hasAgentWithMCPServerName: ({
+    agentIds,
+    serverName,
+  }: {
+    agentIds: Types.ObjectId[];
+    serverName: string;
+  }) => Promise<boolean>;
+  getMCPServerNamesByAgentIds: (agentIds: Types.ObjectId[]) => Promise<string[]>;
+  updateAgent: (
+    searchParameter: FilterQuery<IAgent>,
+    updateData: Record<string, unknown>,
+    options?: {
+      updatingUserId?: string | null;
+      forceVersion?: boolean;
+      skipVersioning?: boolean;
+    },
+  ) => Promise<IAgent | null>;
+  deleteAgent: (searchParameter: FilterQuery<IAgent>) => Promise<IAgent | null>;
+  deleteUserAgents: (userId: string) => Promise<void>;
+  revertAgentVersion: (
+    searchParameter: FilterQuery<IAgent>,
+    versionIndex: number,
+  ) => Promise<IAgent>;
+  countPromotedAgents: () => Promise<number>;
+  addAgentResourceFile: ({
+    agent_id,
+    tool_resource,
+    file_id,
+    updatingUserId,
+  }: {
+    agent_id: string;
+    tool_resource: string;
+    file_id: string;
+    updatingUserId?: string;
+  }) => Promise<IAgent>;
+  getListAgentsByAccess: ({
+    accessibleIds,
+    otherParams,
+    limit,
+    after,
+    includeSkillConfig,
+  }: {
+    accessibleIds?: Types.ObjectId[];
+    otherParams?: Record<string, unknown>;
+    limit?: number | null;
+    after?: string | null;
+    includeSkillConfig?: boolean;
+  }) => Promise<{
+    object: string;
+    data: Array<Record<string, unknown>>;
+    first_id: string | null;
+    last_id: string | null;
+    has_more: boolean;
+    after: string | null;
+  }>;
+  removeAgentResourceFiles: ({
+    agent_id,
+    files,
+  }: {
+    agent_id: string;
+    files: Array<{ tool_resource: string; file_id: string }>;
+  }) => Promise<IAgent>;
+  generateActionMetadataHash: typeof generateActionMetadataHash;
+  removeAgentFromUserFavorites: (resourceId: string, userIds: string[]) => Promise<void>;
+  removeAgentResourceFilesFromAllAgents: ({
+    file_ids,
+  }: {
+    file_ids: string[];
+  }) => Promise<{ matchedCount: number; modifiedCount: number }>;
+} {
   const { removeAllPermissions, getActions, getSoleOwnedResourceIds } = deps;
 
   /**
@@ -233,6 +331,15 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
    */
   async function createAgent(agentData: Record<string, unknown>): Promise<IAgent> {
     const Agent = mongoose.models.Agent as Model<IAgent>;
+    if (Array.isArray(agentData.skills) && agentData.skills.length > 0) {
+      const prunedSkills = await filterExistingSkillIds(mongoose, agentData.skills as string[]);
+      agentData.skills = prunedSkills;
+      /** Fail closed when pruning empties a non-empty allowlist — empty +
+       *  enabled means the full catalog, and hygiene must never widen scope. */
+      if (prunedSkills.length === 0) {
+        agentData.skills_enabled = false;
+      }
+    }
     const { author: _author, ...versionData } = agentData;
     const timestamp = new Date();
     const initialAgentData = {
@@ -256,7 +363,7 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
    */
   async function getAgent(searchParameter: FilterQuery<IAgent>): Promise<IAgent | null> {
     const Agent = mongoose.models.Agent as Model<IAgent>;
-    return (await Agent.findOne(searchParameter).lean()) as IAgent | null;
+    return await Agent.findOne(searchParameter).lean<IAgent>();
   }
 
   /**
@@ -264,7 +371,51 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
    */
   async function getAgents(searchParameter: FilterQuery<IAgent>): Promise<IAgent[]> {
     const Agent = mongoose.models.Agent as Model<IAgent>;
-    return (await Agent.find(searchParameter).lean()) as IAgent[];
+    return await Agent.find(searchParameter).lean<IAgent[]>();
+  }
+
+  async function hasAgentWithMCPServerName({
+    agentIds,
+    serverName,
+  }: {
+    agentIds: Types.ObjectId[];
+    serverName: string;
+  }): Promise<boolean> {
+    if (agentIds.length === 0) {
+      return false;
+    }
+
+    const Agent = mongoose.models.Agent as Model<IAgent>;
+    const agent = await Agent.exists({
+      _id: { $in: agentIds },
+      mcpServerNames: serverName,
+    });
+
+    return agent !== null;
+  }
+
+  async function getMCPServerNamesByAgentIds(agentIds: Types.ObjectId[]): Promise<string[]> {
+    if (agentIds.length === 0) {
+      return [];
+    }
+
+    const Agent = mongoose.models.Agent as Model<IAgent>;
+    const agents = await Agent.find(
+      {
+        _id: { $in: agentIds },
+        mcpServerNames: { $exists: true, $not: { $size: 0 } },
+      },
+      { mcpServerNames: 1 },
+    ).lean<Array<Pick<IAgent, 'mcpServerNames'>>>();
+
+    const serverNames = new Set<string>();
+    for (const agent of agents) {
+      for (const serverName of agent.mcpServerNames ?? []) {
+        serverNames.add(serverName);
+      }
+    }
+
+    return Array.from(serverNames);
   }
 
   /**
@@ -296,6 +447,27 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
         ...versionData
       } = currentAgent.toObject() as unknown as Record<string, unknown>;
       const { $push, $pull, $addToSet, ...directUpdates } = updateData;
+
+      /** Self-heal: drop allowlist ids whose skill doc no longer exists.
+       *  A dangling id keeps the allowlist non-empty while scoping the
+       *  runtime catalog to an empty intersection — silently disabling
+       *  skills for the agent. When pruning empties a non-empty allowlist,
+       *  fail closed and disable skills: empty + enabled means the full
+       *  catalog, and hygiene must never widen scope. (An explicit user
+       *  `skills: []` submission skips this branch and keeps the
+       *  full-catalog semantics.) */
+      if (Array.isArray(directUpdates.skills) && directUpdates.skills.length > 0) {
+        const prunedSkills = await filterExistingSkillIds(
+          mongoose,
+          directUpdates.skills as string[],
+        );
+        directUpdates.skills = prunedSkills;
+        updateData.skills = prunedSkills;
+        if (prunedSkills.length === 0) {
+          directUpdates.skills_enabled = false;
+          updateData.skills_enabled = false;
+        }
+      }
 
       // Sync mcpServerNames when tools are updated
       if ((directUpdates as Record<string, unknown>).tools !== undefined) {
@@ -478,6 +650,37 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
   }
 
   /**
+   * Removes the given file_ids from every agent's `tool_resources.*.file_ids`
+   * so file deletion cannot leave orphaned stubs behind (see issue #12776).
+   */
+  async function removeAgentResourceFilesFromAllAgents({
+    file_ids,
+  }: {
+    file_ids: string[];
+  }): Promise<{ matchedCount: number; modifiedCount: number }> {
+    if (!file_ids || file_ids.length === 0) {
+      return { matchedCount: 0, modifiedCount: 0 };
+    }
+
+    const Agent = mongoose.models.Agent as Model<IAgent>;
+
+    const orQuery = TOOL_RESOURCE_KEYS.map((key) => ({
+      [`tool_resources.${key}.file_ids`]: { $in: file_ids },
+    }));
+
+    const pullAllOps = TOOL_RESOURCE_KEYS.reduce<Record<string, string[]>>((acc, key) => {
+      acc[`tool_resources.${key}.file_ids`] = file_ids;
+      return acc;
+    }, {});
+
+    const result = await Agent.updateMany({ $or: orQuery }, { $pullAll: pullAllOps });
+    return {
+      matchedCount: result.matchedCount ?? 0,
+      modifiedCount: result.modifiedCount ?? 0,
+    };
+  }
+
+  /**
    * Deletes an agent based on the provided search parameter.
    */
   async function deleteAgent(searchParameter: FilterQuery<IAgent>): Promise<IAgent | null> {
@@ -595,18 +798,21 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
   }
 
   /**
-   * Get agents by accessible IDs with optional cursor-based pagination.
+   * Get agents by accessible IDs with cursor pagination. Defaults to a 100-page
+   * limit (max 1000); pass `limit: null` to opt out entirely.
    */
   async function getListAgentsByAccess({
     accessibleIds = [],
     otherParams = {},
-    limit = null,
+    limit = 100,
     after = null,
+    includeSkillConfig = false,
   }: {
     accessibleIds?: Types.ObjectId[];
     otherParams?: Record<string, unknown>;
     limit?: number | null;
     after?: string | null;
+    includeSkillConfig?: boolean;
   }): Promise<{
     object: string;
     data: Array<Record<string, unknown>>;
@@ -618,7 +824,7 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
     const Agent = mongoose.models.Agent as Model<IAgent>;
     const isPaginated = limit !== null && limit !== undefined;
     const normalizedLimit = isPaginated
-      ? Math.min(Math.max(1, parseInt(String(limit)) || 20), 100)
+      ? Math.min(Math.max(1, parseInt(String(limit)) || 20), 1000)
       : null;
 
     const baseQuery: Record<string, unknown> = {
@@ -654,7 +860,7 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
       }
     }
 
-    let query = Agent.find(baseQuery, {
+    const projection: Record<string, 1> = {
       id: 1,
       _id: 1,
       name: 1,
@@ -665,7 +871,14 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
       category: 1,
       support_contact: 1,
       is_promoted: 1,
-    }).sort({ updatedAt: -1, _id: 1 });
+    };
+
+    if (includeSkillConfig) {
+      projection.skills = 1;
+      projection.skills_enabled = 1;
+    }
+
+    let query = Agent.find(baseQuery, projection).sort({ updatedAt: -1, _id: 1 });
 
     if (isPaginated && normalizedLimit) {
       query = query.limit(normalizedLimit + 1);
@@ -728,9 +941,28 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
     delete revertToVersion.author;
     delete revertToVersion.updatedBy;
 
-    return (await Agent.findOneAndUpdate(searchParameter, revertToVersion, {
+    /** Version snapshots can predate skill deletions; restoring one verbatim
+     *  would resurrect dangling allowlist ids that scope the catalog to
+     *  nothing. Same self-heal (and fail-closed-on-empty rule) as
+     *  `createAgent`/`updateAgent`. */
+    if (Array.isArray(revertToVersion.skills) && revertToVersion.skills.length > 0) {
+      const prunedSkills = await filterExistingSkillIds(
+        mongoose,
+        revertToVersion.skills as string[],
+      );
+      revertToVersion.skills = prunedSkills;
+      if (prunedSkills.length === 0) {
+        revertToVersion.skills_enabled = false;
+      }
+    }
+
+    const revertedAgent = await Agent.findOneAndUpdate(searchParameter, revertToVersion, {
       new: true,
-    }).lean()) as IAgent;
+    }).lean<IAgent>();
+    if (!revertedAgent) {
+      throw new Error('Agent not found');
+    }
+    return revertedAgent;
   }
 
   /**
@@ -764,6 +996,8 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
     getAgent,
     getAgents,
     createAgent,
+    hasAgentWithMCPServerName,
+    getMCPServerNamesByAgentIds,
     updateAgent,
     deleteAgent,
     deleteUserAgents,
@@ -774,6 +1008,7 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
     removeAgentResourceFiles,
     generateActionMetadataHash,
     removeAgentFromUserFavorites,
+    removeAgentResourceFilesFromAllAgents,
   };
 }
 

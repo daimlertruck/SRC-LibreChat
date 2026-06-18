@@ -24,7 +24,7 @@ export async function loadDefaultInterface({
 
   const memoryConfig = config?.memory;
   const memoryEnabled = isMemoryEnabled(memoryConfig);
-  /** Only disable memories if memory config is present but disabled/invalid */
+  /** Only disable memories if memory config is present and explicitly disabled */
   const shouldDisableMemories = memoryConfig && !memoryEnabled;
 
   const loadedInterface: AppConfig['interfaceConfig'] = removeNullishValues({
@@ -40,14 +40,22 @@ export async function loadDefaultInterface({
     customWelcome: interfaceConfig?.customWelcome ?? defaults.customWelcome,
     loginImageUrl: interfaceConfig?.loginImageUrl ?? defaults.loginImageUrl,
     loginText: interfaceConfig?.loginText ?? defaults.loginText,
+    autoSubmitFromUrl: interfaceConfig?.autoSubmitFromUrl ?? defaults.autoSubmitFromUrl,
+    buildInfo: interfaceConfig?.buildInfo ?? defaults.buildInfo,
+    contextUsage: interfaceConfig?.contextUsage ?? defaults.contextUsage,
+    contextCost: interfaceConfig?.contextCost ?? defaults.contextCost,
+    currency: interfaceConfig?.currency ?? defaults.currency,
 
-    // Permissions - only include if explicitly configured
+    // Permissions and related settings - only include if explicitly configured
     bookmarks: interfaceConfig?.bookmarks,
     memories: shouldDisableMemories ? false : interfaceConfig?.memories,
     prompts: interfaceConfig?.prompts,
     multiConvo: interfaceConfig?.multiConvo,
     agents: interfaceConfig?.agents,
     temporaryChat: interfaceConfig?.temporaryChat,
+    temporaryChatRetention: interfaceConfig?.temporaryChatRetention,
+    retentionMode: interfaceConfig?.retentionMode,
+    retainAgentFiles: interfaceConfig?.retainAgentFiles,
     runCode: interfaceConfig?.runCode,
     webSearch: interfaceConfig?.webSearch,
     fileSearch: interfaceConfig?.fileSearch,
@@ -55,6 +63,8 @@ export async function loadDefaultInterface({
     peoplePicker: interfaceConfig?.peoplePicker,
     marketplace: interfaceConfig?.marketplace,
     remoteAgents: interfaceConfig?.remoteAgents,
+    skills: interfaceConfig?.skills,
+    sharedLinks: interfaceConfig?.sharedLinks,
   });
 
   return loadedInterface;

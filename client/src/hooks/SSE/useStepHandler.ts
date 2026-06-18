@@ -1,4 +1,5 @@
 import { useCallback, useRef } from 'react';
+import { useRecoilCallback } from 'recoil';
 import {
   Constants,
   StepTypes,
@@ -15,9 +16,17 @@ import type {
   EventSubmission,
   SummaryContentPart,
   TMessageContentParts,
+  SubagentUpdateEvent,
 } from 'librechat-data-provider';
 import type { SetterOrUpdater } from 'recoil';
 import type { AnnounceOptions } from '~/common';
+import {
+  foldSubagentEvent,
+  foldSubagentEventIntoTicker,
+  initSubagentAggregatorState,
+  initSubagentTickerState,
+} from '~/utils/subagentContent';
+import { subagentProgressByToolCallId } from '~/store';
 import { MESSAGE_UPDATE_INTERVAL } from '~/common';
 
 type TUseStepHandler = {
@@ -27,6 +36,12 @@ type TUseStepHandler = {
   /** @deprecated - isSubmitting should be derived from submission state */
   setIsSubmitting?: SetterOrUpdater<boolean>;
   lastAnnouncementTimeRef: React.MutableRefObject<number>;
+  /**
+   * Fired when a completed `create_file`/`edit_file` call targeted a
+   * `skills/...` path. The caller owns the side effect (skill query cache
+   * invalidation) so this hook stays free of query-client coupling.
+   */
+  onSkillAuthoringComplete?: () => void;
 };
 
 type TStepEvent =
@@ -38,7 +53,8 @@ type TStepEvent =
   | { event: StepEvents.ON_RUN_STEP_COMPLETED; data: { result: Agents.ToolEndEvent } }
   | { event: StepEvents.ON_SUMMARIZE_START; data: Agents.SummarizeStartEvent }
   | { event: StepEvents.ON_SUMMARIZE_DELTA; data: Agents.SummarizeDeltaEvent }
-  | { event: StepEvents.ON_SUMMARIZE_COMPLETE; data: Agents.SummarizeCompleteEvent };
+  | { event: StepEvents.ON_SUMMARIZE_COMPLETE; data: Agents.SummarizeCompleteEvent }
+  | { event: StepEvents.ON_SUBAGENT_UPDATE; data: SubagentUpdateEvent };
 
 type MessageDeltaUpdate = { type: ContentTypes.TEXT; text: string; tool_call_ids?: string[] };
 
@@ -53,11 +69,52 @@ type AllContentTypes =
   | ContentTypes.SUMMARY
   | ContentTypes.ERROR;
 
+/** Mirrors `SKILL_FILE_PREFIX` in `@librechat/api` file-authoring handlers. */
+const SKILL_FILE_PREFIX = 'skills/';
+const FILE_AUTHORING_TOOLS = new Set(['create_file', 'edit_file']);
+
+/**
+ * True when a completed tool call authored a skill file (`create_file` /
+ * `edit_file` targeting a `skills/...` path). Skills created or edited
+ * mid-chat must invalidate the cached skill queries, or the Skills panel
+ * and builder keep showing the pre-authoring catalog.
+ */
+function isSkillAuthoringToolCall(toolCall?: Agents.ToolCall): boolean {
+  if (!toolCall?.name || !FILE_AUTHORING_TOOLS.has(toolCall.name)) {
+    return false;
+  }
+  const { args } = toolCall;
+  let filePath: unknown;
+  if (typeof args === 'object' && args !== null) {
+    filePath = (args as { file_path?: unknown }).file_path;
+  } else if (typeof args === 'string') {
+    try {
+      filePath = (JSON.parse(args) as { file_path?: unknown }).file_path;
+    } catch {
+      return false;
+    }
+  }
+  return typeof filePath === 'string' && filePath.startsWith(SKILL_FILE_PREFIX);
+}
+
+const isOAuthToolCallName = (name?: string) =>
+  typeof name === 'string' && name.startsWith(`oauth${Constants.mcp_delimiter}`);
+
+const isOAuthToolCallContent = (part?: Partial<TMessageContentParts>) => {
+  if (part?.type !== ContentTypes.TOOL_CALL || !('tool_call' in part)) {
+    return false;
+  }
+  const { tool_call: toolCall } = part;
+  const name = toolCall != null && 'name' in toolCall ? toolCall.name : undefined;
+  return isOAuthToolCallName(name);
+};
+
 export default function useStepHandler({
   setMessages,
   getMessages,
   announcePolite,
   lastAnnouncementTimeRef,
+  onSkillAuthoringComplete,
 }: TUseStepHandler) {
   const toolCallIdMap = useRef(new Map<string, string | undefined>());
   const messageMap = useRef(new Map<string, TMessage>());
@@ -66,6 +123,165 @@ export default function useStepHandler({
   const pendingDeltaBuffer = useRef(new Map<string, TStepEvent[]>());
   /** Coalesces rapid-fire summarize delta renders into a single rAF frame */
   const summarizeDeltaRaf = useRef<number | null>(null);
+  /**
+   * Maps `SubagentUpdateEvent.subagentRunId` → parent `tool_call_id`.
+   * Preferred source is `payload.parentToolCallId` (threaded through by the
+   * SDK from `ToolRunnableConfig.toolCall.id`, deterministic). If a host
+   * runs an older SDK that doesn't emit it, we fall back to a temporal
+   * claim: the OLDEST unclaimed `subagent` tool call in the active message.
+   * Forward (oldest-first) iteration matches the order tool calls are
+   * created in, so concurrent spawns map in creation order.
+   */
+  const subagentRunToToolCallId = useRef(new Map<string, string>());
+  const claimedSubagentToolCallIds = useRef(new Set<string>());
+  /**
+   * Buffers for envelopes that arrive before their `subagent` tool call is
+   * reflected in `messageMap`. Keyed by `subagentRunId`. Once a tool call is
+   * claimed we drain the buffer into the Recoil atom in arrival order.
+   */
+  const pendingSubagentBuffer = useRef(new Map<string, SubagentUpdateEvent[]>());
+  /**
+   * Tracked atom keys so `clearStepMaps` can reset them. Without this, each
+   * subagent invocation leaks an `events: SubagentUpdateEvent[]` array in the
+   * `atomFamily` — atoms persist for the app lifetime.
+   */
+  const knownSubagentAtomKeys = useRef(new Set<string>());
+
+  const getCurrentMessages = useCallback(
+    (messages: TMessage[]) => {
+      const freshMessages = getMessages();
+      return freshMessages && freshMessages.length >= messages.length ? freshMessages : messages;
+    },
+    [getMessages],
+  );
+
+  /** Both content parts and ticker lines are aggregated incrementally
+   *  into the atom as each `ON_SUBAGENT_UPDATE` arrives — we never
+   *  retain the raw event array, so no rolling window is needed. A
+   *  talkative subagent can emit thousands of deltas without growing
+   *  memory past what the structural output requires. */
+
+  /**
+   * Attempts to resolve the parent `tool_call_id` for a subagent run, using
+   * the SDK-provided `parentToolCallId` first and falling back to an
+   * oldest-unclaimed temporal claim.
+   */
+  const resolveSubagentToolCallId = useCallback(
+    (payload: SubagentUpdateEvent): string | undefined => {
+      const cached = subagentRunToToolCallId.current.get(payload.subagentRunId);
+      if (cached != null) return cached;
+
+      if (payload.parentToolCallId) {
+        subagentRunToToolCallId.current.set(payload.subagentRunId, payload.parentToolCallId);
+        claimedSubagentToolCallIds.current.add(payload.parentToolCallId);
+        return payload.parentToolCallId;
+      }
+
+      // Fallback — oldest unclaimed subagent tool call wins.
+      for (const message of messageMap.current.values()) {
+        const content = message.content;
+        if (!Array.isArray(content)) continue;
+        for (let i = 0; i < content.length; i++) {
+          const part = content[i];
+          if (part?.type !== ContentTypes.TOOL_CALL) continue;
+          const tc = (part as { [ContentTypes.TOOL_CALL]?: { id?: string; name?: string } })[
+            ContentTypes.TOOL_CALL
+          ];
+          if (
+            tc?.name === Constants.SUBAGENT &&
+            tc.id &&
+            !claimedSubagentToolCallIds.current.has(tc.id)
+          ) {
+            subagentRunToToolCallId.current.set(payload.subagentRunId, tc.id);
+            claimedSubagentToolCallIds.current.add(tc.id);
+            return tc.id;
+          }
+        }
+      }
+
+      return undefined;
+    },
+    [],
+  );
+
+  /**
+   * Merges an incoming {@link SubagentUpdateEvent} into the Recoil atom bucket
+   * keyed by the parent `tool_call_id`. Buffers early-arriving events whose
+   * tool call is not yet mapped, and replays the buffer once correlation
+   * completes.
+   */
+  const applySubagentUpdate = useRecoilCallback(
+    ({ set }) =>
+      (payload: SubagentUpdateEvent): void => {
+        const toolCallId = resolveSubagentToolCallId(payload);
+
+        if (!toolCallId) {
+          const queue = pendingSubagentBuffer.current.get(payload.subagentRunId) ?? [];
+          queue.push(payload);
+          pendingSubagentBuffer.current.set(payload.subagentRunId, queue);
+          return;
+        }
+
+        const buffered = pendingSubagentBuffer.current.get(payload.subagentRunId);
+        if (buffered && buffered.length > 0) {
+          pendingSubagentBuffer.current.delete(payload.subagentRunId);
+        }
+        const toApply = buffered ? [...buffered, payload] : [payload];
+
+        knownSubagentAtomKeys.current.add(toolCallId);
+        set(subagentProgressByToolCallId(toolCallId), (prev) => {
+          /** Fold the batch into both aggregators. Pure functions — they
+           *  return a new reference only when something actually changed,
+           *  so React bails out of unnecessary re-renders downstream. */
+          let contentParts = prev?.contentParts ?? [];
+          let aggregatorState = prev?.aggregatorState ?? initSubagentAggregatorState();
+          let tickerState = prev?.tickerState ?? initSubagentTickerState();
+          for (const event of toApply) {
+            ({ parts: contentParts, state: aggregatorState } = foldSubagentEvent(
+              contentParts,
+              aggregatorState,
+              event,
+            ));
+            tickerState = foldSubagentEventIntoTicker(tickerState, event);
+          }
+
+          const last = toApply[toApply.length - 1];
+          return {
+            subagentRunId: payload.subagentRunId,
+            subagentType: payload.subagentType,
+            subagentAgentId: payload.subagentAgentId ?? prev?.subagentAgentId,
+            contentParts,
+            aggregatorState,
+            tickerState,
+            status: last.phase,
+            latestLabel: last.label ?? prev?.latestLabel,
+          };
+        });
+      },
+    [resolveSubagentToolCallId],
+  );
+
+  /**
+   * Resets all accumulated subagent Recoil state. Kept for conversation-
+   * switch cleanup (see top-level hook usage) but NOT called from
+   * `clearStepMaps` — the collapsed SubagentCall ticker and its dialog
+   * read from these atoms to render the child's content parts, and we
+   * want that history to remain visible after the stream ends so the
+   * user can reopen the dialog for auditability. The atoms are bounded
+   * per-call (200-event cap) and per-conversation (one atom per
+   * subagent spawn), so growth is proportional to messages — the same
+   * growth profile as the rest of the conversation state.
+   */
+  const resetSubagentAtoms = useRecoilCallback(
+    ({ reset }) =>
+      (): void => {
+        for (const toolCallId of knownSubagentAtomKeys.current) {
+          reset(subagentProgressByToolCallId(toolCallId));
+        }
+        knownSubagentAtomKeys.current.clear();
+      },
+    [],
+  );
 
   /**
    * Calculate content index for a run step.
@@ -109,9 +325,20 @@ export default function useStepHandler({
       return message;
     }
 
-    const updatedContent = [...(message.content || [])] as Array<
+    const incomingOAuthToolCall =
+      contentType === ContentTypes.TOOL_CALL &&
+      'tool_call' in contentPart &&
+      isOAuthToolCallName(contentPart.tool_call?.name);
+
+    let updatedContent = [...(message.content || [])] as Array<
       Partial<TMessageContentParts> | undefined
     >;
+
+    const oauthPromptOccupiesSlot = isOAuthToolCallContent(updatedContent[index]);
+    if (!incomingOAuthToolCall && oauthPromptOccupiesSlot) {
+      updatedContent = updatedContent.filter((part) => !isOAuthToolCallContent(part));
+    }
+
     if (!updatedContent[index] && contentType !== ContentTypes.TOOL_CALL) {
       updatedContent[index] = { type: contentPart.type as AllContentTypes };
     }
@@ -252,9 +479,105 @@ export default function useStepHandler({
 
   const stepHandler = useCallback(
     (stepEvent: TStepEvent, submission: EventSubmission) => {
-      const messages = getMessages() || [];
+      const submissionMessages = submission.messages ?? [];
+      const getEventMessages = (candidateMessages: TMessage[]) =>
+        submission.isRegenerate ? candidateMessages : getCurrentMessages(candidateMessages);
+      const messages = getEventMessages(submissionMessages);
       const { userMessage } = submission;
-      let parentMessageId = userMessage.messageId;
+      const getRegenerateResponseIds = (responseMessageId: string) => {
+        const ids = new Set<string>();
+        const addId = (id?: string | null) => {
+          if (!id) {
+            return;
+          }
+          ids.add(id);
+          ids.add(id.replace(/_+$/, ''));
+        };
+        addId(responseMessageId);
+        addId(submission.initialResponse?.messageId);
+        addId(submission.userMessage?.responseMessageId);
+        return ids;
+      };
+      const shouldRemoveRegenerateResponse = (message: TMessage, responseMessageId: string) =>
+        submission.isRegenerate &&
+        !message.isCreatedByUser &&
+        getRegenerateResponseIds(responseMessageId).has(message.messageId);
+      const shouldRemoveInitialResponse = (message: TMessage, responseMessageId: string) => {
+        const initialResponseId = submission.initialResponse?.messageId;
+        return (
+          !submission.isRegenerate &&
+          !message.isCreatedByUser &&
+          initialResponseId != null &&
+          initialResponseId !== responseMessageId &&
+          message.messageId === initialResponseId &&
+          message.parentMessageId === userMessage.messageId
+        );
+      };
+      const ensureUserMessagePresent = (
+        candidateMessages: TMessage[],
+        responseMessageId: string,
+      ) => {
+        if (
+          submission.isRegenerate ||
+          !userMessage?.messageId ||
+          candidateMessages.some((message) => message.messageId === userMessage.messageId)
+        ) {
+          return candidateMessages;
+        }
+
+        const responseIndex = candidateMessages.findIndex(
+          (message) => message.messageId === responseMessageId,
+        );
+        if (responseIndex < 0) {
+          return [...candidateMessages, userMessage as TMessage];
+        }
+
+        const nextMessages = [...candidateMessages];
+        nextMessages.splice(responseIndex, 0, userMessage as TMessage);
+        return nextMessages;
+      };
+      const getResponseBaseMessages = (
+        candidateMessages: TMessage[],
+        responseMessageId: string,
+        ensureUserMessage = false,
+      ) => {
+        const currentMessages = getEventMessages(candidateMessages);
+        if (!submission.isRegenerate) {
+          const nextMessages = currentMessages.filter(
+            (message) => !shouldRemoveInitialResponse(message, responseMessageId),
+          );
+          return ensureUserMessage
+            ? ensureUserMessagePresent(nextMessages, responseMessageId)
+            : nextMessages;
+        }
+        return currentMessages.filter(
+          (message) => !shouldRemoveRegenerateResponse(message, responseMessageId),
+        );
+      };
+      const mergeResponseMessage = (
+        candidateMessages: TMessage[],
+        updatedResponse: TMessage,
+        responseMessageId: string,
+        options?: { ensureUserMessage?: boolean },
+      ) => {
+        const currentMessages = getResponseBaseMessages(
+          candidateMessages,
+          responseMessageId,
+          options?.ensureUserMessage === true,
+        );
+        const hasResponseMessage = currentMessages.some(
+          (msg) => msg.messageId === responseMessageId,
+        );
+        return hasResponseMessage
+          ? currentMessages.map((msg) =>
+              msg.messageId === responseMessageId ? updatedResponse : msg,
+            )
+          : [...currentMessages, updatedResponse];
+      };
+      let parentMessageId =
+        submission.isRegenerate && submission.initialResponse?.parentMessageId
+          ? submission.initialResponse.parentMessageId
+          : userMessage.messageId;
 
       const currentTime = Date.now();
       if (currentTime - lastAnnouncementTimeRef.current > MESSAGE_UPDATE_INTERVAL) {
@@ -288,10 +611,13 @@ export default function useStepHandler({
         let response = messageMap.current.get(responseMessageId);
 
         if (!response) {
-          // Find the actual response message - check if last message is a response, otherwise use initialResponse
+          // Find the actual response message. Regenerate submissions can target
+          // an earlier branch while the visible history still ends at a later
+          // assistant message, so never seed a regenerated response from the
+          // conversation tail.
           const lastMessage = messages[messages.length - 1] as TMessage;
           const responseMessage =
-            lastMessage && !lastMessage.isCreatedByUser
+            !submission.isRegenerate && lastMessage && !lastMessage.isCreatedByUser
               ? lastMessage
               : (submission?.initialResponse as TMessage);
 
@@ -313,14 +639,23 @@ export default function useStepHandler({
 
           // Get fresh messages to handle multi-tab scenarios where messages may have loaded
           // after this handler started (Tab 2 may have more complete history now)
-          const freshMessages = getMessages() || [];
-          const currentMessages = freshMessages.length > messages.length ? freshMessages : messages;
+          const currentMessages = getResponseBaseMessages(messages, responseMessageId, true);
 
           // Remove any existing response placeholder
-          let updatedMessages = currentMessages.filter((m) => m.messageId !== responseMessageId);
+          let updatedMessages = currentMessages.filter(
+            (message) =>
+              message.messageId !== responseMessageId &&
+              !shouldRemoveRegenerateResponse(message, responseMessageId) &&
+              !shouldRemoveInitialResponse(message, responseMessageId),
+          );
 
-          // Ensure userMessage is present (multi-tab: Tab 2 may not have it yet)
-          if (!updatedMessages.some((m) => m.messageId === userMessage.messageId)) {
+          // Ensure userMessage is present (multi-tab: Tab 2 may not have it yet).
+          // Regenerate reuses an existing user turn; its submission userMessage is only
+          // a transport placeholder and must not become a new visible branch.
+          if (
+            !submission.isRegenerate &&
+            !updatedMessages.some((m) => m.messageId === userMessage.messageId)
+          ) {
             updatedMessages = [...updatedMessages, userMessage as TMessage];
           }
 
@@ -356,11 +691,11 @@ export default function useStepHandler({
           });
 
           messageMap.current.set(responseMessageId, updatedResponse);
-          const updatedMessages = messages.map((msg) =>
-            msg.messageId === responseMessageId ? updatedResponse : msg,
+          setMessages(
+            mergeResponseMessage(messages, updatedResponse, responseMessageId, {
+              ensureUserMessage: true,
+            }),
           );
-
-          setMessages(updatedMessages);
         }
 
         if (runStep.summary != null) {
@@ -382,8 +717,11 @@ export default function useStepHandler({
           );
 
           messageMap.current.set(responseMessageId, updatedResponse);
-          const currentMessages = getMessages() || [];
-          setMessages([...currentMessages.slice(0, -1), updatedResponse]);
+          setMessages(
+            mergeResponseMessage(messages, updatedResponse, responseMessageId, {
+              ensureUserMessage: true,
+            }),
+          );
         }
 
         const bufferedDeltas = pendingDeltaBuffer.current.get(runStep.id);
@@ -421,8 +759,11 @@ export default function useStepHandler({
             agentUpdateMeta,
           );
           messageMap.current.set(responseMessageId, updatedResponse);
-          const currentMessages = getMessages() || [];
-          setMessages([...currentMessages.slice(0, -1), updatedResponse]);
+          setMessages(
+            mergeResponseMessage(messages, updatedResponse, responseMessageId, {
+              ensureUserMessage: true,
+            }),
+          );
         }
       } else if (stepEvent.event === StepEvents.ON_MESSAGE_DELTA) {
         const messageDelta = stepEvent.data;
@@ -464,8 +805,11 @@ export default function useStepHandler({
             getStepMetadata(runStep),
           );
           messageMap.current.set(responseMessageId, updatedResponse);
-          const currentMessages = getMessages() || [];
-          setMessages([...currentMessages.slice(0, -1), updatedResponse]);
+          setMessages(
+            mergeResponseMessage(messages, updatedResponse, responseMessageId, {
+              ensureUserMessage: true,
+            }),
+          );
         }
       } else if (stepEvent.event === StepEvents.ON_REASONING_DELTA) {
         const reasoningDelta = stepEvent.data;
@@ -507,8 +851,11 @@ export default function useStepHandler({
             getStepMetadata(runStep),
           );
           messageMap.current.set(responseMessageId, updatedResponse);
-          const currentMessages = getMessages() || [];
-          setMessages([...currentMessages.slice(0, -1), updatedResponse]);
+          setMessages(
+            mergeResponseMessage(messages, updatedResponse, responseMessageId, {
+              ensureUserMessage: true,
+            }),
+          );
         }
       } else if (stepEvent.event === StepEvents.ON_RUN_STEP_DELTA) {
         const runStepDelta = stepEvent.data;
@@ -563,11 +910,11 @@ export default function useStepHandler({
           });
 
           messageMap.current.set(responseMessageId, updatedResponse);
-          const updatedMessages = messages.map((msg) =>
-            msg.messageId === responseMessageId ? updatedResponse : msg,
+          setMessages(
+            mergeResponseMessage(messages, updatedResponse, responseMessageId, {
+              ensureUserMessage: true,
+            }),
           );
-
-          setMessages(updatedMessages);
         }
       } else if (stepEvent.event === StepEvents.ON_RUN_STEP_COMPLETED) {
         const { result } = stepEvent.data;
@@ -584,6 +931,10 @@ export default function useStepHandler({
         if (!runStep || !responseMessageId) {
           console.warn('No run step or runId found for completed tool call event');
           return;
+        }
+
+        if (isSkillAuthoringToolCall(result.tool_call)) {
+          onSkillAuthoringComplete?.();
         }
 
         const response = messageMap.current.get(responseMessageId);
@@ -606,12 +957,14 @@ export default function useStepHandler({
           );
 
           messageMap.current.set(responseMessageId, updatedResponse);
-          const updatedMessages = messages.map((msg) =>
-            msg.messageId === responseMessageId ? updatedResponse : msg,
+          setMessages(
+            mergeResponseMessage(messages, updatedResponse, responseMessageId, {
+              ensureUserMessage: true,
+            }),
           );
-
-          setMessages(updatedMessages);
         }
+      } else if (stepEvent.event === StepEvents.ON_SUBAGENT_UPDATE) {
+        applySubagentUpdate(stepEvent.data);
       } else if (stepEvent.event === StepEvents.ON_SUMMARIZE_START) {
         announcePolite({ message: 'summarize_started', isStatus: true });
       } else if (stepEvent.event === StepEvents.ON_SUMMARIZE_DELTA) {
@@ -651,8 +1004,8 @@ export default function useStepHandler({
               summarizeDeltaRaf.current = null;
               const latest = messageMap.current.get(responseMessageId);
               if (latest) {
-                const msgs = getMessages() || [];
-                setMessages([...msgs.slice(0, -1), latest]);
+                const currentMessages = submission.isRegenerate ? messages : getMessages() || [];
+                setMessages(mergeResponseMessage(currentMessages, latest, responseMessageId));
               }
             });
           }
@@ -670,9 +1023,6 @@ export default function useStepHandler({
           return;
         }
 
-        const currentMessages = getMessages() || [];
-        const targetIndex = currentMessages.findIndex((m) => m.messageId === completeMessageId);
-
         if (completeData.error) {
           const filtered = targetMessage.content.filter(
             (part) =>
@@ -681,12 +1031,9 @@ export default function useStepHandler({
           if (filtered.length !== targetMessage.content.length) {
             announcePolite({ message: 'summarize_failed', isStatus: true });
             const cleaned = { ...targetMessage, content: filtered };
+            const currentMessages = submission.isRegenerate ? messages : getMessages() || [];
             messageMap.current.set(completeMessageId, cleaned);
-            if (targetIndex >= 0) {
-              const updated = [...currentMessages];
-              updated[targetIndex] = cleaned;
-              setMessages(updated);
-            }
+            setMessages(mergeResponseMessage(currentMessages, cleaned, completeMessageId));
           }
         } else {
           let didFinalize = false;
@@ -700,13 +1047,12 @@ export default function useStepHandler({
             }
             return part;
           });
-          if (didFinalize && targetIndex >= 0) {
+          if (didFinalize) {
             announcePolite({ message: 'summarize_completed', isStatus: true });
             const finalized = { ...targetMessage, content: updatedContent };
+            const currentMessages = submission.isRegenerate ? messages : getMessages() || [];
             messageMap.current.set(completeMessageId, finalized);
-            const updated = [...currentMessages];
-            updated[targetIndex] = finalized;
-            setMessages(updated);
+            setMessages(mergeResponseMessage(currentMessages, finalized, completeMessageId));
           }
         }
       } else {
@@ -714,7 +1060,16 @@ export default function useStepHandler({
         console.warn('Unhandled step event', (_exhaustive as TStepEvent).event);
       }
     },
-    [getMessages, lastAnnouncementTimeRef, announcePolite, setMessages, calculateContentIndex],
+    [
+      getMessages,
+      lastAnnouncementTimeRef,
+      announcePolite,
+      setMessages,
+      calculateContentIndex,
+      getCurrentMessages,
+      applySubagentUpdate,
+      onSkillAuthoringComplete,
+    ],
   );
 
   const clearStepMaps = useCallback(() => {
@@ -726,6 +1081,17 @@ export default function useStepHandler({
     messageMap.current.clear();
     stepMap.current.clear();
     pendingDeltaBuffer.current.clear();
+    subagentRunToToolCallId.current.clear();
+    claimedSubagentToolCallIds.current.clear();
+    pendingSubagentBuffer.current.clear();
+    /** Intentionally NOT calling `resetSubagentAtoms()` here — users need
+     *  to be able to reopen the SubagentCall dialog after completion to
+     *  audit what the child did. `resetSubagentAtoms` is returned below
+     *  so callers can wipe atoms on conversation-switch (see
+     *  `useEventHandlers`) — that's the correct cleanup boundary:
+     *  persisted `subagent_content` takes over for historical messages
+     *  once the conversation is saved, and we prevent unbounded
+     *  atomFamily growth across multi-conversation sessions. */
   }, []);
 
   /**
@@ -739,5 +1105,5 @@ export default function useStepHandler({
     }
   }, []);
 
-  return { stepHandler, clearStepMaps, syncStepMessage };
+  return { stepHandler, clearStepMaps, resetSubagentAtoms, syncStepMessage };
 }

@@ -1,5 +1,5 @@
-import type { Agents } from 'librechat-data-provider';
 import type { StandardGraph } from '@librechat/agents';
+import type { Agents } from 'librechat-data-provider';
 
 /**
  * Job status enum
@@ -30,6 +30,9 @@ export interface SerializableJobData {
   /** Response message ID for reconnection */
   responseMessageId?: string;
 
+  /** Whether the user-message created event has been emitted */
+  createdEventEmitted?: boolean;
+
   /** Sender name for UI display */
   sender?: string;
 
@@ -38,6 +41,18 @@ export interface SerializableJobData {
 
   /** Serialized final event for replay */
   finalEvent?: string;
+
+  /** Serialized title event for replay during active-stream resume */
+  titleEvent?: string;
+
+  /** Serialized replay-only stream events for active-stream resume */
+  replayEvents?: string;
+
+  /** Serialized latest context usage snapshot for active-stream resume */
+  contextUsage?: string;
+
+  /** Serialized token usage events for active-stream resume (cross-replica safe) */
+  tokenUsage?: string;
 
   /** Endpoint metadata for abort handling - avoids storing functions */
   endpoint?: string;
@@ -67,7 +82,7 @@ export interface SerializableJobData {
  */
 export interface UsageMetadata {
   /** Logical usage bucket for accounting/reporting. Defaults to model response usage. */
-  usage_type?: 'message' | 'summarization';
+  usage_type?: 'message' | 'summarization' | 'subagent' | 'sequential';
   /** Total input tokens (prompt tokens) */
   input_tokens?: number;
   /** Total output tokens (completion tokens) */
@@ -78,6 +93,9 @@ export interface UsageMetadata {
   model?: string;
   /** Provider identifier that generated this usage */
   provider?: string;
+  /** Agent that produced this usage (graph agent id / subagent agent id). Lets
+   *  multi-endpoint graphs price each call with its own endpoint token config. */
+  agentId?: string;
   /**
    * OpenAI-style cache token details.
    * Present for OpenAI models (GPT-4, o1, etc.)
@@ -98,6 +116,16 @@ export interface UsageMetadata {
    * Present for Claude models. Mutually exclusive with input_token_details.
    */
   cache_read_input_tokens?: number;
+  /**
+   * Breakdown of output token counts. Per the LangChain core contract,
+   * `output_tokens` is the sum of all output token types — these fields
+   * are subsets of `output_tokens`, *not* additional charges.
+   */
+  output_token_details?: {
+    /** Reasoning/thinking tokens generated as chain-of-thought (o1, Gemini thinking, etc.) */
+    reasoning?: number;
+    audio?: number;
+  };
 }
 
 /**
@@ -129,6 +157,20 @@ export interface ResumeState {
   responseMessageId?: string;
   conversationId?: string;
   sender?: string;
+  iconURL?: string;
+  model?: string;
+  titleEvent?: {
+    event: 'title';
+    data?: {
+      conversationId?: string;
+      title?: string;
+    };
+  };
+  replayEvents?: Array<{
+    event: string;
+    data?: unknown;
+    [key: string]: unknown;
+  }>;
 }
 
 /**
@@ -170,6 +212,18 @@ export interface IJobStore {
 
   /** Cleanup expired jobs */
   cleanup(): Promise<number>;
+
+  /**
+   * Record generation activity for a job (e.g. a chunk was emitted), refreshing
+   * its "last active" timestamp so the stale-running-job failsafe does not reap a
+   * stream that is still producing output.
+   *
+   * In-memory: updates an internal last-activity timestamp used by cleanup().
+   * Redis: no-op — the running-job TTL is already refreshed on each appendChunk.
+   *
+   * @param streamId - The stream identifier
+   */
+  recordActivity?(streamId: string): void;
 
   /** Get total job count */
   getJobCount(): Promise<number>;

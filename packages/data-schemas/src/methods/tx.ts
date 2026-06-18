@@ -129,8 +129,16 @@ export const tokenValues: Record<string, { prompt: number; completion: number }>
     'gpt-5.2': { prompt: 1.75, completion: 14 },
     'gpt-5.3': { prompt: 1.75, completion: 14 },
     'gpt-5.4': { prompt: 2.5, completion: 15 },
-    // TODO: gpt-5.4-pro pricing not yet officially published — verify before release
-    'gpt-5.4-pro': { prompt: 5, completion: 30 },
+    'gpt-5.4-pro': { prompt: 30, completion: 180 },
+    'gpt-5.4-mini': { prompt: 0.75, completion: 4.5 },
+    'gpt-5.4-nano': { prompt: 0.2, completion: 1.25 },
+    'gpt-5.5': { prompt: 5, completion: 30 },
+    'gpt-5.5-pro': { prompt: 30, completion: 180 },
+    'chat-latest': { prompt: 5, completion: 30 },
+    'gpt-5-chat-latest': { prompt: 1.25, completion: 10 },
+    'gpt-5.1-chat-latest': { prompt: 1.25, completion: 10 },
+    'gpt-5.2-chat-latest': { prompt: 1.75, completion: 14 },
+    'gpt-5.3-chat-latest': { prompt: 1.75, completion: 14 },
     'gpt-5-nano': { prompt: 0.05, completion: 0.4 },
     'gpt-5-mini': { prompt: 0.25, completion: 2 },
     'gpt-5-pro': { prompt: 15, completion: 120 },
@@ -157,7 +165,12 @@ export const tokenValues: Record<string, { prompt: number; completion: number }>
     'claude-opus-4': { prompt: 15, completion: 75 },
     'claude-opus-4-5': { prompt: 5, completion: 25 },
     'claude-opus-4-6': { prompt: 5, completion: 25 },
+    'claude-opus-4-7': { prompt: 5, completion: 25 },
+    'claude-opus-4-8': { prompt: 5, completion: 25 },
+    'claude-fable-5': { prompt: 10, completion: 50 },
+    'claude-mythos-5': { prompt: 10, completion: 50 },
     'claude-sonnet-4': { prompt: 3, completion: 15 },
+    'claude-sonnet-4-5': { prompt: 3, completion: 15 },
     'claude-sonnet-4-6': { prompt: 3, completion: 15 },
     'command-r': { prompt: 0.5, completion: 1.5 },
     'command-r-plus': { prompt: 3, completion: 15 },
@@ -184,6 +197,7 @@ export const tokenValues: Record<string, { prompt: number; completion: number }>
     'gemini-3-pro-image': { prompt: 2, completion: 120 },
     'gemini-3.1': { prompt: 2, completion: 12 },
     'gemini-3.1-flash-lite': { prompt: 0.25, completion: 1.5 },
+    'gemini-3.5-flash': { prompt: 1.5, completion: 9 },
     'gemini-pro-vision': { prompt: 0.5, completion: 1.5 },
     grok: { prompt: 2.0, completion: 10.0 },
     'grok-beta': { prompt: 5.0, completion: 15.0 },
@@ -285,10 +299,15 @@ export const cacheTokenValues: Record<string, { write: number; read: number }> =
   'claude-3-haiku': { write: 0.3, read: 0.03 },
   'claude-haiku-4-5': { write: 1.25, read: 0.1 },
   'claude-sonnet-4': { write: 3.75, read: 0.3 },
+  'claude-sonnet-4-5': { write: 3.75, read: 0.3 },
   'claude-sonnet-4-6': { write: 3.75, read: 0.3 },
   'claude-opus-4': { write: 18.75, read: 1.5 },
   'claude-opus-4-5': { write: 6.25, read: 0.5 },
   'claude-opus-4-6': { write: 6.25, read: 0.5 },
+  'claude-opus-4-7': { write: 6.25, read: 0.5 },
+  'claude-opus-4-8': { write: 6.25, read: 0.5 },
+  'claude-fable-5': { write: 12.5, read: 1 },
+  'claude-mythos-5': { write: 12.5, read: 1 },
   'gpt-4o': { write: 2.5, read: 1.25 },
   'gpt-4o-mini': { write: 0.15, read: 0.075 },
   'gpt-4.1': { write: 2, read: 0.5 },
@@ -299,6 +318,14 @@ export const cacheTokenValues: Record<string, { write: number; read: number }> =
   'gpt-5.2': { write: 1.75, read: 0.175 },
   'gpt-5.3': { write: 1.75, read: 0.175 },
   'gpt-5.4': { write: 2.5, read: 0.25 },
+  'gpt-5.4-mini': { write: 0.75, read: 0.075 },
+  'gpt-5.4-nano': { write: 0.2, read: 0.02 },
+  'gpt-5.5': { write: 5, read: 0.5 },
+  'chat-latest': { write: 5, read: 0.5 },
+  'gpt-5-chat-latest': { write: 1.25, read: 0.125 },
+  'gpt-5.1-chat-latest': { write: 1.25, read: 0.125 },
+  'gpt-5.2-chat-latest': { write: 1.75, read: 0.175 },
+  'gpt-5.3-chat-latest': { write: 1.75, read: 0.175 },
   'gpt-5-mini': { write: 0.25, read: 0.025 },
   'gpt-5-nano': { write: 0.05, read: 0.005 },
   o1: { write: 15, read: 7.5 },
@@ -325,6 +352,8 @@ export const cacheTokenValues: Record<string, { write: number; read: number }> =
   'gemini-3.1': { write: 2, read: 0.2 },
   // Gemini 3.1 Flash-Lite - cache write: $0.25/1M, cache read: $0.025/1M
   'gemini-3.1-flash-lite': { write: 0.25, read: 0.025 },
+  // Gemini 3.5 Flash - cache write: $1.50/1M, cache read: $0.15/1M
+  'gemini-3.5-flash': { write: 1.5, read: 0.15 },
 };
 
 /**
@@ -334,12 +363,75 @@ export const premiumTokenValues: Record<
   string,
   { threshold: number; prompt: number; completion: number }
 > = {
-  'claude-opus-4-6': { threshold: 200000, prompt: 10, completion: 37.5 },
-  'claude-sonnet-4-6': { threshold: 200000, prompt: 6, completion: 22.5 },
   'gemini-3.1': { threshold: 200000, prompt: 4, completion: 18 },
+  'gpt-5.4': { threshold: 272000, prompt: 5, completion: 22.5 },
+  'gpt-5.4-pro': { threshold: 272000, prompt: 60, completion: 270 },
+  'gpt-5.5': { threshold: 272000, prompt: 10, completion: 45 },
+  'gpt-5.5-pro': { threshold: 272000, prompt: 60, completion: 270 },
 };
 
-export function createTxMethods(_mongoose: typeof import('mongoose'), txDeps: TxDeps) {
+export function createTxMethods(
+  _mongoose: typeof import('mongoose'),
+  txDeps: TxDeps,
+): {
+  tokenValues: Record<
+    string,
+    {
+      prompt: number;
+      completion: number;
+    }
+  >;
+  premiumTokenValues: Record<
+    string,
+    {
+      threshold: number;
+      prompt: number;
+      completion: number;
+    }
+  >;
+  getValueKey: (model: string, endpoint?: string) => string | undefined;
+  getMultiplier: ({
+    model,
+    valueKey,
+    endpoint,
+    tokenType,
+    inputTokenCount,
+    endpointTokenConfig,
+  }: {
+    model?: string;
+    valueKey?: string;
+    endpoint?: string;
+    tokenType?: 'prompt' | 'completion';
+    inputTokenCount?: number;
+    endpointTokenConfig?: Record<string, Record<string, number>>;
+  }) => number;
+  getPremiumRate: (
+    valueKey: string,
+    tokenType: string,
+    inputTokenCount?: number | null,
+  ) => number | null;
+  getCacheMultiplier: ({
+    valueKey,
+    cacheType,
+    model,
+    endpoint,
+    endpointTokenConfig,
+  }: {
+    valueKey?: string;
+    cacheType?: 'write' | 'read';
+    model?: string;
+    endpoint?: string;
+    endpointTokenConfig?: Record<string, Record<string, number>>;
+  }) => number | null;
+  defaultRate: number;
+  cacheTokenValues: Record<
+    string,
+    {
+      write: number;
+      read: number;
+    }
+  >;
+} {
   const { matchModelName, findMatchingPattern } = txDeps;
 
   /**
@@ -418,7 +510,13 @@ export function createTxMethods(_mongoose: typeof import('mongoose'), txDeps: Tx
     endpointTokenConfig?: Record<string, Record<string, number>>;
   }): number {
     if (endpointTokenConfig && model) {
-      return endpointTokenConfig?.[model]?.[tokenType as string] ?? defaultRate;
+      const modelConfig = endpointTokenConfig[model];
+      /** A partial override only prices the models it lists; others fall
+       *  through to the standard tables so billing matches the advertised
+       *  token config instead of charging defaultRate */
+      if (modelConfig) {
+        return modelConfig[tokenType as string] ?? defaultRate;
+      }
     }
 
     if (valueKey && tokenType) {
@@ -463,7 +561,12 @@ export function createTxMethods(_mongoose: typeof import('mongoose'), txDeps: Tx
     endpointTokenConfig?: Record<string, Record<string, number>>;
   }): number | null {
     if (endpointTokenConfig && model) {
-      return endpointTokenConfig?.[model]?.[cacheType as string] ?? null;
+      const modelConfig = endpointTokenConfig[model];
+      /** Models absent from a partial override fall through to standard
+       *  cache rates rather than reporting no cache pricing */
+      if (modelConfig) {
+        return modelConfig[cacheType as string] ?? null;
+      }
     }
 
     if (valueKey && cacheType) {

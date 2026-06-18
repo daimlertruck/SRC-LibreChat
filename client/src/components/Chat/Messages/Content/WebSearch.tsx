@@ -82,25 +82,46 @@ export default function WebSearch({
   isLast,
   output,
   attachments,
+  onExpand,
 }: {
   isLast?: boolean;
   isSubmitting: boolean;
   output?: string | null;
   initialProgress: number;
   attachments?: TAttachment[];
+  onExpand?: () => void;
 }) {
   const localize = useLocalize();
   const { searchResults } = useSearchContext();
   const error = typeof output === 'string' && output.toLowerCase().includes('error processing');
-  const cancelled = (!isSubmitting && progress < 1) || error === true;
 
-  const complete = !isLast && progress === 1;
-  const finalizing = isSubmitting && isLast && progress === 1;
+  // Server tool calls (srvtoolu_) never receive ON_RUN_STEP_COMPLETED, so progress
+  // stays at the default 0.1. Treat the search as complete if attachments have results.
+  const hasResults = useMemo(
+    () =>
+      attachments?.some((att) => att.type === Tools.web_search && att[Tools.web_search]) ?? false,
+    [attachments],
+  );
+  const effectiveProgress = hasResults && !isSubmitting ? 1 : progress;
+  const cancelled = (!isSubmitting && effectiveProgress < 1) || error === true;
+
+  const complete = !isLast && effectiveProgress === 1;
+  const finalizing = isSubmitting && isLast && effectiveProgress === 1;
+
+  const ownTurn = useMemo((): string => {
+    if (!attachments) {
+      return '0';
+    }
+    for (const att of attachments) {
+      if (att.type === Tools.web_search && att[Tools.web_search]) {
+        const turn = att[Tools.web_search].turn;
+        return typeof turn === 'number' ? String(turn) : '0';
+      }
+    }
+    return '0';
+  }, [attachments]);
 
   const allSources = useMemo((): ValidSource[] => {
-    if (searchResults && Object.keys(searchResults).length > 0) {
-      return collectSources(searchResults);
-    }
     if (attachments) {
       const turnMap: Record<string, SearchResultData> = {};
       for (const att of attachments) {
@@ -114,45 +135,30 @@ export default function WebSearch({
         return collectSources(turnMap);
       }
     }
+    if (searchResults?.[ownTurn]) {
+      return collectSources({ [ownTurn]: searchResults[ownTurn] });
+    }
     return [];
-  }, [searchResults, attachments]);
+  }, [searchResults, attachments, ownTurn]);
 
-  const processedSources = useMemo(() => {
+  // Show favicons from the raw SERP results immediately rather than waiting for
+  // each source to flip to `processed`; the agents scrape barrier would otherwise
+  // freeze the stack on "Searching the web" for the slowest scrape's duration.
+  const streamingSources = useMemo(() => {
     if (complete && !finalizing) {
       return [];
     }
-    if (!searchResults) {
-      return [];
-    }
-    const values = Object.values(searchResults);
-    const result = values[values.length - 1];
+    const result = searchResults?.[ownTurn];
     if (!result) {
       return [];
     }
-    if (finalizing) {
-      return [...(result.organic || []), ...(result.topStories || [])];
-    }
-    return [...(result.organic || []), ...(result.topStories || [])].filter(
-      (source) => source.processed === true,
-    );
-  }, [searchResults, complete, finalizing]);
+    return [...(result.organic || []), ...(result.topStories || [])];
+  }, [searchResults, complete, finalizing, ownTurn]);
 
-  const ownTurn = useMemo(() => {
-    if (!attachments) {
-      return 0;
-    }
-    for (const att of attachments) {
-      if (att.type === Tools.web_search && att[Tools.web_search]) {
-        const turn = att[Tools.web_search].turn;
-        return typeof turn === 'number' ? turn : 0;
-      }
-    }
-    return 0;
-  }, [attachments]);
-
-  const showSources = processedSources.length > 0;
+  const showSources = streamingSources.length > 0;
   const progressText = useMemo(() => {
-    let text: ProgressKeys = ownTurn > 0 ? 'com_ui_web_searching_again' : 'com_ui_web_searching';
+    let text: ProgressKeys =
+      ownTurn !== '0' ? 'com_ui_web_searching_again' : 'com_ui_web_searching';
     if (showSources) {
       text = 'com_ui_web_search_processing';
     }
@@ -172,6 +178,16 @@ export default function WebSearch({
       setShowSourceList(true);
     }
   }, [autoExpand, sourceCount]);
+
+  const handleToggleSources = () => {
+    setShowSourceList((prev) => {
+      const next = !prev;
+      if (next) {
+        onExpand?.();
+      }
+      return next;
+    });
+  };
 
   if (cancelled) {
     return null;
@@ -195,7 +211,7 @@ export default function WebSearch({
               : 'pointer-events-none text-text-secondary',
           )}
           disabled={!hasSourceData}
-          onClick={hasSourceData ? () => setShowSourceList((prev) => !prev) : undefined}
+          onClick={hasSourceData ? handleToggleSources : undefined}
           aria-expanded={hasSourceData ? showSourceList : undefined}
           aria-label={
             hasSourceData
@@ -257,7 +273,7 @@ export default function WebSearch({
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {progressText}
       </span>
-      {showSources && <StackedFavicons sources={processedSources} start={-5} />}
+      {showSources && <StackedFavicons sources={streamingSources} start={-5} />}
       <Globe className="size-4 shrink-0 text-text-secondary" aria-hidden="true" />
       <span className="tool-status-text shimmer font-medium text-text-secondary">
         {progressText}

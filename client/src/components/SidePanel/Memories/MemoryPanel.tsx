@@ -121,7 +121,7 @@ export default function MemoryPanel() {
   const totalPages = Math.ceil(filteredMemories.length / pageSize);
 
   return (
-    <div className="flex h-auto w-full flex-col px-3 pb-3">
+    <div className="flex h-auto w-full flex-col px-3 pb-3 pt-2">
       <div role="region" aria-label={localize('com_ui_memories')} className="space-y-2">
         {/* Header: Filter + Create Button */}
         <div className="flex items-center gap-2">
@@ -182,6 +182,7 @@ export default function MemoryPanel() {
                   checked={referenceSavedMemories}
                   tabIndex={-1}
                   aria-hidden="true"
+                  aria-label={localize('com_ui_use_memory')}
                   className="pointer-events-none mr-2"
                 />
                 {localize('com_ui_use_memory')}

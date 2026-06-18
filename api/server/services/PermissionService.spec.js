@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { RoleBits, createModels } = require('@librechat/data-schemas');
+const { RoleBits, createModels, tenantStorage } = require('@librechat/data-schemas');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const {
   ResourceType,
@@ -15,6 +15,8 @@ const {
   getAvailableRoles,
   grantPermission,
   checkPermission,
+  ensurePrincipalExists,
+  ensureGroupPrincipalExists,
 } = require('./PermissionService');
 const { findRoleByIdentifier, getUserPrincipals, seedDefaultRoles } = require('~/models');
 
@@ -30,6 +32,7 @@ jest.mock('~/server/services/GraphApiService', () => ({
   entraIdPrincipalFeatureEnabled: jest.fn().mockReturnValue(false),
   getUserOwnedEntraGroups: jest.fn().mockResolvedValue([]),
   getUserEntraGroups: jest.fn().mockResolvedValue([]),
+  getEntraGroupDetailsBatch: jest.fn().mockResolvedValue([]),
   getGroupMembers: jest.fn().mockResolvedValue([]),
   getGroupOwners: jest.fn().mockResolvedValue([]),
 }));
@@ -43,6 +46,8 @@ jest.mock('~/config', () => ({
 
 let mongoServer;
 let AclEntry;
+let User;
+let Group;
 
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
@@ -57,6 +62,8 @@ beforeAll(async () => {
   Object.assign(mongoose.models, dbModels);
 
   AclEntry = dbModels.AclEntry;
+  User = dbModels.User;
+  Group = dbModels.Group;
 
   // Seed default roles
   await seedDefaultRoles();
@@ -239,6 +246,69 @@ describe('PermissionService', () => {
         resourceId,
       });
       expect(entries).toHaveLength(1);
+    });
+  });
+
+  describe('principal validation for ACL writes', () => {
+    beforeEach(async () => {
+      await User.deleteMany({ email: /acl-principal/i });
+      await Group.deleteMany({ name: /ACL Principal/i });
+    });
+
+    test('rejects a local user id outside the current request context', async () => {
+      const outsideUser = await User.create({
+        name: 'ACL Principal Outside User',
+        email: 'acl-principal-outside-user@example.com',
+        tenantId: 'tenant-b',
+      });
+
+      await expect(
+        tenantStorage.run({ tenantId: 'tenant-a' }, async () =>
+          ensurePrincipalExists({
+            type: PrincipalType.USER,
+            id: outsideUser._id.toString(),
+            name: 'Outside User',
+            source: 'local',
+          }),
+        ),
+      ).rejects.toThrow('User principal not found');
+    });
+
+    test('accepts a local user id in the current request context', async () => {
+      const currentUser = await User.create({
+        name: 'ACL Principal Current User',
+        email: 'acl-principal-current-user@example.com',
+        tenantId: 'tenant-a',
+      });
+
+      const principalId = await tenantStorage.run({ tenantId: 'tenant-a' }, async () =>
+        ensurePrincipalExists({
+          type: PrincipalType.USER,
+          id: currentUser._id.toString(),
+          name: 'Current User',
+          source: 'local',
+        }),
+      );
+
+      expect(principalId).toBe(currentUser._id.toString());
+    });
+
+    test('rejects a local group id outside the current request context', async () => {
+      const outsideGroup = await Group.create({
+        name: 'ACL Principal Outside Group',
+        tenantId: 'tenant-b',
+      });
+
+      await expect(
+        tenantStorage.run({ tenantId: 'tenant-a' }, async () =>
+          ensureGroupPrincipalExists({
+            type: PrincipalType.GROUP,
+            id: outsideGroup._id.toString(),
+            name: 'Outside Group',
+            source: 'local',
+          }),
+        ),
+      ).rejects.toThrow('Group principal not found');
     });
   });
 
@@ -2067,5 +2137,47 @@ describe('syncUserEntraGroupMemberships - $pullAll on Group.memberIds', () => {
 
     const group = await Group.findOne({ idOnTheSource: 'entra-safe' }).lean();
     expect(group.memberIds).toContain(userEntraId);
+  });
+
+  it('should handle mix of existing and missing groups correctly (regression test)', async () => {
+    // This is the critical bug fix: previously syncUserEntraGroups would remove user from existing groups
+    // when called with only missing groups. Now using upserts + bulkUpdate to avoid this issue.
+
+    const { getEntraGroupDetailsBatch } = require('~/server/services/GraphApiService');
+
+    // Create existing groups A and B
+    await Group.create([
+      { name: 'Group A', source: 'entra', idOnTheSource: 'entra-group-a', memberIds: [] },
+      { name: 'Group B', source: 'entra', idOnTheSource: 'entra-group-b', memberIds: [] },
+    ]);
+
+    // User is member of A, B, and C (but C doesn't exist yet)
+    getUserEntraGroups.mockResolvedValue(['entra-group-a', 'entra-group-b', 'entra-group-c']);
+
+    // Mock batch fetch to return details for missing group C
+    getEntraGroupDetailsBatch.mockResolvedValue([
+      {
+        id: 'entra-group-c',
+        name: 'Group C',
+        email: 'groupc@example.com',
+        description: 'Group C Description',
+      },
+    ]);
+
+    await syncUserEntraGroupMemberships(user, 'fake-token');
+
+    // Verify ALL three groups now have the user as member
+    const groupA = await Group.findOne({ idOnTheSource: 'entra-group-a' }).lean();
+    const groupB = await Group.findOne({ idOnTheSource: 'entra-group-b' }).lean();
+    const groupC = await Group.findOne({ idOnTheSource: 'entra-group-c' }).lean();
+
+    expect(groupA.memberIds).toContain(userEntraId);
+    expect(groupB.memberIds).toContain(userEntraId);
+    expect(groupC).toBeTruthy();
+    expect(groupC.memberIds).toContain(userEntraId);
+    expect(groupC.name).toBe('Group C');
+
+    // Reset mock
+    getEntraGroupDetailsBatch.mockResolvedValue([]);
   });
 });
