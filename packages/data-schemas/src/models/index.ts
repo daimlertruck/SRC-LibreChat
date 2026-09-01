@@ -12,6 +12,7 @@ import { createCodeEnvironmentModel } from './codeEnvironment';
 import { createAgentCategoryModel } from './agentCategory';
 import { createChatProjectModel } from './chatProject';
 import { createAgentApiKeyModel } from './agentApiKey';
+import { createAgentMetricDailyModel, createAgentUserDailyModel } from './agentMetric';
 import { createTransactionModel } from './transaction';
 import { createPromptGroupModel } from './promptGroup';
 import { createSystemGrantModel } from './systemGrant';
@@ -59,6 +60,8 @@ export function createModels(mongoose: typeof import('mongoose')): {
   Message: ReturnType<typeof createMessageModel>;
   Agent: ReturnType<typeof createAgentModel>;
   AgentApiKey: ReturnType<typeof createAgentApiKeyModel>;
+  AgentMetricDaily: ReturnType<typeof createAgentMetricDailyModel>;
+  AgentUserDaily: ReturnType<typeof createAgentUserDailyModel>;
   AgentCategory: ReturnType<typeof createAgentCategoryModel>;
   MCPServer: ReturnType<typeof createMCPServerModel>;
   Role: ReturnType<typeof createRoleModel>;
@@ -108,6 +111,8 @@ export function createModels(mongoose: typeof import('mongoose')): {
     Message: createMessageModel(mongoose),
     Agent: createAgentModel(mongoose),
     AgentApiKey: createAgentApiKeyModel(mongoose),
+    AgentMetricDaily: createAgentMetricDailyModel(mongoose),
+    AgentUserDaily: createAgentUserDailyModel(mongoose),
     AgentCategory: createAgentCategoryModel(mongoose),
     MCPServer: createMCPServerModel(mongoose),
     Role: createRoleModel(mongoose),

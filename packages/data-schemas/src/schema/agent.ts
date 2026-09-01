@@ -52,6 +52,10 @@ const agentSchema: Schema<IAgent> = new Schema<IAgent>(
       type: Boolean,
       default: undefined,
     },
+    statistics_enabled: {
+      type: Boolean,
+      default: undefined,
+    },
     tool_kwargs: {
       type: [{ type: Schema.Types.Mixed }],
     },

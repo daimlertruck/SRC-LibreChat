@@ -1,9 +1,19 @@
 import type {
   TFeedbackRating,
   TFeedbackTag,
+  TFeedbackTagKey,
   UserSubmittedMessageFieldPath,
 } from 'librechat-data-provider';
 import type { Document } from 'mongoose';
+
+export type AgentMetricStatus = 'successful' | 'failed' | 'interrupted';
+
+export interface IAgentMetricState {
+  statisticsAgentId: string;
+  bucket: Date;
+  status: AgentMetricStatus;
+  feedback?: { rating: TFeedbackRating; tag?: TFeedbackTagKey };
+}
 
 export type SubagentTaskControlAction =
   | 'steer'
@@ -74,6 +84,7 @@ export interface IMessage extends Document {
     tag: TFeedbackTag | undefined;
     text?: string;
   };
+  agentMetricState?: IAgentMetricState;
   langfuseSampled?: boolean;
   langfuseDestinationIds?: string[];
   _meiliIndex?: boolean;

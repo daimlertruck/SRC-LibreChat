@@ -353,6 +353,23 @@ describe('agentUpdateSchema with subagents', () => {
   });
 });
 
+describe('agent statistics opt-in validation', () => {
+  it('preserves the boolean on create and update', () => {
+    const created = agentCreateSchema.parse({
+      provider: 'openAI',
+      model: 'model-1',
+      statistics_enabled: true,
+    });
+    const updated = agentUpdateSchema.parse({ statistics_enabled: false });
+    expect(created.statistics_enabled).toBe(true);
+    expect(updated.statistics_enabled).toBe(false);
+  });
+
+  it('rejects non-boolean values', () => {
+    expect(agentUpdateSchema.safeParse({ statistics_enabled: 'true' }).success).toBe(false);
+  });
+});
+
 describe('validateAgentModel', () => {
   const request = {} as Request<unknown, unknown, unknown>;
   const response = {} as Response;

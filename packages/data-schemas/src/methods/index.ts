@@ -23,6 +23,7 @@ import {
 } from './favorite';
 /* Agent Categories */
 import { createAgentCategoryMethods, type AgentCategoryMethods } from './agentCategory';
+import { createAgentMetricMethods, type AgentMetricMethods } from './agentMetric';
 /* Agent API Keys */
 import { createAgentApiKeyMethods, type AgentApiKeyMethods } from './agentApiKey';
 /* MCP Servers */
@@ -215,6 +216,7 @@ export type AllMethods = UserMethods &
   MemoryMethods &
   ToolFavoriteMethods &
   AgentCategoryMethods &
+  AgentMetricMethods &
   AgentApiKeyMethods &
   MCPServerMethods &
   CodeEnvironmentMethods &
@@ -295,6 +297,7 @@ export function createMethods(
   });
 
   const messageMethods = createMessageMethods(mongoose);
+  const agentMetricMethods = createAgentMetricMethods(mongoose);
 
   const agentQueuedTurnMethods = createAgentQueuedTurnMethods(mongoose);
   const agentTriggerDeliveryMethods = createAgentTriggerDeliveryMethods(mongoose, {
@@ -434,6 +437,7 @@ export function createMethods(
     ...createMemoryMethods(mongoose),
     ...createToolFavoriteMethods(mongoose),
     ...createAgentCategoryMethods(mongoose),
+    ...agentMetricMethods,
     ...createAgentApiKeyMethods(mongoose),
     ...createMCPServerMethods(mongoose),
     ...createCodeEnvironmentMethods(mongoose),
@@ -490,6 +494,7 @@ export type {
   MemoryMethods,
   ToolFavoriteMethods,
   AgentCategoryMethods,
+  AgentMetricMethods,
   AgentApiKeyMethods,
   MCPServerMethods,
   CodeEnvironmentMethods,

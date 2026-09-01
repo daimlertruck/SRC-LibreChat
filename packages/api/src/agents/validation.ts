@@ -431,6 +431,7 @@ export const agentBaseSchema: z.ZodObject<
     tools: z.ZodOptional<z.ZodArray<z.ZodString, 'many'>>;
     skills: z.ZodOptional<z.ZodArray<z.ZodString, 'many'>>;
     skills_enabled: z.ZodOptional<z.ZodBoolean>;
+    statistics_enabled: z.ZodOptional<z.ZodBoolean>;
     memory_scope: z.ZodOptional<z.ZodNativeEnum<typeof MemoryScope>>;
     /** @deprecated Use edges instead */
     agent_ids: z.ZodOptional<z.ZodArray<z.ZodString, 'many'>>;
@@ -553,6 +554,7 @@ export const agentBaseSchema: z.ZodObject<
   tools: z.array(z.string()).optional(),
   skills: z.array(z.string()).optional(),
   skills_enabled: z.boolean().optional(),
+  statistics_enabled: z.boolean().optional(),
   memory_scope: z.nativeEnum(MemoryScope).optional(),
   /** @deprecated Use edges instead */
   agent_ids: z.array(z.string()).optional(),
@@ -601,6 +603,7 @@ export const agentCreateSchema: z.ZodObject<
     model_parameters: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
     skills: z.ZodOptional<z.ZodArray<z.ZodString, 'many'>>;
     skills_enabled: z.ZodOptional<z.ZodBoolean>;
+    statistics_enabled: z.ZodOptional<z.ZodBoolean>;
     memory_scope: z.ZodOptional<z.ZodNativeEnum<typeof MemoryScope>>;
     agent_ids: z.ZodOptional<z.ZodArray<z.ZodString, 'many'>>;
     edges: z.ZodOptional<
@@ -733,6 +736,7 @@ export const agentUpdateSchema: z.ZodObject<
     tools: z.ZodOptional<z.ZodArray<z.ZodString, 'many'>>;
     skills: z.ZodOptional<z.ZodArray<z.ZodString, 'many'>>;
     skills_enabled: z.ZodOptional<z.ZodBoolean>;
+    statistics_enabled: z.ZodOptional<z.ZodBoolean>;
     memory_scope: z.ZodOptional<z.ZodNativeEnum<typeof MemoryScope>>;
     agent_ids: z.ZodOptional<z.ZodArray<z.ZodString, 'many'>>;
     edges: z.ZodOptional<

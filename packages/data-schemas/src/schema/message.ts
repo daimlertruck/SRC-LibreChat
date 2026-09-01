@@ -1,5 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import type { IMessage } from '~/types/message';
+import { agentMetricStateSchema } from './agentMetric';
 
 const messageSchema: Schema<IMessage> = new Schema(
   {
@@ -117,6 +118,11 @@ const messageSchema: Schema<IMessage> = new Schema(
       },
       default: undefined,
       required: false,
+    },
+    agentMetricState: {
+      type: agentMetricStateSchema,
+      select: false,
+      default: undefined,
     },
     langfuseSampled: {
       type: Boolean,

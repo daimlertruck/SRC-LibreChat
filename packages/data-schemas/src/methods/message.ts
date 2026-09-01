@@ -1,7 +1,13 @@
 import { HITL_MESSAGE_FILTER_FIELDS, RetentionMode } from 'librechat-data-provider';
 import type { UserSubmittedMessageFieldPath } from 'librechat-data-provider';
 import type { DeleteResult, FilterQuery, Model, Types } from 'mongoose';
-import type { AppConfig, IConversation, IMessage } from '~/types';
+import type {
+  AgentMetricStatus,
+  AppConfig,
+  IAgentMetricState,
+  IConversation,
+  IMessage,
+} from '~/types';
 import { activeExpirationFilter, createFallbackRetentionDate } from '~/utils/retention';
 import { createTempChatExpirationDate } from '~/utils/tempChatRetention';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
@@ -523,7 +529,31 @@ export type ParentSubagentTaskRecord = {
   >;
 };
 
+export type AgentMetricMessageScope = {
+  userId: string;
+  conversationId: string;
+  messageId: string;
+  tenantId?: string;
+};
+
+export type AgentMetricStateTransition = AgentMetricMessageScope & {
+  statisticsAgentId: string;
+  bucket: Date;
+  status: AgentMetricStatus;
+};
+
+export type AgentMetricFeedbackTransition = AgentMetricMessageScope & {
+  feedback?: IMessage['feedback'];
+};
+
 export interface MessageMethods {
+  transitionAgentMetricState(
+    input: AgentMetricStateTransition,
+  ): Promise<{ previous?: IAgentMetricState; current: IAgentMetricState } | null>;
+  updateMessageFeedbackWithMetricState(input: AgentMetricFeedbackTransition): Promise<{
+    previousFeedback?: IMessage['feedback'];
+    metricState?: IAgentMetricState;
+  } | null>;
   saveMessage(
     ctx: {
       userId: string;
@@ -700,6 +730,122 @@ function agentOwnershipFilter(prefix: string, agentId: string): Record<string, u
 }
 
 export function createMessageMethods(mongoose: typeof import('mongoose')): MessageMethods {
+  function metricMessageFilter(input: AgentMetricMessageScope): FilterQuery<IMessage> {
+    return {
+      user: input.userId,
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      isCreatedByUser: false,
+      tenantId: input.tenantId == null ? { $exists: false } : input.tenantId,
+    };
+  }
+
+  async function transitionAgentMetricState(
+    input: AgentMetricStateTransition,
+  ): Promise<{ previous?: IAgentMetricState; current: IAgentMetricState } | null> {
+    const Message = mongoose.models.Message as Model<IMessage>;
+    const baseFilter = metricMessageFilter(input);
+    let previous = await Message.findOneAndUpdate(
+      { ...baseFilter, agentMetricState: { $exists: true } },
+      { $set: { 'agentMetricState.status': input.status } },
+      { new: false, runValidators: true },
+    )
+      .select('+agentMetricState')
+      .lean<IMessage | null>();
+    if (previous?.agentMetricState) {
+      return {
+        previous: previous.agentMetricState,
+        current: { ...previous.agentMetricState, status: input.status },
+      };
+    }
+
+    previous = await Message.findOneAndUpdate(
+      { ...baseFilter, agentMetricState: { $exists: false } },
+      {
+        $set: {
+          agentMetricState: {
+            statisticsAgentId: input.statisticsAgentId,
+            bucket: input.bucket,
+            status: input.status,
+          },
+        },
+      },
+      { new: false, runValidators: true },
+    )
+      .select('+agentMetricState')
+      .lean<IMessage | null>();
+    if (previous) {
+      return {
+        current: {
+          statisticsAgentId: input.statisticsAgentId,
+          bucket: input.bucket,
+          status: input.status,
+        },
+      };
+    }
+
+    previous = await Message.findOneAndUpdate(
+      { ...baseFilter, agentMetricState: { $exists: true } },
+      { $set: { 'agentMetricState.status': input.status } },
+      { new: false, runValidators: true },
+    )
+      .select('+agentMetricState')
+      .lean<IMessage | null>();
+    if (!previous?.agentMetricState) return null;
+    return {
+      previous: previous.agentMetricState,
+      current: { ...previous.agentMetricState, status: input.status },
+    };
+  }
+
+  async function updateMessageFeedbackWithMetricState(
+    input: AgentMetricFeedbackTransition,
+  ): Promise<{ previousFeedback?: IMessage['feedback']; metricState?: IAgentMetricState } | null> {
+    const Message = mongoose.models.Message as Model<IMessage>;
+    const baseFilter = metricMessageFilter(input);
+    const update: Record<string, Record<string, unknown>> = input.feedback
+      ? {
+          $set: {
+            feedback: input.feedback,
+            'agentMetricState.feedback': {
+              rating: input.feedback.rating,
+              tag: input.feedback.tag?.key,
+            },
+          },
+        }
+      : { $unset: { feedback: 1, 'agentMetricState.feedback': 1 } };
+    let previous = await Message.findOneAndUpdate(
+      { ...baseFilter, agentMetricState: { $exists: true } },
+      update,
+      { new: false, runValidators: true },
+    )
+      .select('+agentMetricState feedback')
+      .lean<IMessage | null>();
+    if (!previous) {
+      const fallbackUpdate = input.feedback
+        ? { $set: { feedback: input.feedback } }
+        : { $unset: { feedback: 1 } };
+      previous = await Message.findOneAndUpdate(
+        { ...baseFilter, agentMetricState: { $exists: false } },
+        fallbackUpdate,
+        { new: false, runValidators: true },
+      )
+        .select('feedback')
+        .lean<IMessage | null>();
+      if (!previous) {
+        previous = await Message.findOneAndUpdate(
+          { ...baseFilter, agentMetricState: { $exists: true } },
+          update,
+          { new: false, runValidators: true },
+        )
+          .select('+agentMetricState feedback')
+          .lean<IMessage | null>();
+      }
+    }
+    if (!previous) return null;
+    return { previousFeedback: previous.feedback, metricState: previous.agentMetricState };
+  }
+
   /**
    * Saves a message in the database.
    */
@@ -3158,6 +3304,8 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
   }
 
   return {
+    transitionAgentMetricState,
+    updateMessageFeedbackWithMetricState,
     saveMessage,
     bulkSaveMessages,
     recordMessage,

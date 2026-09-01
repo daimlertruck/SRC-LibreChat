@@ -30,6 +30,7 @@ export interface IAgent extends Omit<Document, 'model'> {
   tools?: string[];
   skills?: string[];
   skills_enabled?: boolean;
+  statistics_enabled?: boolean;
   tool_kwargs?: Array<unknown>;
   actions?: string[];
   author: Types.ObjectId;

@@ -1,5 +1,10 @@
 export { default as actionSchema } from './action';
 export { default as agentSchema } from './agent';
+export {
+  agentMetricDailySchema,
+  agentMetricStateSchema,
+  agentUserDailySchema,
+} from './agentMetric';
 export { default as aclEntrySchema } from './aclEntry';
 export { default as agentApiKeySchema } from './agentApiKey';
 export { default as agentCategorySchema } from './agentCategory';

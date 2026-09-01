@@ -1,37 +1,83 @@
-export type AgentMetricScope = {
+import type { TFeedbackTagKey } from 'librechat-data-provider';
+import type { Document } from 'mongoose';
+
+export interface IAgentMetricDaily extends Document {
   tenantId?: string;
   agentId: string;
   bucket: Date;
-};
-
-export type AgentConversationMetricInput = AgentMetricScope;
-
-export type AgentUserMarkerInput = AgentMetricScope & {
-  userId: string;
-  occurredAt: Date;
-};
-
-export type AgentMetricDelta = AgentMetricScope & {
-  conversations?: number;
-  successfulResponses?: number;
-  failedResponses?: number;
-  interruptedResponses?: number;
-  thumbsUp?: number;
-  thumbsDown?: number;
-  inputTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  outputTokens?: number;
-  costCredits?: number;
-  uniqueUsers?: number;
-  costUnavailable?: boolean;
+  conversations: number;
+  successfulResponses: number;
+  failedResponses: number;
+  interruptedResponses: number;
+  thumbsUp: number;
+  thumbsDown: number;
+  feedbackTags: Partial<Record<TFeedbackTagKey, number>>;
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  uniqueUsers: number;
+  costCredits: number;
+  costUnavailable: boolean;
+  recentFailures: Date[];
   lastUsedAt?: Date;
-  failureAt?: Date;
-};
+}
 
-export type ScopedAgentMetricRange = {
+export interface IAgentUserDaily extends Document {
   tenantId?: string;
   agentId: string;
-  fromUtcInclusive: Date;
-  toUtcExclusive: Date;
-};
+  userId: string;
+  bucket: Date;
+  expiresAt: Date;
+}
+
+export type AgentMetricScope = Readonly<{
+  tenantId?: string;
+  agentId: string;
+}>;
+
+export type AgentConversationMetricInput = AgentMetricScope &
+  Readonly<{
+    occurredAt: Date;
+  }>;
+
+export type AgentUserMarkerInput = AgentMetricScope &
+  Readonly<{
+    userId: string;
+    occurredAt: Date;
+  }>;
+
+export type AgentMetricDelta = AgentMetricScope &
+  Readonly<{
+    bucket: Date;
+    conversations?: number;
+    successfulResponses?: number;
+    failedResponses?: number;
+    interruptedResponses?: number;
+    thumbsUp?: number;
+    thumbsDown?: number;
+    feedbackTags?: Partial<Record<TFeedbackTagKey, number>>;
+    inputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    outputTokens?: number;
+    costCredits?: number;
+    uniqueUsers?: number;
+    costUnavailable?: true;
+    lastUsedAt?: Date;
+    failureOccurredAt?: Date;
+  }>;
+
+export type ScopedAgentMetricRange = AgentMetricScope &
+  Readonly<{
+    fromUtcInclusive: Date;
+    toUtcExclusive: Date;
+  }>;
+
+export type AgentMetricCounter =
+  | 'successfulResponses'
+  | 'failedResponses'
+  | 'interruptedResponses'
+  | 'thumbsUp'
+  | 'thumbsDown'
+  | `feedbackTags.${TFeedbackTagKey}`;
