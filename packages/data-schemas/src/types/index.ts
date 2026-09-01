@@ -16,6 +16,7 @@ export * from './banner';
 export * from './transaction';
 export * from './message';
 export * from './agent';
+export * from './agentMetric';
 export * from './agentApiKey';
 export * from './agentCategory';
 export * from './codeEnvironment';

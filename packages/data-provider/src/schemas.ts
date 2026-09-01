@@ -361,6 +361,7 @@ export const defaultAgentFormValues = {
   /** Master toggle for skill use on this agent. `true` activates skills
    *  (full catalog unless `skills` narrows it). Anything else = inactive. */
   skills_enabled: undefined as boolean | undefined,
+  statistics_enabled: undefined as boolean | undefined,
   /** `undefined` = feature disabled by default (no subagent tool injected). */
   subagents: undefined as
     | {

@@ -368,6 +368,8 @@ export type Agent = {
   /** Master toggle for skill use on this agent. `true` = active (full catalog unless
    *  `skills` narrows it). `false`/undefined = inactive (no skills available). */
   skills_enabled?: boolean;
+  /** Enables statistics collection when allowed by deployment configuration. */
+  statistics_enabled?: boolean;
   /** Subagent spawning configuration — isolated-context child agents. */
   subagents?: AgentSubagentsConfig;
   /** Memory partition: `agent` isolates memories per (user, agent); default shared pool */
@@ -402,6 +404,7 @@ export type AgentCreateParams = {
   | 'tool_options'
   | 'skills'
   | 'skills_enabled'
+  | 'statistics_enabled'
   | 'subagents'
   | 'memory_scope'
 >;
@@ -433,6 +436,7 @@ export type AgentUpdateParams = {
   | 'tool_options'
   | 'skills'
   | 'skills_enabled'
+  | 'statistics_enabled'
   | 'subagents'
   | 'memory_scope'
 >;

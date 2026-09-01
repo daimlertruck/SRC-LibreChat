@@ -498,6 +498,8 @@ endpoints:
   #   # (optional) Assistant Capabilities available to all users. Omit the ones you wish to exclude. Defaults to list below.
   #   capabilities: ["code_interpreter", "retrieval", "actions", "tools", "image_vision"]
   # agents:
+  #   # Enables agent statistics and the per-agent editor switch. Default: false.
+  #   statistics: false
   #   # (optional) Default recursion depth for agents, defaults to 25
   #   recursionLimit: 50
   #   # (optional) Max recursion depth for agents, defaults to 25

@@ -1041,6 +1041,7 @@ export const agentsEndpointSchema = baseEndpointSchema
       /* agents specific */
       recursionLimit: z.number().optional(),
       disableBuilder: z.boolean().optional().default(false),
+      statistics: z.boolean().optional().default(false),
       maxRecursionLimit: z.number().optional(),
       /** Max cumulative bytes a single streamed tool call's arguments may reach before the run
        * aborts. Defaults to 64 KiB in the agents SDK; `0` disables the guard. */
@@ -1175,6 +1176,7 @@ export const agentsEndpointSchema = baseEndpointSchema
   )
   .default({
     disableBuilder: false,
+    statistics: false,
     capabilities: defaultAgentCapabilities,
     maxCitations: 30,
     maxCitationsPerFile: 7,
