@@ -310,6 +310,7 @@ export function createMethods(
   const conversationMethods = createConversationMethods(mongoose, {
     getMessages: messageMethods.getMessages,
     deleteMessages: messageMethods.deleteMessages,
+    incrementAgentMetricDaily: agentMetricMethods.incrementAgentMetricDaily,
     deleteAgentQueuedTurns: async (user, conversations) => {
       /** Queued-turn ownership is ObjectId-backed. Conversation methods also
        * support synthetic/non-ObjectId owners in embedded integrations and
@@ -423,6 +424,7 @@ export function createMethods(
     getActions: actionMethods.getActions,
     getSoleOwnedResourceIds: aclEntryMethods.getSoleOwnedResourceIds,
     isExternalSkillId: deps.isExternalSkillId,
+    deleteAgentStatistics: agentMetricMethods.deleteAgentStatistics,
   };
   const agentMethods = createAgentMethods(mongoose, agentDeps);
   return {

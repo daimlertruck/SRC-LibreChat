@@ -14,6 +14,7 @@ jest.mock('@librechat/api', () => ({
   CHILD_THREAD_READ_ONLY_ERROR: 'Child thread is view-only.',
   isSubagentThreadWriteBlocked: jest.fn().mockResolvedValue(false),
   requireFeedbackEnabled: jest.fn((req, res, next) => next()),
+  projectAgentFeedback: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('~/server/services/Endpoints/agents/subagentThreadStore', () => ({}));
@@ -37,7 +38,7 @@ jest.mock('~/models', () => ({
   getMessage: jest.fn(),
   saveMessage: jest.fn(),
   getMessages: jest.fn(),
-  updateMessage: jest.fn(),
+  updateMessageFeedbackWithMetricState: jest.fn(),
   deleteMessages: jest.fn(),
   getConvosQueried: jest.fn(),
   searchMessages: jest.fn(),
@@ -68,7 +69,7 @@ jest.mock('~/db/models', () => ({
 describe('PUT /:conversationId/:messageId/feedback', () => {
   let app;
   const { sendFeedbackScore, requireFeedbackEnabled } = require('@librechat/api');
-  const { updateMessage } = require('~/models');
+  const { updateMessageFeedbackWithMetricState } = require('~/models');
 
   beforeAll(() => {
     const messagesRouter = require('../messages');
@@ -85,14 +86,18 @@ describe('PUT /:conversationId/:messageId/feedback', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     requireFeedbackEnabled.mockImplementation((req, res, next) => next());
-    updateMessage.mockImplementation((userId, { messageId, feedback }) =>
+    updateMessageFeedbackWithMetricState.mockImplementation(({ messageId, feedback }) =>
       Promise.resolve({
-        messageId,
-        conversationId: 'conversation-1',
-        endpoint: 'openAI',
-        langfuseSampled: true,
-        langfuseDestinationIds: ['destination-1'],
-        feedback,
+        previousFeedback: undefined,
+        metricState: undefined,
+        message: {
+          messageId,
+          conversationId: 'conversation-1',
+          endpoint: 'openAI',
+          langfuseSampled: true,
+          langfuseDestinationIds: ['destination-1'],
+          feedback: feedback ?? null,
+        },
       }),
     );
   });
@@ -110,18 +115,17 @@ describe('PUT /:conversationId/:messageId/feedback', () => {
       .send({ feedback });
 
     expect(response.status).toBe(200);
-    expect(updateMessage).toHaveBeenCalledWith(
-      'user-1',
-      {
-        messageId: 'message-1',
-        feedback: {
-          rating: 'thumbsDown',
-          tag: 'inaccurate',
-          text: 'The answer is incorrect',
-        },
+    expect(updateMessageFeedbackWithMetricState).toHaveBeenCalledWith({
+      userId: 'user-1',
+      tenantId: undefined,
+      conversationId: 'conversation-1',
+      messageId: 'message-1',
+      feedback: {
+        rating: 'thumbsDown',
+        tag: 'inaccurate',
+        text: 'The answer is incorrect',
       },
-      { context: 'updateFeedback' },
-    );
+    });
     expect(sendFeedbackScore).toHaveBeenCalledWith(
       expect.objectContaining({
         sampled: true,
@@ -146,7 +150,7 @@ describe('PUT /:conversationId/:messageId/feedback', () => {
 
     expect(response.status).toBe(400);
     expect(response.body).toEqual({ error: 'Invalid feedback' });
-    expect(updateMessage).not.toHaveBeenCalled();
+    expect(updateMessageFeedbackWithMetricState).not.toHaveBeenCalled();
     expect(sendFeedbackScore).not.toHaveBeenCalled();
   });
 
@@ -161,7 +165,7 @@ describe('PUT /:conversationId/:messageId/feedback', () => {
 
     expect(response.status).toBe(403);
     expect(response.body).toEqual({ error: 'Feedback is disabled' });
-    expect(updateMessage).not.toHaveBeenCalled();
+    expect(updateMessageFeedbackWithMetricState).not.toHaveBeenCalled();
     expect(sendFeedbackScore).not.toHaveBeenCalled();
   });
 
@@ -171,10 +175,17 @@ describe('PUT /:conversationId/:messageId/feedback', () => {
       .send({});
 
     expect(response.status).toBe(200);
-    expect(updateMessage).toHaveBeenCalledWith(
-      'user-1',
-      { messageId: 'message-1', feedback: null },
-      { context: 'updateFeedback' },
-    );
+    expect(updateMessageFeedbackWithMetricState).toHaveBeenCalledWith({
+      userId: 'user-1',
+      tenantId: undefined,
+      conversationId: 'conversation-1',
+      messageId: 'message-1',
+      feedback: undefined,
+    });
+    expect(response.body).toEqual({
+      messageId: 'message-1',
+      conversationId: 'conversation-1',
+      feedback: null,
+    });
   });
 });

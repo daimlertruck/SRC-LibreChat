@@ -40,6 +40,9 @@ const {
   isHITLEnabled,
   agentRequestsAskUserQuestion,
   resolveAgentTurnExecutionPlan,
+  recordAgentInvocation,
+  recordAgentResponse,
+  createAgentStatisticsContext,
 } = require('@librechat/api');
 const { disposeClient } = require('~/server/cleanup');
 const {
@@ -73,7 +76,19 @@ const {
   settleAgentEventActorSuspension,
   isAgentTriggerPrincipalActive,
   isSubagentOwnerAdmissible,
+  getAgent,
+  incrementAgentMetricDaily,
+  decrementAgentMetricDaily,
+  upsertAgentUserDaily,
+  transitionAgentMetricState,
 } = require('~/models');
+
+const agentStatisticsMethods = {
+  incrementAgentMetricDaily,
+  decrementAgentMetricDaily,
+  upsertAgentUserDaily,
+  transitionAgentMetricState,
+};
 const {
   acquireEventChildGenerationLease,
 } = require('~/server/services/Endpoints/agents/eventChildLease');
@@ -354,6 +369,22 @@ async function saveErrorTurn(
     const endpoint = endpointOption?.endpoint;
     const model = getAgentResponseModel(req, endpointOption);
     const iconURL = getEndpointIconURL(req, endpointOption);
+    const agentId = endpointOption?.agent_id ?? req.body?.agent_id;
+    let statisticsContext = null;
+    if (typeof agentId === 'string' && !isEphemeralAgentId(agentId)) {
+      try {
+        const agent = await getAgent({ id: agentId });
+        statisticsContext = createAgentStatisticsContext({
+          endpoint: req.config?.endpoints?.agents,
+          agent,
+          tenantId: req.user?.tenantId,
+          interactiveUserId:
+            req._isAgentTrigger !== true && !isScheduleFireRequest(req) ? userId : undefined,
+        });
+      } catch (error) {
+        logger.error('[AgentController] Failed to resolve agent statistics context', error);
+      }
+    }
 
     if (userMessage) {
       const savedUserMessage = await saveMessage(
@@ -371,6 +402,7 @@ async function saveErrorTurn(
       if (!savedUserMessage) {
         throw new Error('Failed user message could not be persisted');
       }
+      await recordAgentInvocation(statisticsContext, agentStatisticsMethods, logger);
     }
     const savedErrorMessage = await saveMessage(
       reqCtx,
@@ -394,7 +426,6 @@ async function saveErrorTurn(
       throw new Error('Failed response message could not be persisted');
     }
 
-    const agentId = endpointOption?.agent_id ?? req.body?.agent_id;
     const chatProjectId = endpointOption?.chatProjectId ?? req.body?.chatProjectId;
     const seedConvo = isNewConvo || req.resolvedConversation === null;
     const convoFields = seedConvo
@@ -413,7 +444,32 @@ async function saveErrorTurn(
     await saveConvo(
       reqCtx,
       { conversationId, ...convoFields },
-      seedConvo ? { context } : { context, noUpsert: true },
+      seedConvo
+        ? {
+            context,
+            ...(statisticsContext
+              ? {
+                  agentStatistics: {
+                    agentId: statisticsContext.agentId,
+                    tenantId: statisticsContext.tenantId,
+                    occurredAt: new Date(statisticsContext.occurredAt),
+                  },
+                }
+              : {}),
+          }
+        : { context, noUpsert: true },
+    );
+    await recordAgentResponse(
+      {
+        context: statisticsContext,
+        userId,
+        conversationId,
+        messageId: savedErrorMessage.messageId,
+        status: 'failed',
+        observedAt: new Date(),
+      },
+      agentStatisticsMethods,
+      logger,
     );
   } catch (err) {
     logger.error('[AgentController] Failed to persist error turn', err);

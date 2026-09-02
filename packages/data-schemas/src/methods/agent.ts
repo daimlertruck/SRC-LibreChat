@@ -121,6 +121,7 @@ export interface AgentDeps {
   ) => Promise<Types.ObjectId[]>;
   /** Recognizes skill IDs supplied by an external, non-database registry. */
   isExternalSkillId?: (id: string) => boolean;
+  deleteAgentStatistics?: (agentIds: string[], tenantId?: string) => Promise<void>;
 }
 
 /**
@@ -996,6 +997,11 @@ export function createAgentMethods(
         logger.error('[deleteAgent] Error removing agent from handoff edges', error);
       }
       try {
+        await deps.deleteAgentStatistics?.([agent.id], agent.tenantId);
+      } catch (error) {
+        logger.error('[deleteAgent] Error deleting agent statistics', error);
+      }
+      try {
         await User.updateMany(
           { 'favorites.agentId': (agent as unknown as { id: string }).id },
           { $pull: { favorites: { agentId: (agent as unknown as { id: string }).id } } },
@@ -1027,7 +1033,9 @@ export function createAgentMethods(
         ResourceType.REMOTE_AGENT,
       ]);
 
-      const authoredAgents = await Agent.find({ author: userObjectId }).select('id _id').lean();
+      const authoredAgents = await Agent.find({ author: userObjectId })
+        .select('id _id tenantId')
+        .lean();
 
       const migratedEntries =
         authoredAgents.length > 0
@@ -1044,7 +1052,7 @@ export function createAgentMethods(
       const soleOwnedAgents =
         soleOwnedObjectIds.length > 0
           ? await Agent.find({ _id: { $in: soleOwnedObjectIds } })
-              .select('id _id')
+              .select('id _id tenantId')
               .lean()
           : [];
 
@@ -1078,6 +1086,19 @@ export function createAgentMethods(
       }
 
       await Agent.deleteMany({ _id: { $in: agentObjectIds } });
+      const statisticsByTenant = new Map<string | undefined, string[]>();
+      for (const agent of allAgents) {
+        const ids = statisticsByTenant.get(agent.tenantId) ?? [];
+        ids.push(agent.id);
+        statisticsByTenant.set(agent.tenantId, ids);
+      }
+      for (const [tenantId, ids] of statisticsByTenant) {
+        try {
+          await deps.deleteAgentStatistics?.(ids, tenantId);
+        } catch (error) {
+          logger.error('[deleteUserAgents] Error deleting agent statistics', error);
+        }
+      }
     } catch (error) {
       logger.error('[deleteUserAgents] General error:', error);
     }

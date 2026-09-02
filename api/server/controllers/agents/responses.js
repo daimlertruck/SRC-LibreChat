@@ -28,6 +28,9 @@ const {
   injectSkillPrimes,
   extractManualSkills,
   recordCollectedUsage,
+  recordAgentInvocation,
+  recordAgentResponse,
+  createAgentStatisticsContext,
   createSubagentUsageSink,
   getTransactionsConfig,
   resolveAgentTokenConfig,
@@ -360,10 +363,11 @@ async function loadPreviousMessages(conversationId, userId) {
  * @param {string} agentId
  * @returns {Promise<void>}
  */
-async function saveInputMessages(req, conversationId, inputMessages, agentId) {
+async function saveInputMessages(req, conversationId, inputMessages, agentId, statisticsContext) {
+  let savedUserInput = false;
   for (const msg of inputMessages) {
     if (msg.role === 'user') {
-      await db.saveMessage(
+      const savedMessage = await db.saveMessage(
         req,
         {
           messageId: msg.messageId || nanoid(),
@@ -377,7 +381,11 @@ async function saveInputMessages(req, conversationId, inputMessages, agentId) {
         },
         { context: 'Responses API - save user input' },
       );
+      savedUserInput = savedUserInput || savedMessage != null;
     }
+  }
+  if (savedUserInput) {
+    await recordAgentInvocation(statisticsContext, db, logger);
   }
 }
 
@@ -398,6 +406,7 @@ async function saveResponseOutput(
   response,
   agentId,
   visibleOutputTokens,
+  statisticsContext,
 ) {
   // Extract text content from output items
   let responseText = '';
@@ -414,7 +423,7 @@ async function saveResponseOutput(
   const langfuseTraceFields = await getLangfuseTraceMessageFields(req.config, responseId);
 
   // Save the assistant message
-  await db.saveMessage(
+  const savedMessage = await db.saveMessage(
     req,
     {
       messageId: responseId,
@@ -431,6 +440,23 @@ async function saveResponseOutput(
     },
     { context: 'Responses API - save assistant response' },
   );
+  if (savedMessage) {
+    let status = 'failed';
+    if (response.status === 'completed') status = 'successful';
+    if (response.status === 'cancelled') status = 'interrupted';
+    await recordAgentResponse(
+      {
+        context: statisticsContext,
+        userId: req?.user?.id,
+        conversationId,
+        messageId: responseId,
+        status,
+        observedAt: new Date(),
+      },
+      db,
+      logger,
+    );
+  }
 }
 
 /**
@@ -441,7 +467,7 @@ async function saveResponseOutput(
  * @param {object} agent
  * @returns {Promise<void>}
  */
-async function saveConversation(req, conversationId, agentId, agent) {
+async function saveConversation(req, conversationId, agentId, agent, statisticsContext) {
   const title = resolveConversationTitle(req, agent?.name || 'Open Responses Conversation');
   await db.saveConvo(
     {
@@ -452,11 +478,22 @@ async function saveConversation(req, conversationId, agentId, agent) {
     {
       conversationId,
       endpoint: EModelEndpoint.agents,
-      agentId,
+      agent_id: agentId,
       ...(title != null && { title }),
       model: agent?.model,
     },
-    { context: 'Responses API - save conversation' },
+    {
+      context: 'Responses API - save conversation',
+      ...(statisticsContext
+        ? {
+            agentStatistics: {
+              agentId: statisticsContext.agentId,
+              tenantId: statisticsContext.tenantId,
+              occurredAt: new Date(statisticsContext.occurredAt),
+            },
+          }
+        : {}),
+    },
   );
 }
 
@@ -689,6 +726,15 @@ const executeResponse = async (envelope, { req, res }) => {
         conversationId,
       });
       const agentsEConfig = appConfig?.endpoints?.[EModelEndpoint.agents];
+      const statisticsContext =
+        request.store === true
+          ? createAgentStatisticsContext({
+              endpoint: agentsEConfig,
+              agent,
+              tenantId: principal.tenantId,
+              interactiveUserId: principal.userId,
+            })
+          : null;
       const previousMessages = request.previous_response_id
         ? await loadPreviousMessages(request.previous_response_id, principal.userId)
         : [];
@@ -1257,10 +1303,10 @@ const executeResponse = async (envelope, { req, res }) => {
         if (request.store === true) {
           try {
             // Save conversation
-            await saveConversation(req, conversationId, agentId, agent);
+            await saveConversation(req, conversationId, agentId, agent, statisticsContext);
 
             // Save input messages
-            await saveInputMessages(req, conversationId, inputMessages, agentId);
+            await saveInputMessages(req, conversationId, inputMessages, agentId, statisticsContext);
 
             // Build response for saving (use tracker with buildResponse for streaming)
             const finalResponse = buildResponse(context, tracker, 'completed');
@@ -1271,6 +1317,7 @@ const executeResponse = async (envelope, { req, res }) => {
               finalResponse,
               agentId,
               tracker.usage.outputTokens,
+              statisticsContext,
             );
 
             logger.debug(
@@ -1472,9 +1519,9 @@ const executeResponse = async (envelope, { req, res }) => {
 
         if (request.store === true) {
           try {
-            await saveConversation(req, conversationId, agentId, agent);
+            await saveConversation(req, conversationId, agentId, agent, statisticsContext);
 
-            await saveInputMessages(req, conversationId, inputMessages, agentId);
+            await saveInputMessages(req, conversationId, inputMessages, agentId, statisticsContext);
 
             await saveResponseOutput(
               req,
@@ -1483,6 +1530,7 @@ const executeResponse = async (envelope, { req, res }) => {
               response,
               agentId,
               aggregator.usage.outputTokens,
+              statisticsContext,
             );
 
             logger.debug(

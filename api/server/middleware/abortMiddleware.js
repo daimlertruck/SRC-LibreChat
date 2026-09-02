@@ -9,6 +9,8 @@ const {
   getTransactionsConfig,
   sanitizeMessageForTransmit,
   buildAbortedResponseMetadata,
+  recordAgentResponse,
+  createAgentStatisticsContext,
 } = require('@librechat/api');
 const { truncateText, smartTruncateText } = require('~/app/clients/prompts');
 const clearPendingReq = require('~/cache/clearPendingReq');
@@ -173,7 +175,7 @@ async function abortMessage(req, res) {
     );
   }
 
-  await db.saveMessage(
+  const savedMessage = await db.saveMessage(
     {
       userId: req?.user?.id,
       isTemporary: req?.body?.isTemporary,
@@ -182,6 +184,31 @@ async function abortMessage(req, res) {
     { ...responseMessage, user: userId },
     { context: 'api/server/middleware/abortMiddleware.js' },
   );
+  if (savedMessage && jobData?.agent_id) {
+    try {
+      const agent = await db.getAgent({ id: jobData.agent_id });
+      const statisticsContext = createAgentStatisticsContext({
+        endpoint: req.config?.endpoints?.agents,
+        agent,
+        tenantId: req.user?.tenantId,
+        interactiveUserId: userId,
+      });
+      await recordAgentResponse(
+        {
+          context: statisticsContext,
+          userId,
+          conversationId: savedMessage.conversationId,
+          messageId: savedMessage.messageId,
+          status: 'interrupted',
+          observedAt: new Date(),
+        },
+        db,
+        logger,
+      );
+    } catch (error) {
+      logger.error('[abortMessage] Agent statistics projection failed', error);
+    }
+  }
 
   // Get conversation for title
   const conversation = await db.getConvo(userId, conversationId);

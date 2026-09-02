@@ -25,6 +25,10 @@ const {
   applyContextToAgent,
   isMemoryAgentEnabled,
   recordCollectedUsage,
+  recordAgentInvocation,
+  recordAgentResponse,
+  createAgentStatisticsContext,
+  isScheduleFireRequest,
   createDetachedSubagentUsageRecorder,
   sendEvent,
   computeUsageCostUSD,
@@ -291,6 +295,18 @@ class AgentClient extends BaseClient {
     /** The current client class
      * @type {string} */
     this.clientName = EModelEndpoint.agents;
+    const req = options.req;
+    this.agentStatisticsUserId = req?.user?.id;
+    const tracksInteractiveUser = req?._isAgentTrigger !== true && !isScheduleFireRequest(req);
+    this.agentStatisticsContext =
+      req?._agentEventBindingParentConversationId == null
+        ? createAgentStatisticsContext({
+            endpoint: req?.config?.endpoints?.agents,
+            agent: options.agent,
+            tenantId: req?.user?.tenantId,
+            interactiveUserId: tracksInteractiveUser ? req?.user?.id : undefined,
+          })
+        : null;
 
     /** @deprecated @type {true} - Is a Chat Completion Request */
     this.isChatCompletion = true;
@@ -641,6 +657,51 @@ class AgentClient extends BaseClient {
         }
       },
     });
+  }
+
+  getConversationMetricInput(fieldsToKeep) {
+    const context = this.agentStatisticsContext;
+    if (!context || fieldsToKeep?.agent_id !== context.agentId) {
+      return undefined;
+    }
+    return {
+      agentId: context.agentId,
+      tenantId: context.tenantId,
+      occurredAt: new Date(context.occurredAt),
+    };
+  }
+
+  async saveMessageToDatabase(message, endpointOptions, user = null) {
+    const result = await super.saveMessageToDatabase(message, endpointOptions, user);
+    const context = this.agentStatisticsContext;
+    const savedMessage = result?.message;
+    if (!context || !savedMessage?.messageId) {
+      return result;
+    }
+    if (message.isCreatedByUser === true && message.isUserSubmitted !== false) {
+      await recordAgentInvocation(context, db, logger);
+      return result;
+    }
+    if (message.isCreatedByUser === true || message.unfinished === true) {
+      return result;
+    }
+    const hasError =
+      message.error === true ||
+      (Array.isArray(message.content) &&
+        message.content.some((part) => part?.type === ContentTypes.ERROR));
+    await recordAgentResponse(
+      {
+        context,
+        userId: this.agentStatisticsUserId,
+        conversationId: savedMessage.conversationId,
+        messageId: savedMessage.messageId,
+        status: hasError ? 'failed' : 'successful',
+        observedAt: new Date(),
+      },
+      db,
+      logger,
+    );
+    return result;
   }
 
   setOptions(_options) {}

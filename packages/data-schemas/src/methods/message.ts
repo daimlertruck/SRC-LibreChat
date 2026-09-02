@@ -1,6 +1,7 @@
 import { HITL_MESSAGE_FILTER_FIELDS, RetentionMode } from 'librechat-data-provider';
 import type { UserSubmittedMessageFieldPath } from 'librechat-data-provider';
 import type { DeleteResult, FilterQuery, Model, Types } from 'mongoose';
+import type { TMinimalFeedback } from 'librechat-data-provider';
 import type {
   AgentMetricStatus,
   AppConfig,
@@ -22,6 +23,23 @@ const MAX_USER_SUBMITTED_PATH_LENGTH = 2048;
 const MAX_PROVENANCE_CAS_ATTEMPTS = 8;
 const MAX_SUBAGENT_CONTROL_RECEIPTS = 64;
 const MAX_SUBAGENT_CONTROL_MESSAGE_LENGTH = 4 * 1024;
+const AGENT_METRIC_FEEDBACK_SELECT = [
+  '+agentMetricState',
+  'feedback',
+  'messageId',
+  'conversationId',
+  'parentMessageId',
+  'sender',
+  'text',
+  'isCreatedByUser',
+  'isUserSubmitted',
+  'userSubmittedPaths',
+  'userSubmittedMessageFieldPaths',
+  'tokenCount',
+  'endpoint',
+  'langfuseSampled',
+  'langfuseDestinationIds',
+].join(' ');
 /** One owner admits at most 64 terminal control invocations. The optimistic
  * writer therefore has enough rounds for every admitted receipt to converge. */
 const MAX_SUBAGENT_CONTROL_RECEIPT_CAS_ATTEMPTS = 64;
@@ -543,7 +561,7 @@ export type AgentMetricStateTransition = AgentMetricMessageScope & {
 };
 
 export type AgentMetricFeedbackTransition = AgentMetricMessageScope & {
-  feedback?: IMessage['feedback'];
+  feedback?: IMessage['feedback'] | TMinimalFeedback;
 };
 
 export interface MessageMethods {
@@ -553,6 +571,7 @@ export interface MessageMethods {
   updateMessageFeedbackWithMetricState(input: AgentMetricFeedbackTransition): Promise<{
     previousFeedback?: IMessage['feedback'];
     metricState?: IAgentMetricState;
+    message: IMessage;
   } | null>;
   saveMessage(
     ctx: {
@@ -745,8 +764,17 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
   ): Promise<{ previous?: IAgentMetricState; current: IAgentMetricState } | null> {
     const Message = mongoose.models.Message as Model<IMessage>;
     const baseFilter = metricMessageFilter(input);
+    const replaceableStatuses: Record<AgentMetricStatus, AgentMetricStatus[]> = {
+      successful: ['successful'],
+      interrupted: ['successful', 'interrupted'],
+      failed: ['successful', 'interrupted', 'failed'],
+    };
     let previous = await Message.findOneAndUpdate(
-      { ...baseFilter, agentMetricState: { $exists: true } },
+      {
+        ...baseFilter,
+        agentMetricState: { $exists: true },
+        'agentMetricState.status': { $in: replaceableStatuses[input.status] },
+      },
       { $set: { 'agentMetricState.status': input.status } },
       { new: false, runValidators: true },
     )
@@ -785,22 +813,40 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
     }
 
     previous = await Message.findOneAndUpdate(
-      { ...baseFilter, agentMetricState: { $exists: true } },
+      {
+        ...baseFilter,
+        agentMetricState: { $exists: true },
+        'agentMetricState.status': { $in: replaceableStatuses[input.status] },
+      },
       { $set: { 'agentMetricState.status': input.status } },
       { new: false, runValidators: true },
     )
       .select('+agentMetricState')
       .lean<IMessage | null>();
+    if (!previous?.agentMetricState) {
+      previous = await Message.findOne(baseFilter)
+        .select('+agentMetricState')
+        .lean<IMessage | null>();
+    }
     if (!previous?.agentMetricState) return null;
     return {
       previous: previous.agentMetricState,
-      current: { ...previous.agentMetricState, status: input.status },
+      current: {
+        ...previous.agentMetricState,
+        status: replaceableStatuses[input.status].includes(previous.agentMetricState.status)
+          ? input.status
+          : previous.agentMetricState.status,
+      },
     };
   }
 
   async function updateMessageFeedbackWithMetricState(
     input: AgentMetricFeedbackTransition,
-  ): Promise<{ previousFeedback?: IMessage['feedback']; metricState?: IAgentMetricState } | null> {
+  ): Promise<{
+    previousFeedback?: IMessage['feedback'];
+    metricState?: IAgentMetricState;
+    message: IMessage;
+  } | null> {
     const Message = mongoose.models.Message as Model<IMessage>;
     const baseFilter = metricMessageFilter(input);
     const update: Record<string, Record<string, unknown>> = input.feedback
@@ -809,7 +855,10 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
             feedback: input.feedback,
             'agentMetricState.feedback': {
               rating: input.feedback.rating,
-              tag: input.feedback.tag?.key,
+              tag:
+                typeof input.feedback.tag === 'string'
+                  ? input.feedback.tag
+                  : input.feedback.tag?.key,
             },
           },
         }
@@ -819,7 +868,7 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
       update,
       { new: false, runValidators: true },
     )
-      .select('+agentMetricState feedback')
+      .select(AGENT_METRIC_FEEDBACK_SELECT)
       .lean<IMessage | null>();
     if (!previous) {
       const fallbackUpdate = input.feedback
@@ -830,7 +879,7 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
         fallbackUpdate,
         { new: false, runValidators: true },
       )
-        .select('feedback')
+        .select(AGENT_METRIC_FEEDBACK_SELECT)
         .lean<IMessage | null>();
       if (!previous) {
         previous = await Message.findOneAndUpdate(
@@ -838,12 +887,16 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
           update,
           { new: false, runValidators: true },
         )
-          .select('+agentMetricState feedback')
+          .select(AGENT_METRIC_FEEDBACK_SELECT)
           .lean<IMessage | null>();
       }
     }
     if (!previous) return null;
-    return { previousFeedback: previous.feedback, metricState: previous.agentMetricState };
+    return {
+      previousFeedback: previous.feedback,
+      metricState: previous.agentMetricState,
+      message: { ...previous, feedback: input.feedback ?? null } as IMessage,
+    };
   }
 
   /**

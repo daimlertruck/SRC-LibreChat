@@ -10,6 +10,7 @@ import type {
   IAgentEventActorSuspensionEvidence,
   IAgentEventBindingRecord,
   IAgentTriggerDeliveryDocument,
+  AgentConversationMetricInput,
   AppConfig,
   IChatProjectDocument,
   IActiveSubagentThreadLease,
@@ -18,6 +19,7 @@ import type {
   ISubagentThreadReservation,
 } from '~/types';
 import type { MessageMethods } from './message';
+import type { AgentMetricMethods } from './agentMetric';
 import {
   MAX_AGENT_EVENT_ACTOR_DISCOVERED_TOOLS,
   MAX_AGENT_EVENT_ACTOR_ENCODING_LENGTH,
@@ -245,6 +247,7 @@ export interface ConversationMethods {
        *  `$addToSet` and the O(n) read-and-rewrite of the `messages` array is skipped;
        *  every save without this option still rebuilds the array from the database. */
       appendMessageIds?: Types.ObjectId[];
+      agentStatistics?: AgentConversationMetricInput;
     },
   ): Promise<IConversation | { message: string } | null>;
   setConvoPinned(
@@ -468,6 +471,7 @@ export interface ConversationMethods {
 
 export interface ConversationMethodDeps
   extends Pick<MessageMethods, 'getMessages' | 'deleteMessages'> {
+  incrementAgentMetricDaily?: AgentMetricMethods['incrementAgentMetricDaily'];
   deleteAgentQueuedTurns?: (
     user: string,
     conversations: Array<{ conversationId: string; tenantId?: string; allTenants?: true }>,
@@ -2099,6 +2103,7 @@ export function createConversationMethods(
       createdAtOnInsert?: Date;
       preserveUpdatedAt?: boolean;
       appendMessageIds?: Types.ObjectId[];
+      agentStatistics?: AgentConversationMetricInput;
     },
   ) {
     try {
@@ -2301,6 +2306,30 @@ export function createConversationMethods(
       if (!conversation) {
         logger.debug('[saveConvo] Conversation not found, skipping update');
         return null;
+      }
+
+      const agentStatistics = metadata?.agentStatistics;
+      if (
+        agentStatistics &&
+        conversationResult.lastErrorObject?.updatedExisting === false &&
+        conversation.subagentThread == null &&
+        conversation.agent_id === agentStatistics.agentId
+      ) {
+        try {
+          await deps?.incrementAgentMetricDaily?.({
+            ...agentStatistics,
+            bucket: new Date(
+              Date.UTC(
+                agentStatistics.occurredAt.getUTCFullYear(),
+                agentStatistics.occurredAt.getUTCMonth(),
+                agentStatistics.occurredAt.getUTCDate(),
+              ),
+            ),
+            conversations: 1,
+          });
+        } catch (error) {
+          logger.error('[saveConvo] Agent statistics projection failed', error);
+        }
       }
 
       if (

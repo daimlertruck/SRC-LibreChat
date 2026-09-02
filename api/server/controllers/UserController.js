@@ -454,6 +454,11 @@ const deleteUserController = async (req, res) => {
     await db.deleteFiles(null, user.id);
     await db.deleteToolCalls(user.id);
     await db.deleteUserAgents(user.id);
+    try {
+      await db.deleteAgentUserStatistics(user.id, user.tenantId);
+    } catch (error) {
+      logger.error('[deleteUser] Error deleting agent user statistics', error);
+    }
     await db.deleteAllAgentApiKeys(user._id);
     await db.deleteAssistants({ user: user.id });
     await db.deleteConversationTags({ user: user.id });

@@ -1,5 +1,12 @@
 import fs from 'fs';
 import path from 'path';
+import {
+  createAgentStatisticsContext,
+  projectAgentFeedback,
+  recordAgentInvocation,
+  recordAgentResponse,
+} from './statistics';
+import type { AgentStatisticsMethods } from './statistics';
 import type { AgentStatisticsContext } from './statistics';
 
 const CALLERS = [
@@ -65,5 +72,167 @@ describe('agent statistics Phase 0 contracts', () => {
         .filter(([, count]) => count > 0),
     );
     expect(actual).toEqual(CALLER_INVENTORY);
+  });
+});
+
+function methods(): jest.Mocked<AgentStatisticsMethods> {
+  return {
+    incrementAgentMetricDaily: jest.fn().mockResolvedValue(undefined),
+    decrementAgentMetricDaily: jest.fn().mockResolvedValue(true),
+    upsertAgentUserDaily: jest.fn().mockResolvedValue({ inserted: true }),
+    transitionAgentMetricState: jest.fn().mockResolvedValue(null),
+  };
+}
+
+const occurredAt = new Date('2026-08-31T15:20:00.000Z');
+
+describe('agent statistics projection', () => {
+  test('requires both feature gates and creates an immutable UTC context', () => {
+    expect(
+      createAgentStatisticsContext({
+        endpoint: { statistics: true },
+        agent: { id: 'agent-1', statistics_enabled: false },
+      }),
+    ).toBeNull();
+    const context = createAgentStatisticsContext({
+      endpoint: { statistics: true },
+      agent: { id: 'agent-1', statistics_enabled: true },
+      tenantId: 'tenant-1',
+      interactiveUserId: 'user-1',
+      occurredAt,
+    });
+    expect(context).toEqual({
+      agentId: 'agent-1',
+      tenantId: 'tenant-1',
+      interactiveUserId: 'user-1',
+      bucket: '2026-08-31T00:00:00.000Z',
+      occurredAt: occurredAt.getTime(),
+    });
+    expect(Object.isFrozen(context)).toBe(true);
+  });
+
+  test('increments unique users only for a newly inserted marker', async () => {
+    const db = methods();
+    db.upsertAgentUserDaily.mockResolvedValue({ inserted: false });
+    const context = createAgentStatisticsContext({
+      endpoint: { statistics: true },
+      agent: { id: 'agent-1', statistics_enabled: true },
+      interactiveUserId: 'user-1',
+      occurredAt,
+    });
+    await recordAgentInvocation(context, db);
+    expect(db.incrementAgentMetricDaily).toHaveBeenCalledWith(
+      expect.objectContaining({ uniqueUsers: undefined, lastUsedAt: occurredAt }),
+    );
+  });
+
+  test('advances last-used time for a service invocation without a user marker', async () => {
+    const db = methods();
+    const context = createAgentStatisticsContext({
+      endpoint: { statistics: true },
+      agent: { id: 'agent-1', statistics_enabled: true },
+      occurredAt,
+    });
+    await recordAgentInvocation(context, db);
+    expect(db.upsertAgentUserDaily).not.toHaveBeenCalled();
+    expect(db.incrementAgentMetricDaily).toHaveBeenCalledWith(
+      expect.objectContaining({ uniqueUsers: undefined, lastUsedAt: occurredAt }),
+    );
+  });
+
+  test('corrects a changed terminal status and ignores a retry', async () => {
+    const db = methods();
+    const context = createAgentStatisticsContext({
+      endpoint: { statistics: true },
+      agent: { id: 'agent-1', statistics_enabled: true },
+      interactiveUserId: 'user-1',
+      occurredAt,
+    });
+    db.transitionAgentMetricState.mockResolvedValueOnce({
+      previous: { statisticsAgentId: 'agent-1', bucket: new Date('2026-08-31'), status: 'failed' },
+      current: {
+        statisticsAgentId: 'agent-1',
+        bucket: new Date('2026-08-31'),
+        status: 'successful',
+      },
+    });
+    await recordAgentResponse(
+      {
+        context,
+        userId: 'user-1',
+        conversationId: 'conversation-1',
+        messageId: 'message-1',
+        status: 'successful',
+      },
+      db,
+    );
+    expect(db.decrementAgentMetricDaily).toHaveBeenCalledWith(
+      expect.objectContaining({ counter: 'failedResponses' }),
+    );
+    expect(db.incrementAgentMetricDaily).toHaveBeenCalledWith(
+      expect.objectContaining({ successfulResponses: 1 }),
+    );
+
+    db.transitionAgentMetricState.mockResolvedValueOnce({
+      previous: {
+        statisticsAgentId: 'agent-1',
+        bucket: new Date('2026-08-31'),
+        status: 'successful',
+      },
+      current: {
+        statisticsAgentId: 'agent-1',
+        bucket: new Date('2026-08-31'),
+        status: 'successful',
+      },
+    });
+    await recordAgentResponse(
+      {
+        context,
+        userId: 'user-1',
+        conversationId: 'conversation-1',
+        messageId: 'message-1',
+        status: 'successful',
+      },
+      db,
+    );
+    expect(db.incrementAgentMetricDaily).toHaveBeenCalledTimes(1);
+  });
+
+  test('projects exact feedback rating and category corrections', async () => {
+    const db = methods();
+    await projectAgentFeedback(
+      {
+        enabled: true,
+        previous: { rating: 'thumbsDown', tag: 'inaccurate' },
+        current: { rating: 'thumbsUp', tag: 'accurate_reliable' },
+        metricState: {
+          statisticsAgentId: 'agent-1',
+          bucket: new Date('2026-08-31'),
+          status: 'successful',
+        },
+      },
+      db,
+    );
+    expect(db.decrementAgentMetricDaily).toHaveBeenCalledTimes(2);
+    expect(db.incrementAgentMetricDaily).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thumbsUp: 1,
+        feedbackTags: { accurate_reliable: 1 },
+      }),
+    );
+  });
+
+  test('isolates projection failures', async () => {
+    const db = methods();
+    const logger = { error: jest.fn() };
+    db.upsertAgentUserDaily.mockRejectedValue(new Error('unavailable'));
+    const context = createAgentStatisticsContext({
+      endpoint: { statistics: true },
+      agent: { id: 'agent-1', statistics_enabled: true },
+      interactiveUserId: 'user-1',
+      occurredAt,
+    });
+    await expect(recordAgentInvocation(context, db, logger)).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalled();
   });
 });

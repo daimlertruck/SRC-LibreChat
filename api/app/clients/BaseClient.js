@@ -1319,6 +1319,9 @@ class BaseClient {
       noUpsert: req?._agentEventBindingParentConversationId != null,
       createdAtOnInsert: shouldSetCreatedAtOnInsert ? validCreatedAtOnInsert : undefined,
       ...(savedMessage?._id != null ? { appendMessageIds: [savedMessage._id] } : {}),
+      ...(typeof this.getConversationMetricInput === 'function'
+        ? { agentStatistics: this.getConversationMetricInput(fieldsToKeep) }
+        : {}),
     });
 
     return { message: savedMessage, conversation };

@@ -182,6 +182,9 @@ describe('agent metric storage foundation', () => {
       conversationId: 'conversation-1',
       messageId: 'message-1',
       isCreatedByUser: false,
+      endpoint: 'openAI',
+      langfuseSampled: true,
+      langfuseDestinationIds: ['destination-1'],
     });
     const scope = {
       tenantId: undefined,
@@ -207,12 +210,26 @@ describe('agent metric storage foundation', () => {
     });
     expect(second?.previous?.status).toBe('successful');
     expect(second?.current).toMatchObject({ statisticsAgentId: 'agent-1', bucket });
+    const lowerPriority = await messageMethods.transitionAgentMetricState({
+      ...scope,
+      statisticsAgentId: 'agent-2',
+      bucket: new Date('2026-09-02T00:00:00.000Z'),
+      status: 'successful',
+    });
+    expect(lowerPriority?.previous?.status).toBe('failed');
+    expect(lowerPriority?.current.status).toBe('failed');
     const feedback = { rating: 'thumbsUp' as const, tag: FEEDBACK_TAGS[7] };
     const feedbackResult = await messageMethods.updateMessageFeedbackWithMetricState({
       ...scope,
       feedback,
     });
     expect(feedbackResult?.metricState?.status).toBe('failed');
+    expect(feedbackResult?.message).toMatchObject({
+      endpoint: 'openAI',
+      langfuseSampled: true,
+      langfuseDestinationIds: ['destination-1'],
+      feedback,
+    });
     const stored = await Message.findOne({ messageId: 'message-1' })
       .select('+agentMetricState')
       .lean();

@@ -269,6 +269,9 @@ jest.mock('@librechat/api', () => ({
   getBalanceConfig: mockGetBalanceConfig,
   getTransactionsConfig: mockGetTransactionsConfig,
   recordCollectedUsage: mockRecordCollectedUsage,
+  recordAgentInvocation: jest.fn().mockResolvedValue(undefined),
+  recordAgentResponse: jest.fn().mockResolvedValue(undefined),
+  createAgentStatisticsContext: jest.fn().mockReturnValue(null),
   createSubagentUsageSink: jest.fn().mockReturnValue(jest.fn()),
   CHILD_THREAD_READ_ONLY_ERROR:
     'This subagent thread is view-only. Continue it from its parent agent or create a separate chat.',
@@ -792,6 +795,24 @@ describe('createResponse controller', () => {
       }),
       { context: 'Responses API - save assistant response' },
     );
+  });
+
+  it('does not record an invocation when the user input was not persisted', async () => {
+    const api = require('@librechat/api');
+    const { saveMessage } = require('~/models');
+    const statisticsContext = { agentId: 'agent-123' };
+    api.validateResponseRequest.mockReturnValueOnce({
+      request: { ...req.body, store: true },
+    });
+    api.convertInputToMessages.mockReturnValueOnce([{ role: 'user', content: 'Hello' }]);
+    api.createAgentStatisticsContext.mockReturnValueOnce(statisticsContext);
+    saveMessage
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ messageId: 'resp_mock-123' });
+
+    await createResponse(req, res);
+
+    expect(api.recordAgentInvocation).not.toHaveBeenCalled();
   });
 
   describe('execution envelope', () => {

@@ -7,6 +7,7 @@ const {
   isAssistantsEndpoint,
   stripReasoningLabelMetadata,
 } = require('librechat-data-provider');
+const { projectAgentFeedback } = require('@librechat/api');
 const {
   unescapeLaTeX,
   countTokens,
@@ -657,13 +658,40 @@ router.put(
         return res.status(400).json({ error: 'Invalid feedback' });
       }
 
-      const updatedMessage = await db.updateMessage(
-        req?.user?.id,
+      const feedbackTransition = await db.updateMessageFeedbackWithMetricState({
+        userId: req?.user?.id,
+        tenantId: req?.user?.tenantId,
+        conversationId,
+        messageId,
+        feedback: feedbackResult?.data,
+      });
+      if (!feedbackTransition) {
+        return res.status(404).json({ error: 'Message not found' });
+      }
+      const updatedMessage = feedbackTransition.message;
+      await projectAgentFeedback(
         {
-          messageId,
-          feedback: feedbackResult?.data ?? null,
+          enabled: req.config?.endpoints?.agents?.statistics === true,
+          tenantId: req?.user?.tenantId,
+          previous: feedbackTransition.previousFeedback
+            ? {
+                rating: feedbackTransition.previousFeedback.rating,
+                tag: feedbackTransition.previousFeedback.tag?.key,
+              }
+            : undefined,
+          current: updatedMessage.feedback
+            ? {
+                rating: updatedMessage.feedback.rating,
+                tag:
+                  typeof updatedMessage.feedback.tag === 'string'
+                    ? updatedMessage.feedback.tag
+                    : updatedMessage.feedback.tag?.key,
+              }
+            : undefined,
+          metricState: feedbackTransition.metricState,
         },
-        { context: 'updateFeedback' },
+        db,
+        logger,
       );
 
       // Best-effort: Assistants messages do not have deterministic AgentRun traces.
