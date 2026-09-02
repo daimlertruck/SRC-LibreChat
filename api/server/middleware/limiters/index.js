@@ -9,6 +9,7 @@ const registerLimiter = require('./registerLimiter');
 const toolCallLimiter = require('./toolCallLimiter');
 const messageLimiters = require('./messageLimiters');
 const promptUsageLimiter = require('./promptUsageLimiter');
+const agentStatisticsLimiter = require('./agentStatisticsLimiter');
 const verifyEmailLimiter = require('./verifyEmailLimiter');
 const resetPasswordLimiter = require('./resetPasswordLimiter');
 const twoFactorTempLimiter = require('./twoFactorTempLimiter');
@@ -21,6 +22,7 @@ module.exports = {
   ...messageLimiters,
   ...forkLimiters,
   ...promptUsageLimiter,
+  ...agentStatisticsLimiter,
   loginLimiter,
   registerLimiter,
   toolCallLimiter,

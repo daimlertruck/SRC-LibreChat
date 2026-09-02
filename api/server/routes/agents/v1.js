@@ -2,7 +2,9 @@ const express = require('express');
 const { generateCheckAccess } = require('@librechat/api');
 const { PermissionTypes, Permissions, PermissionBits } = require('librechat-data-provider');
 const { configMiddleware, canAccessAgentResource } = require('~/server/middleware');
+const { agentStatisticsLimiter } = require('~/server/middleware/limiters');
 const v1 = require('~/server/controllers/agents/v1');
+const statistics = require('~/server/controllers/agents/statistics');
 const { getRoleByName } = require('~/models');
 const actions = require('./actions');
 const tools = require('./tools');
@@ -45,6 +47,18 @@ router.get('/categories', v1.getAgentCategories);
  * @returns {Agent} 201 - Success response - application/json
  */
 router.post('/', checkAgentCreate, configMiddleware, v1.createAgent);
+
+router.get(
+  '/:id/statistics',
+  checkAgentAccess,
+  canAccessAgentResource({
+    requiredPermission: PermissionBits.EDIT,
+    resourceIdParam: 'id',
+  }),
+  agentStatisticsLimiter,
+  configMiddleware,
+  statistics,
+);
 
 /**
  * Retrieves basic agent information (VIEW permission required).

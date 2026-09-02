@@ -176,6 +176,24 @@ describe('agent metric storage foundation', () => {
     expect(await Daily.countDocuments({ tenantId: 'tenant-2' })).toBe(1);
   });
 
+  it('uses the scoped compound index for bounded daily reads', async () => {
+    await Daily.create({ tenantId: 'tenant-1', agentId: 'agent-1', bucket });
+    const explanation = await Daily.collection
+      .find({
+        tenantId: 'tenant-1',
+        agentId: 'agent-1',
+        bucket: { $gte: bucket, $lt: new Date(bucket.getTime() + 24 * 60 * 60 * 1000) },
+      })
+      .sort({ bucket: 1 })
+      .limit(90)
+      .explain('executionStats');
+
+    expect(JSON.stringify(explanation.queryPlanner.winningPlan)).toContain(
+      'tenantId_1_agentId_1_bucket_1',
+    );
+    expect(explanation.executionStats.totalDocsExamined).toBe(1);
+  });
+
   it('conditionally decrements counters without underflow', async () => {
     const metricMethods = methods();
     await metricMethods.incrementAgentMetricDaily({
