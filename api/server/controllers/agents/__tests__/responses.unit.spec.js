@@ -499,6 +499,7 @@ jest.mock('~/server/services/Files/Code/process', () => ({
 
 const mockUpdateBalance = jest.fn().mockResolvedValue({});
 const mockBulkInsertTransactions = jest.fn().mockResolvedValue(undefined);
+const mockIncrementAgentMetricDaily = jest.fn().mockResolvedValue(undefined);
 
 jest.mock('~/models', () => ({
   getAgent: jest.fn().mockResolvedValue({ id: 'agent-123', name: 'Test Agent' }),
@@ -513,6 +514,7 @@ jest.mock('~/models', () => ({
   getCodeGeneratedFiles: jest.fn(),
   updateBalance: mockUpdateBalance,
   bulkInsertTransactions: mockBulkInsertTransactions,
+  incrementAgentMetricDaily: mockIncrementAgentMetricDaily,
   spendTokens: mockSpendTokens,
   spendStructuredTokens: mockSpendStructuredTokens,
   getMultiplier: mockGetMultiplier,
@@ -1877,6 +1879,7 @@ describe('createResponse controller', () => {
             insertMany: mockBulkInsertTransactions,
             updateBalance: mockUpdateBalance,
           },
+          incrementAgentMetricDaily: mockIncrementAgentMetricDaily,
         },
         expect.objectContaining({
           user: 'user-123',
@@ -1924,6 +1927,20 @@ describe('createResponse controller', () => {
         expect.objectContaining({
           model: 'claude-3',
         }),
+      );
+    });
+
+    it('passes the server-authorized statistics context for stored responses', async () => {
+      const api = require('@librechat/api');
+      const statisticsContext = { agentId: 'agent-123', bucket: '2026-09-02T00:00:00.000Z' };
+      api.validateResponseRequest.mockReturnValueOnce({ request: { ...req.body, store: true } });
+      api.createAgentStatisticsContext.mockReturnValueOnce(statisticsContext);
+
+      await createResponse(req, res);
+
+      expect(mockRecordCollectedUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ incrementAgentMetricDaily: mockIncrementAgentMetricDaily }),
+        expect.objectContaining({ agentStatistics: statisticsContext }),
       );
     });
   });
@@ -2034,6 +2051,7 @@ describe('createResponse controller', () => {
             insertMany: mockBulkInsertTransactions,
             updateBalance: mockUpdateBalance,
           },
+          incrementAgentMetricDaily: mockIncrementAgentMetricDaily,
         },
         expect.objectContaining({
           user: 'user-123',

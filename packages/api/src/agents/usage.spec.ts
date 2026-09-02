@@ -2317,12 +2317,19 @@ describe('resolveAgentTokenConfig', () => {
 describe('createDetachedSubagentUsageRecorder', () => {
   it('snapshots per-agent pricing and records each call as subagent usage', async () => {
     const spendTokens = jest.fn().mockResolvedValue(undefined);
+    const incrementAgentMetricDaily = jest.fn().mockResolvedValue(undefined);
     const childConfig = { 'child-model': { prompt: 0.01, completion: 0.02, context: 4096 } };
     const configs = new Map([['child-agent', childConfig]]);
+    const agentStatistics = {
+      agentId: 'parent-agent',
+      bucket: '2026-09-02T00:00:00.000Z',
+      occurredAt: Date.parse('2026-09-02T12:00:00.000Z'),
+    };
     const recorder = createDetachedSubagentUsageRecorder(
       {
         spendTokens,
         spendStructuredTokens: jest.fn().mockResolvedValue(undefined),
+        incrementAgentMetricDaily,
       },
       {
         user: 'user-1',
@@ -2330,11 +2337,13 @@ describe('createDetachedSubagentUsageRecorder', () => {
         messageId: 'response-1',
         model: 'parent-model',
         endpointTokenConfigByAgentId: configs,
+        agentStatistics,
       },
     );
     configs.set('child-agent', {
       'child-model': { prompt: 99, completion: 99, context: 4096 },
     });
+    agentStatistics.agentId = 'mutated-agent';
 
     await recorder({
       usage_type: 'subagent',
@@ -2354,6 +2363,14 @@ describe('createDetachedSubagentUsageRecorder', () => {
         endpointTokenConfig: childConfig,
       }),
       { promptTokens: 12, completionTokens: 4 },
+    );
+    expect(incrementAgentMetricDaily).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'parent-agent',
+        inputTokens: 12,
+        outputTokens: 4,
+        costUnavailable: true,
+      }),
     );
   });
 

@@ -27,6 +27,14 @@ const CALLER_INVENTORY = {
   'packages/api/src/agents/usage.ts': 2,
 } as const;
 
+const USAGE_CONTEXT_INVENTORY = [
+  ['api/server/controllers/agents/client.js', 'agentStatistics: this.agentStatisticsContext', 2],
+  ['api/server/controllers/agents/responses.js', 'agentStatistics: statisticsContext', 2],
+  ['api/server/middleware/abortMiddleware.js', 'agentStatistics: statisticsContext', 1],
+  ['packages/api/src/agents/usage.ts', 'agentStatistics: billing.agentStatistics', 1],
+  ['api/server/controllers/agents/openai.js', 'agentStatistics:', 0],
+] as const;
+
 function productionFiles(directory: string): string[] {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const file = path.join(directory, entry.name);
@@ -73,6 +81,14 @@ describe('agent statistics Phase 0 contracts', () => {
     );
     expect(actual).toEqual(CALLER_INVENTORY);
   });
+
+  it.each(USAGE_CONTEXT_INVENTORY)(
+    '%s has the expected root statistics context coverage',
+    (file, marker, expected) => {
+      const source = fs.readFileSync(file, 'utf8');
+      expect(source.split(marker)).toHaveLength(expected + 1);
+    },
+  );
 });
 
 function methods(): jest.Mocked<AgentStatisticsMethods> {

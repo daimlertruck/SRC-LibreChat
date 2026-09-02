@@ -14,6 +14,7 @@ const mockGetMultiplier = jest.fn().mockReturnValue(1);
 const mockGetCacheMultiplier = jest.fn().mockReturnValue(null);
 const mockUpdateBalance = jest.fn().mockResolvedValue({});
 const mockBulkInsertTransactions = jest.fn().mockResolvedValue(undefined);
+const mockIncrementAgentMetricDaily = jest.fn().mockResolvedValue(undefined);
 const mockRecordCollectedUsage = jest
   .fn()
   .mockResolvedValue({ input_tokens: 100, output_tokens: 50 });
@@ -25,6 +26,7 @@ jest.mock('~/models', () => ({
   getCacheMultiplier: mockGetCacheMultiplier,
   updateBalance: mockUpdateBalance,
   bulkInsertTransactions: mockBulkInsertTransactions,
+  incrementAgentMetricDaily: mockIncrementAgentMetricDaily,
 }));
 
 jest.mock('~/config', () => ({
@@ -72,12 +74,14 @@ describe('AgentClient - recordCollectedUsage', () => {
       model_parameters: {
         model: 'gpt-4',
       },
+      statistics_enabled: true,
     };
 
     mockOptions = {
       req: {
         user: { id: 'user-123' },
         body: { model: 'gpt-4', endpoint: EModelEndpoint.openAI },
+        config: { endpoints: { agents: { statistics: true } } },
       },
       res: {},
       agent: mockAgent,
@@ -110,6 +114,7 @@ describe('AgentClient - recordCollectedUsage', () => {
       expect(deps).toHaveProperty('bulkWriteOps');
       expect(deps.bulkWriteOps).toHaveProperty('insertMany');
       expect(deps.bulkWriteOps).toHaveProperty('updateBalance');
+      expect(deps).toHaveProperty('incrementAgentMetricDaily', mockIncrementAgentMetricDaily);
 
       expect(params).toEqual(
         expect.objectContaining({
@@ -119,6 +124,7 @@ describe('AgentClient - recordCollectedUsage', () => {
           context: 'message',
           balance: { enabled: true },
           transactions: { enabled: true },
+          agentStatistics: expect.objectContaining({ agentId: 'agent-123' }),
         }),
       );
     });

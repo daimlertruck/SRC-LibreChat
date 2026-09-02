@@ -1270,6 +1270,7 @@ const executeResponse = async (envelope, { req, res }) => {
                 insertMany: db.bulkInsertTransactions,
                 updateBalance: db.updateBalance,
               },
+              incrementAgentMetricDaily: db.incrementAgentMetricDaily,
             },
             {
               user: userId,
@@ -1282,6 +1283,7 @@ const executeResponse = async (envelope, { req, res }) => {
               model: primaryConfig.model || agent.model_parameters?.model,
               endpointTokenConfig: primaryConfig.endpointTokenConfig,
               resolveEndpointTokenConfig,
+              agentStatistics: statisticsContext,
             },
           ).catch((err) => {
             logger.error('[Responses API] Error recording usage:', getSafeErrorMetadata(err));
@@ -1481,6 +1483,7 @@ const executeResponse = async (envelope, { req, res }) => {
                 insertMany: db.bulkInsertTransactions,
                 updateBalance: db.updateBalance,
               },
+              incrementAgentMetricDaily: db.incrementAgentMetricDaily,
             },
             {
               user: userId,
@@ -1493,6 +1496,7 @@ const executeResponse = async (envelope, { req, res }) => {
               model: primaryConfig.model || agent.model_parameters?.model,
               endpointTokenConfig: primaryConfig.endpointTokenConfig,
               resolveEndpointTokenConfig,
+              agentStatistics: statisticsContext,
             },
           ).catch((err) => {
             logger.error('[Responses API] Error recording usage:', getSafeErrorMetadata(err));

@@ -12,6 +12,7 @@ import type {
   TTransactionsConfig,
 } from 'librechat-data-provider';
 import type { SubagentUsageEvent as AgentsSubagentUsageEvent } from '@librechat/agents';
+import type { AgentMetricDelta } from '@librechat/data-schemas';
 import type {
   StructuredTokenUsage,
   BulkWriteDeps,
@@ -22,6 +23,7 @@ import type {
 } from './transactions';
 import type { UsageMetadata } from '~/stream/interfaces/IJobStore';
 import type { EndpointTokenConfig } from '~/types/tokens';
+import type { AgentStatisticsContext } from './statistics';
 import {
   prepareStructuredTokenSpend,
   bulkWriteTransactions,
@@ -204,6 +206,7 @@ export interface RecordUsageDeps {
   pricing?: PricingFns;
   bulkWriteOps?: BulkWriteDeps;
   isPrincipalActive?: (userId: string) => Promise<boolean>;
+  incrementAgentMetricDaily?: (delta: AgentMetricDelta) => Promise<void>;
 }
 
 /**
@@ -575,6 +578,7 @@ export interface RecordUsageParams {
    * callers (responses.js / openai.js) omit it and use `endpointTokenConfig`.
    */
   resolveEndpointTokenConfig?: (usage: UsageMetadata) => EndpointTokenConfig | undefined;
+  agentStatistics?: AgentStatisticsContext | null;
 }
 
 export interface RecordUsageResult {
@@ -591,6 +595,7 @@ export interface DetachedSubagentUsageRecorderParams {
   transactions?: Partial<TTransactionsConfig>;
   endpointTokenConfig?: EndpointTokenConfig;
   endpointTokenConfigByAgentId?: Map<string, EndpointTokenConfig | undefined>;
+  agentStatistics?: AgentStatisticsContext | null;
 }
 
 /**
@@ -614,6 +619,7 @@ export async function recordCollectedUsage(
     collectedUsage,
     endpointTokenConfig,
     resolveEndpointTokenConfig,
+    agentStatistics,
     context = 'message',
   } = params;
 
@@ -646,6 +652,11 @@ export async function recordCollectedUsage(
   const input_tokens = firstUsage == null ? 0 : splitUsage(firstUsage).totalInput;
 
   let total_output_tokens = 0;
+  let metricInputTokens = 0;
+  let metricCacheReadTokens = 0;
+  let metricCacheWriteTokens = 0;
+  let metricOutputTokens = 0;
+  let processedUsage = false;
 
   const { pricing, bulkWriteOps } = deps;
   const useBulk = pricing && bulkWriteOps;
@@ -662,6 +673,12 @@ export async function recordCollectedUsage(
       }
 
       const { inputOnly, cacheCreation, cacheRead, completion } = splitUsage(usage);
+      processedUsage = true;
+
+      metricInputTokens += inputOnly;
+      metricCacheReadTokens += cacheRead;
+      metricCacheWriteTokens += cacheCreation;
+      metricOutputTokens += completion;
 
       if (options?.excludeFromOutputTotal !== true) {
         total_output_tokens += completion;
@@ -755,11 +772,31 @@ export async function recordCollectedUsage(
    */
   processUsageGroup(subagentUsages, 'subagent', allDocs, { excludeFromOutputTotal: true });
   processUsageGroup(sequentialUsages, 'sequential', allDocs, { excludeFromOutputTotal: true });
+  let committedCostCredits: number | undefined;
   if (useBulk && allDocs.length > 0) {
     try {
       await bulkWriteTransactions({ user, docs: allDocs }, bulkWriteOps);
+      committedCostCredits = allDocs.reduce((sum, entry) => sum + Math.abs(entry.tokenValue), 0);
     } catch (err) {
       logger.error('[packages/api #recordCollectedUsage] Error in bulk write', err);
+    }
+  }
+
+  if (processedUsage && agentStatistics && deps.incrementAgentMetricDaily) {
+    try {
+      await deps.incrementAgentMetricDaily({
+        agentId: agentStatistics.agentId,
+        tenantId: agentStatistics.tenantId,
+        bucket: new Date(agentStatistics.bucket),
+        inputTokens: metricInputTokens,
+        cacheReadTokens: metricCacheReadTokens,
+        cacheWriteTokens: metricCacheWriteTokens,
+        outputTokens: metricOutputTokens,
+        costCredits: committedCostCredits,
+        ...(committedCostCredits == null ? { costUnavailable: true } : {}),
+      });
+    } catch (err) {
+      logger.error('[packages/api #recordCollectedUsage] Error projecting agent statistics', err);
     }
   }
 
@@ -780,6 +817,10 @@ export function createDetachedSubagentUsageRecorder(
 ): (usage: UsageMetadata) => Promise<void> {
   const billing = {
     ...params,
+    agentStatistics:
+      params.agentStatistics == null
+        ? params.agentStatistics
+        : Object.freeze({ ...params.agentStatistics }),
     endpointTokenConfigByAgentId:
       params.endpointTokenConfigByAgentId == null
         ? undefined
@@ -806,6 +847,7 @@ export function createDetachedSubagentUsageRecorder(
             byAgentId: billing.endpointTokenConfigByAgentId,
             fallback: billing.endpointTokenConfig,
           }),
+        agentStatistics: billing.agentStatistics,
       });
     } catch (error) {
       logger.error('[agents/usage] Failed to record detached subagent usage', error);

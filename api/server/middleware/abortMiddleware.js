@@ -63,6 +63,7 @@ const isAbortError = (error) => {
  * @param {string} [params.fallbackModel] - Fallback model name if not in usage
  * @param {string} [params.messageId] - The response message ID for transaction correlation
  * @param {AppConfig['transactions']} [params.transactions] - Resolved transactions config
+ * @param {import('@librechat/api').AgentStatisticsContext | null} [params.statisticsContext]
  */
 async function spendCollectedUsage({
   userId,
@@ -71,6 +72,7 @@ async function spendCollectedUsage({
   fallbackModel,
   messageId,
   transactions,
+  statisticsContext,
 }) {
   if (!collectedUsage || collectedUsage.length === 0) {
     return;
@@ -82,6 +84,7 @@ async function spendCollectedUsage({
       spendStructuredTokens: db.spendStructuredTokens,
       pricing: { getMultiplier: db.getMultiplier, getCacheMultiplier: db.getCacheMultiplier },
       bulkWriteOps: { insertMany: db.bulkInsertTransactions, updateBalance: db.updateBalance },
+      incrementAgentMetricDaily: db.incrementAgentMetricDaily,
     },
     {
       user: userId,
@@ -91,6 +94,7 @@ async function spendCollectedUsage({
       messageId,
       model: fallbackModel,
       transactions,
+      agentStatistics: statisticsContext,
     },
   );
 
@@ -156,6 +160,20 @@ async function abortMessage(req, res) {
   }
 
   const transactions = getTransactionsConfig(req.config);
+  let statisticsContext = null;
+  if (jobData?.agent_id && req.config?.endpoints?.agents?.statistics === true) {
+    try {
+      const agent = await db.getAgent({ id: jobData.agent_id });
+      statisticsContext = createAgentStatisticsContext({
+        endpoint: req.config?.endpoints?.agents,
+        agent,
+        tenantId: req.user?.tenantId,
+        interactiveUserId: userId,
+      });
+    } catch (error) {
+      logger.error('[abortMessage] Failed to resolve agent statistics context', error);
+    }
+  }
 
   // Spend tokens for ALL models from collectedUsage (handles parallel agents/addedConvo)
   if (collectedUsage && collectedUsage.length > 0) {
@@ -166,6 +184,7 @@ async function abortMessage(req, res) {
       fallbackModel: jobData?.model,
       messageId: jobData?.responseMessageId,
       transactions,
+      statisticsContext,
     });
   } else {
     // Fallback: no collected usage, use text-based token counting for primary model only
@@ -184,15 +203,8 @@ async function abortMessage(req, res) {
     { ...responseMessage, user: userId },
     { context: 'api/server/middleware/abortMiddleware.js' },
   );
-  if (savedMessage && jobData?.agent_id) {
+  if (savedMessage && statisticsContext) {
     try {
-      const agent = await db.getAgent({ id: jobData.agent_id });
-      const statisticsContext = createAgentStatisticsContext({
-        endpoint: req.config?.endpoints?.agents,
-        agent,
-        tenantId: req.user?.tenantId,
-        interactiveUserId: userId,
-      });
       await recordAgentResponse(
         {
           context: statisticsContext,

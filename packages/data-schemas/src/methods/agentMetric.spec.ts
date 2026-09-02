@@ -95,6 +95,25 @@ describe('agent metric storage foundation', () => {
     expect(row?.recentFailures[0]).toEqual(new Date(bucket.getTime() + 24_000));
   });
 
+  it('accepts fractional committed-cost credits while keeping token counters integral', async () => {
+    const { incrementAgentMetricDaily } = methods();
+    await incrementAgentMetricDaily({
+      agentId: 'agent-cost',
+      bucket,
+      inputTokens: 1,
+      costCredits: 0.25,
+    });
+    const stored = await Daily.findOne({ agentId: 'agent-cost', bucket }).lean();
+    expect(stored?.costCredits).toBe(0.25);
+    await expect(
+      incrementAgentMetricDaily({
+        agentId: 'agent-cost',
+        bucket,
+        inputTokens: 0.25,
+      }),
+    ).rejects.toThrow('Invalid inputTokens');
+  });
+
   it('does not lose concurrent first increments without a tenant', async () => {
     const { incrementAgentMetricDaily } = methods();
     await Promise.all(

@@ -61,11 +61,13 @@ jest.mock('~/server/middleware/error', () => ({
 
 const mockUpdateBalance = jest.fn().mockResolvedValue({});
 const mockBulkInsertTransactions = jest.fn().mockResolvedValue(undefined);
+const mockIncrementAgentMetricDaily = jest.fn().mockResolvedValue(undefined);
 jest.mock('~/models', () => ({
   saveMessage: jest.fn().mockResolvedValue(),
   getConvo: jest.fn().mockResolvedValue({ title: 'Test Chat' }),
   updateBalance: mockUpdateBalance,
   bulkInsertTransactions: mockBulkInsertTransactions,
+  incrementAgentMetricDaily: mockIncrementAgentMetricDaily,
   spendTokens: (...args) => mockSpendTokens(...args),
   spendStructuredTokens: (...args) => mockSpendStructuredTokens(...args),
   getMultiplier: mockGetMultiplier,
@@ -121,6 +123,7 @@ describe('abortMiddleware - spendCollectedUsage', () => {
 
     it('should call recordCollectedUsage with abort context and full deps', async () => {
       const collectedUsage = [{ input_tokens: 100, output_tokens: 50, model: 'gpt-4' }];
+      const statisticsContext = { agentId: 'agent-1', bucket: '2026-09-02T00:00:00.000Z' };
 
       await spendCollectedUsage({
         userId: 'user-123',
@@ -128,6 +131,7 @@ describe('abortMiddleware - spendCollectedUsage', () => {
         collectedUsage,
         fallbackModel: 'gpt-4',
         messageId: 'msg-123',
+        statisticsContext,
       });
 
       expect(mockRecordCollectedUsage).toHaveBeenCalledTimes(1);
@@ -143,6 +147,7 @@ describe('abortMiddleware - spendCollectedUsage', () => {
             insertMany: mockBulkInsertTransactions,
             updateBalance: mockUpdateBalance,
           },
+          incrementAgentMetricDaily: mockIncrementAgentMetricDaily,
         },
         {
           user: 'user-123',
@@ -151,6 +156,7 @@ describe('abortMiddleware - spendCollectedUsage', () => {
           context: 'abort',
           messageId: 'msg-123',
           model: 'gpt-4',
+          agentStatistics: statisticsContext,
         },
       );
     });

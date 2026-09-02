@@ -50,7 +50,11 @@ function assertDate(date: Date, name: string): void {
 }
 
 function assertIncrement(value: number, name: string): void {
-  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Invalid ${name}`);
+  const isValid =
+    name === 'costCredits'
+      ? Number.isFinite(value) && value >= 0
+      : Number.isSafeInteger(value) && value >= 0;
+  if (!isValid) throw new Error(`Invalid ${name}`);
 }
 
 export interface AgentMetricMethods {

@@ -16,6 +16,7 @@ describe('recordCollectedUsage — bulk path parity', () => {
   let mockSpendStructuredTokens: jest.Mock;
   let mockInsertMany: jest.Mock;
   let mockUpdateBalance: jest.Mock;
+  let mockIncrementAgentMetricDaily: jest.Mock;
   let mockPricing: PricingFns;
   let mockBulkWriteOps: BulkWriteDeps;
   let deps: RecordUsageDeps;
@@ -35,6 +36,7 @@ describe('recordCollectedUsage — bulk path parity', () => {
     mockSpendStructuredTokens = jest.fn().mockResolvedValue(undefined);
     mockInsertMany = jest.fn().mockResolvedValue(undefined);
     mockUpdateBalance = jest.fn().mockResolvedValue({});
+    mockIncrementAgentMetricDaily = jest.fn().mockResolvedValue(undefined);
     mockPricing = {
       getMultiplier: jest.fn().mockReturnValue(1),
       getCacheMultiplier: jest.fn().mockReturnValue(null),
@@ -48,6 +50,7 @@ describe('recordCollectedUsage — bulk path parity', () => {
       spendStructuredTokens: mockSpendStructuredTokens,
       pricing: mockPricing,
       bulkWriteOps: mockBulkWriteOps,
+      incrementAgentMetricDaily: mockIncrementAgentMetricDaily,
     };
   });
 
@@ -571,6 +574,121 @@ describe('recordCollectedUsage — bulk path parity', () => {
 
       expect(mockInsertMany).not.toHaveBeenCalled();
       expect(mockUpdateBalance).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('agent statistics projection', () => {
+    const agentStatistics = {
+      agentId: 'agent-root',
+      tenantId: 'tenant-1',
+      bucket: '2026-09-02T00:00:00.000Z',
+      occurredAt: Date.parse('2026-09-02T12:00:00.000Z'),
+    } as const;
+
+    it('projects normalized token classes and committed prepared-entry cost once', async () => {
+      mockPricing.getMultiplier.mockImplementation(({ model }) => (model === 'gpt-4' ? 2 : 1));
+      const collectedUsage: UsageMetadata[] = [
+        {
+          input_tokens: 100,
+          output_tokens: 50,
+          model: 'claude-3',
+          provider: 'anthropic',
+          input_token_details: { cache_creation: 10, cache_read: 20 },
+        },
+        {
+          input_tokens: 40,
+          output_tokens: 15,
+          model: 'gpt-4',
+          provider: 'openai',
+          usage_type: 'subagent',
+        },
+      ];
+
+      await recordCollectedUsage(deps, { ...baseParams, collectedUsage, agentStatistics });
+
+      const committedCost = mockInsertMany.mock.calls[0][0].reduce(
+        (sum: number, doc: { tokenValue: number }) => sum + Math.abs(doc.tokenValue),
+        0,
+      );
+      expect(committedCost).toBe(260);
+      expect(mockIncrementAgentMetricDaily).toHaveBeenCalledTimes(1);
+      expect(mockIncrementAgentMetricDaily).toHaveBeenCalledWith({
+        agentId: 'agent-root',
+        tenantId: 'tenant-1',
+        bucket: new Date('2026-09-02T00:00:00.000Z'),
+        inputTokens: 110,
+        cacheReadTokens: 20,
+        cacheWriteTokens: 10,
+        outputTokens: 65,
+        costCredits: committedCost,
+      });
+    });
+
+    it.each([
+      ['disabled transactions', false],
+      ['failed bulk persistence', true],
+    ])('marks cost unavailable for %s', async (_name, bulkFails) => {
+      if (bulkFails) mockInsertMany.mockRejectedValueOnce(new Error('unavailable'));
+      await recordCollectedUsage(deps, {
+        ...baseParams,
+        transactions: { enabled: bulkFails },
+        collectedUsage: [{ input_tokens: 10, output_tokens: 5, model: 'gpt-4' }],
+        agentStatistics,
+      });
+
+      expect(mockIncrementAgentMetricDaily).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputTokens: 10,
+          outputTokens: 5,
+          costCredits: undefined,
+          costUnavailable: true,
+        }),
+      );
+    });
+
+    it('isolates statistics failures from committed billing', async () => {
+      mockIncrementAgentMetricDaily.mockRejectedValueOnce(new Error('metrics unavailable'));
+      await expect(
+        recordCollectedUsage(deps, {
+          ...baseParams,
+          collectedUsage: [{ input_tokens: 10, output_tokens: 5, model: 'gpt-4' }],
+          agentStatistics,
+        }),
+      ).resolves.toEqual({ input_tokens: 10, output_tokens: 5 });
+      expect(mockInsertMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('projects tokens but marks legacy non-bulk cost unavailable', async () => {
+      const legacyDeps: RecordUsageDeps = {
+        spendTokens: mockSpendTokens,
+        spendStructuredTokens: mockSpendStructuredTokens,
+        incrementAgentMetricDaily: mockIncrementAgentMetricDaily,
+      };
+      await recordCollectedUsage(legacyDeps, {
+        ...baseParams,
+        collectedUsage: [{ input_tokens: 10, output_tokens: 5, model: 'gpt-4' }],
+        agentStatistics,
+      });
+
+      expect(mockIncrementAgentMetricDaily).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputTokens: 10,
+          outputTokens: 5,
+          costUnavailable: true,
+        }),
+      );
+    });
+
+    it('does not invalidate cost for a null-only batch', async () => {
+      await expect(
+        recordCollectedUsage(deps, {
+          ...baseParams,
+          collectedUsage: [null] as unknown as UsageMetadata[],
+          agentStatistics,
+        }),
+      ).resolves.toEqual({ input_tokens: 0, output_tokens: 0 });
+      expect(mockInsertMany).not.toHaveBeenCalled();
+      expect(mockIncrementAgentMetricDaily).not.toHaveBeenCalled();
     });
   });
 });

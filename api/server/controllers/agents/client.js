@@ -3176,6 +3176,7 @@ class AgentClient extends BaseClient {
         spendStructuredTokens: db.spendStructuredTokens,
         pricing: { getMultiplier: db.getMultiplier, getCacheMultiplier: db.getCacheMultiplier },
         bulkWriteOps: { insertMany: db.bulkInsertTransactions, updateBalance: db.updateBalance },
+        incrementAgentMetricDaily: db.incrementAgentMetricDaily,
       },
       {
         user: this.user ?? this.options.req.user?.id,
@@ -3192,6 +3193,7 @@ class AgentClient extends BaseClient {
         ...(overrideTokenConfig
           ? {}
           : { resolveEndpointTokenConfig: (usage) => this.resolveAgentEndpointTokenConfig(usage) }),
+        agentStatistics: this.agentStatisticsContext,
       },
     );
 
@@ -3324,6 +3326,7 @@ class AgentClient extends BaseClient {
       model: this.model ?? options?.agent?.model_parameters?.model,
       endpointTokenConfig: options?.endpointTokenConfig,
       endpointTokenConfigByAgentId: options?.endpointTokenConfigByAgentId,
+      agentStatistics: this.agentStatisticsContext,
     };
     return createDetachedSubagentUsageRecorder(
       {
@@ -3338,6 +3341,7 @@ class AgentClient extends BaseClient {
           updateBalance: db.updateBalance,
         },
         isPrincipalActive: db.isAgentTriggerPrincipalActive,
+        incrementAgentMetricDaily: db.incrementAgentMetricDaily,
       },
       { ...billing, balance, transactions },
     );
