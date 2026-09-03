@@ -7,6 +7,14 @@ export const AGENT_STATISTICS_DEFAULT_DAYS = 30;
 export const AGENT_STATISTICS_MAX_RANGE_DAYS = 90;
 export const AGENT_STATISTICS_FAILURES_PER_DAY = 20;
 export const AGENT_STATISTICS_FAILURES_RESPONSE_LIMIT = 20;
+export const AGENT_STATISTICS_FAILURE_SOURCES = ['llm', 'tool', 'agent'] as const;
+export type AgentStatisticsFailureSource = (typeof AGENT_STATISTICS_FAILURE_SOURCES)[number];
+
+export type AgentStatisticsFailure = {
+  occurredAt: string;
+  source: AgentStatisticsFailureSource;
+  message: string;
+};
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -78,7 +86,7 @@ export type AgentStatisticsResponse = {
     lastUsedAt: string | null;
   };
   daily: AgentStatisticsDailyPoint[];
-  recentFailures: string[];
+  recentFailures: AgentStatisticsFailure[];
 };
 
 function parseUtcDate(value: string): Date | null {

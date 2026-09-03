@@ -9,3 +9,13 @@ html[data-input-modality='pointer'] .lc-field:focus-visible {
   box-shadow: none;
   outline: none;
 }
+
+/* Native date controls do not inherit the application's theme colors. Tell the
+   browser which built-in calendar indicator to render for the active mode. */
+.lc-field[type='date'] {
+  color-scheme: light;
+}
+
+.dark .lc-field[type='date'] {
+  color-scheme: dark;
+}

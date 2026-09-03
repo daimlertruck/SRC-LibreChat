@@ -30,7 +30,13 @@ describe('getAgentStatistics', () => {
         uniqueUsers: 4,
         costCredits: 1_500_000,
         costUnavailable: false,
-        recentFailures: [new Date('2026-08-30T10:00:00.000Z')],
+        recentFailures: [
+          {
+            occurredAt: new Date('2026-08-30T10:30:00.000Z'),
+            source: 'tool',
+            message: 'MCP server did not respond',
+          },
+        ],
         lastUsedAt: new Date('2026-08-30T11:00:00.000Z'),
       }),
       row({
@@ -93,7 +99,13 @@ describe('getAgentStatistics', () => {
       averageDailyUniqueUsers: 2,
       lastUsedAt: '2026-09-01T09:00:00.000Z',
     });
-    expect(result?.recentFailures).toEqual(['2026-08-30T10:00:00.000Z']);
+    expect(result?.recentFailures).toEqual([
+      {
+        occurredAt: '2026-08-30T10:30:00.000Z',
+        source: 'tool',
+        message: 'MCP server did not respond',
+      },
+    ]);
   });
 
   it('makes range cost unavailable when any stored day is unavailable', async () => {

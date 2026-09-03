@@ -5,6 +5,8 @@ import {
 import type {
   AgentStatisticsDailyPoint,
   AgentStatisticsDateRange,
+  AgentStatisticsFailure,
+  AgentStatisticsFailureSource,
   AgentStatisticsResponse,
   TAgentsEndpoint,
   TFeedback,
@@ -40,6 +42,7 @@ export type AgentStatisticsReadMethods = Readonly<{
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CREDITS_PER_USD = 1_000_000;
+const FAILURE_MESSAGE_MAX_LENGTH = 500;
 
 export type AgentStatisticsMethods = Readonly<{
   incrementAgentMetricDaily: (delta: AgentMetricDelta) => Promise<void>;
@@ -90,6 +93,22 @@ function contextBucket(context: AgentStatisticsContext): Date | null {
 
 function logFailure(logger: StatisticsLogger, operation: string, error: unknown): void {
   logger.error(`[AgentStatistics] ${operation} failed`, error);
+}
+
+function normalizeFailureMessage(
+  message: string | undefined,
+  source: AgentStatisticsFailureSource,
+): string {
+  const fallback = source === 'tool' ? 'Tool execution failed' : 'Agent response failed';
+  const normalized = Array.from(message ?? '')
+    .map((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 31 || code === 127 ? ' ' : character;
+    })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (normalized || fallback).slice(0, FAILURE_MESSAGE_MAX_LENGTH);
 }
 
 export function createAgentStatisticsContext(input: {
@@ -156,6 +175,8 @@ export async function recordAgentResponse(
     conversationId: string;
     messageId: string;
     status: AgentMetricStatus;
+    failureSource?: AgentStatisticsFailureSource;
+    failureMessage?: string;
     observedAt?: Date;
   },
   methods: AgentStatisticsMethods,
@@ -191,10 +212,46 @@ export async function recordAgentResponse(
       bucket: transition.current.bucket,
       [STATUS_COUNTERS[transition.current.status]]: 1,
       lastUsedAt: occurredAt,
-      ...(transition.current.status === 'failed' ? { failureOccurredAt: occurredAt } : {}),
+      ...(transition.current.status === 'failed'
+        ? {
+            failure: {
+              occurredAt,
+              source: input.failureSource ?? 'agent',
+              message: normalizeFailureMessage(
+                input.failureMessage,
+                input.failureSource ?? 'agent',
+              ),
+            },
+          }
+        : {}),
     });
   } catch (error) {
     logFailure(logger, 'response projection', error);
+  }
+}
+
+export async function recordAgentFailure(
+  context: AgentStatisticsContext | null,
+  source: AgentStatisticsFailureSource,
+  message: string | undefined,
+  methods: Pick<AgentStatisticsMethods, 'incrementAgentMetricDaily'>,
+  logger: StatisticsLogger = console,
+  observedAt = new Date(),
+): Promise<void> {
+  if (!context || Number.isNaN(observedAt.getTime())) return;
+  try {
+    await methods.incrementAgentMetricDaily({
+      agentId: context.agentId,
+      tenantId: context.tenantId,
+      bucket: utcBucket(observedAt),
+      failure: {
+        occurredAt: observedAt,
+        source,
+        message: normalizeFailureMessage(message, source),
+      },
+    });
+  } catch (error) {
+    logFailure(logger, 'failure projection', error);
   }
 }
 
@@ -338,7 +395,7 @@ export async function getAgentStatistics(
   const totalFeedback: Partial<Record<TFeedbackTagKey, number>> = {};
   let costAvailable = true;
   let lastUsedAt: string | null = null;
-  const recentFailures: Date[] = [];
+  const recentFailures: AgentStatisticsFailure[] = [];
 
   for (let offset = 0; offset < input.range.days; offset += 1) {
     const date = new Date(input.range.fromUtcInclusive.getTime() + offset * DAY_MS)
@@ -366,7 +423,15 @@ export async function getAgentStatistics(
     }
     if (point.lastUsedAt && (!lastUsedAt || point.lastUsedAt > lastUsedAt))
       lastUsedAt = point.lastUsedAt;
-    if (row?.recentFailures) recentFailures.push(...row.recentFailures);
+    if (row?.recentFailures) {
+      recentFailures.push(
+        ...row.recentFailures.map((failure) => ({
+          occurredAt: failure.occurredAt.toISOString(),
+          source: failure.source,
+          message: failure.message,
+        })),
+      );
+    }
   }
 
   const responses =
@@ -401,8 +466,7 @@ export async function getAgentStatistics(
     },
     daily,
     recentFailures: recentFailures
-      .sort((left, right) => right.getTime() - left.getTime())
-      .slice(0, AGENT_STATISTICS_FAILURES_RESPONSE_LIMIT)
-      .map((date) => date.toISOString()),
+      .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
+      .slice(0, AGENT_STATISTICS_FAILURES_RESPONSE_LIMIT),
   };
 }

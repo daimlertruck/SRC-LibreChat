@@ -60,7 +60,13 @@ const data: AgentStatisticsResponse = {
       lastUsedAt: '2026-09-01T10:00:00.000Z',
     },
   ],
-  recentFailures: ['2026-09-01T09:00:00.000Z'],
+  recentFailures: [
+    {
+      occurredAt: '2026-09-01T09:00:00.000Z',
+      source: 'tool',
+      message: 'MCP server did not respond',
+    },
+  ],
 };
 
 describe('StatisticsPanel', () => {
@@ -78,9 +84,10 @@ describe('StatisticsPanel', () => {
     render(<StatisticsPanel />);
     expect(screen.getByText('com_ui_agent_statistics_unique_users')).toBeInTheDocument();
     expect(screen.getByText('com_ui_feedback_tag_accurate_reliable')).toBeInTheDocument();
-    expect(screen.getByRole('table')).toBeInTheDocument();
-    expect(screen.getByText('2026-09-01')).toBeInTheDocument();
-    expect(screen.getAllByText('com_ui_agent_statistics_cost')).toHaveLength(2);
+    expect(screen.getByText('MCP server did not respond')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getAllByRole('img')).toHaveLength(3);
+    expect(screen.getAllByText('2026-09-01').length).toBeGreaterThan(0);
   });
 
   it('hides previous-range data while the requested range loads', () => {
@@ -95,7 +102,7 @@ describe('StatisticsPanel', () => {
     render(<StatisticsPanel />);
 
     expect(screen.getByRole('status')).toBeInTheDocument();
-    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.queryByRole('img')).toBeNull();
   });
 
   it('does not round a sub-cent cost down to zero', () => {
@@ -112,7 +119,7 @@ describe('StatisticsPanel', () => {
 
     render(<StatisticsPanel />);
 
-    expect(screen.getAllByText('<$0.01')).toHaveLength(2);
+    expect(screen.getAllByText('<$0.01')).toHaveLength(3);
   });
 
   it('supports preset, single-day, and custom range queries', () => {

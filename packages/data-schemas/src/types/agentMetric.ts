@@ -1,4 +1,4 @@
-import type { TFeedbackTagKey } from 'librechat-data-provider';
+import type { AgentStatisticsFailureSource, TFeedbackTagKey } from 'librechat-data-provider';
 import type { Document } from 'mongoose';
 
 export interface IAgentMetricDaily extends Document {
@@ -19,7 +19,11 @@ export interface IAgentMetricDaily extends Document {
   uniqueUsers: number;
   costCredits: number;
   costUnavailable: boolean;
-  recentFailures: Date[];
+  recentFailures: Array<{
+    occurredAt: Date;
+    source: AgentStatisticsFailureSource;
+    message: string;
+  }>;
   lastUsedAt?: Date;
 }
 
@@ -65,7 +69,7 @@ export type AgentMetricDelta = AgentMetricScope &
     uniqueUsers?: number;
     costUnavailable?: true;
     lastUsedAt?: Date;
-    failureOccurredAt?: Date;
+    failure?: { occurredAt: Date; source: AgentStatisticsFailureSource; message: string };
   }>;
 
 export type ScopedAgentMetricRange = AgentMetricScope &

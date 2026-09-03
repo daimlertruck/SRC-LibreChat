@@ -13,15 +13,13 @@ export default function StatisticsToggle() {
   if (agentsConfig?.statistics !== true) return null;
 
   return (
-    <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-border-light bg-surface-secondary p-3">
-      <div className="min-w-0">
-        <label htmlFor="agent-statistics-enabled" className="text-sm font-medium text-text-primary">
-          {localize('com_ui_agent_statistics')}
-        </label>
-        <p className="text-xs text-text-secondary">
-          {localize('com_ui_agent_statistics_enable_info')}
-        </p>
-      </div>
+    <div className="flex h-9 items-center justify-between gap-2 rounded-lg border border-border-light px-3">
+      <label htmlFor="agent-statistics-enabled" className="text-sm font-medium text-text-primary">
+        {localize('com_ui_agent_statistics_collect')}
+      </label>
+      <span id="agent-statistics-enabled-description" className="sr-only">
+        {localize('com_ui_agent_statistics_enable_info')}
+      </span>
       <Switch
         id="agent-statistics-enabled"
         checked={checked}
@@ -29,6 +27,7 @@ export default function StatisticsToggle() {
           setValue('statistics_enabled', value, { shouldDirty: true, shouldTouch: true })
         }
         aria-label={localize('com_ui_agent_statistics')}
+        aria-describedby="agent-statistics-enabled-description"
       />
     </div>
   );

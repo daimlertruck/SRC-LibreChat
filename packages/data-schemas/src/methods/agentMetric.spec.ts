@@ -80,7 +80,11 @@ describe('agent metric storage foundation', () => {
         bucket,
         successfulResponses: 1,
         feedbackTags: { accurate_reliable: 1 },
-        failureOccurredAt: new Date(bucket.getTime() + index * 1000),
+        failure: {
+          occurredAt: new Date(bucket.getTime() + index * 1000),
+          source: index % 2 === 0 ? 'tool' : 'llm',
+          message: `Failure ${index}`,
+        },
         lastUsedAt: new Date(bucket.getTime() + index * 1000),
       });
     }
@@ -92,7 +96,18 @@ describe('agent metric storage foundation', () => {
       costUnavailable: false,
     });
     expect(row?.recentFailures).toHaveLength(20);
-    expect(row?.recentFailures[0]).toEqual(new Date(bucket.getTime() + 24_000));
+    expect(row?.recentFailures[0]).toMatchObject({
+      occurredAt: new Date(bucket.getTime() + 24_000),
+      source: 'tool',
+      message: 'Failure 24',
+    });
+    await expect(
+      incrementAgentMetricDaily({
+        agentId: 'agent-1',
+        bucket,
+        failure: { occurredAt: bucket, source: 'agent', message: 'x'.repeat(501) },
+      }),
+    ).rejects.toThrow('Invalid failure message');
   });
 
   it('accepts fractional committed-cost credits while keeping token counters integral', async () => {

@@ -1,5 +1,5 @@
-import { FEEDBACK_REASON_KEYS } from 'librechat-data-provider';
 import { Schema } from 'mongoose';
+import { AGENT_STATISTICS_FAILURE_SOURCES, FEEDBACK_REASON_KEYS } from 'librechat-data-provider';
 import type { IAgentMetricDaily, IAgentMetricState, IAgentUserDaily } from '~/types';
 
 const counter = {
@@ -50,7 +50,17 @@ export const agentMetricDailySchema: Schema<IAgentMetricDaily> = new Schema<IAge
     uniqueUsers: counter,
     costCredits: counter,
     costUnavailable: { type: Boolean, default: false },
-    recentFailures: { type: [Date], default: [] },
+    recentFailures: {
+      type: [
+        {
+          occurredAt: { type: Date, required: true },
+          source: { type: String, enum: AGENT_STATISTICS_FAILURE_SOURCES, required: true },
+          message: { type: String, required: true, maxlength: 500 },
+          _id: false,
+        },
+      ],
+      default: [],
+    },
     lastUsedAt: { type: Date },
   },
   { timestamps: false },

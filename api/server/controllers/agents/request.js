@@ -466,6 +466,8 @@ async function saveErrorTurn(
         conversationId,
         messageId: savedErrorMessage.messageId,
         status: 'failed',
+        failureSource: 'agent',
+        failureMessage: errorText,
         observedAt: new Date(),
       },
       agentStatisticsMethods,

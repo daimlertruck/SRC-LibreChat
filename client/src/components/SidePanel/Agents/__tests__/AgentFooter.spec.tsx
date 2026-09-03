@@ -141,6 +141,11 @@ jest.mock('../Statistics/Button', () => ({
   default: jest.fn(() => <div data-testid="statistics-button" />),
 }));
 
+jest.mock('../Statistics/Toggle', () => ({
+  __esModule: true,
+  default: jest.fn(() => <div data-testid="statistics-toggle" />),
+}));
+
 jest.mock('../AdminSettings', () => ({
   __esModule: true,
   default: jest.fn(() => <div data-testid="admin-settings" />),
@@ -286,9 +291,11 @@ describe('AgentFooter', () => {
         <AgentFooter {...defaultProps} agentsConfig={{ statistics: true }} />,
       );
       expect(screen.getByTestId('statistics-button')).toBeInTheDocument();
+      expect(screen.getByTestId('statistics-toggle')).toBeInTheDocument();
 
       rerender(<AgentFooter {...defaultProps} agentsConfig={{ statistics: false }} />);
       expect(screen.queryByTestId('statistics-button')).toBeNull();
+      expect(screen.queryByTestId('statistics-toggle')).toBeNull();
     });
 
     test('renders with standard components based on default state', () => {

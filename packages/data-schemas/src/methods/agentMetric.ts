@@ -1,4 +1,4 @@
-import { FEEDBACK_REASON_KEYS } from 'librechat-data-provider';
+import { AGENT_STATISTICS_FAILURE_SOURCES, FEEDBACK_REASON_KEYS } from 'librechat-data-provider';
 import type { Model, UpdateQuery } from 'mongoose';
 import type {
   AgentMetricCounter,
@@ -14,6 +14,7 @@ const MARKER_TTL_MS = 48 * 60 * 60 * 1000;
 const MAX_RANGE_DAYS = 90;
 const CLEANUP_BATCH_SIZE = 500;
 const OPERATION_TIMEOUT_MS = 10_000;
+const FAILURE_MESSAGE_MAX_LENGTH = 500;
 const COUNTERS = [
   'conversations',
   'successfulResponses',
@@ -103,10 +104,20 @@ export function createAgentMetricMethods(mongoose: typeof import('mongoose')): A
       update.$max = { lastUsedAt: delta.lastUsedAt };
     }
     if (delta.costUnavailable) update.$set = { costUnavailable: true };
-    if (delta.failureOccurredAt) {
-      assertDate(delta.failureOccurredAt, 'failureOccurredAt');
+    if (delta.failure) {
+      assertDate(delta.failure.occurredAt, 'failure.occurredAt');
+      if (!AGENT_STATISTICS_FAILURE_SOURCES.includes(delta.failure.source)) {
+        throw new Error('Invalid failure source');
+      }
+      if (
+        typeof delta.failure.message !== 'string' ||
+        delta.failure.message.length === 0 ||
+        delta.failure.message.length > FAILURE_MESSAGE_MAX_LENGTH
+      ) {
+        throw new Error('Invalid failure message');
+      }
       update.$push = {
-        recentFailures: { $each: [delta.failureOccurredAt], $sort: -1, $slice: 20 },
+        recentFailures: { $each: [delta.failure], $sort: { occurredAt: -1 }, $slice: 20 },
       };
     }
     if (Object.keys(update).length === 0) return;

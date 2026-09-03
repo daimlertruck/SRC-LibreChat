@@ -26,6 +26,7 @@ const {
   isMemoryAgentEnabled,
   recordCollectedUsage,
   recordAgentInvocation,
+  recordAgentFailure,
   recordAgentResponse,
   createAgentStatisticsContext,
   isScheduleFireRequest,
@@ -263,6 +264,17 @@ function getUserFacingRequestError(baseMessage, error, appConfig) {
     return baseMessage;
   }
   return `${baseMessage}: ${message}`;
+}
+
+function getAgentStatisticsFailureMessage(message) {
+  const errorPart = Array.isArray(message.content)
+    ? message.content.find((part) => part?.type === ContentTypes.ERROR)
+    : undefined;
+  const contentMessage = errorPart?.[ContentTypes.ERROR];
+  if (typeof contentMessage === 'string' && contentMessage.trim()) {
+    return contentMessage;
+  }
+  return typeof message.text === 'string' ? message.text : undefined;
 }
 
 class AgentClient extends BaseClient {
@@ -696,6 +708,8 @@ class AgentClient extends BaseClient {
         conversationId: savedMessage.conversationId,
         messageId: savedMessage.messageId,
         status: hasError ? 'failed' : 'successful',
+        ...(hasError ? { failureSource: 'agent' } : {}),
+        ...(hasError ? { failureMessage: getAgentStatisticsFailureMessage(message) } : {}),
         observedAt: new Date(),
       },
       db,
@@ -4348,7 +4362,20 @@ class AgentClient extends BaseClient {
             this.eventActorContinuation === 'warm' ? messages.slice(-1) : messages;
           await run.processStream({ messages: invocationMessages }, config, {
             callbacks: {
-              [Callback.TOOL_ERROR]: logToolError,
+              [Callback.TOOL_ERROR]: (...args) => {
+                logToolError(...args);
+                void recordAgentFailure(
+                  this.agentStatisticsContext,
+                  'tool',
+                  getUserFacingRequestError(
+                    'Tool execution failed',
+                    args[1],
+                    this.options.req.config,
+                  ),
+                  db,
+                  logger,
+                );
+              },
             },
           });
         } finally {
@@ -4848,7 +4875,20 @@ class AgentClient extends BaseClient {
         await run.resume(
           resumeValue,
           config,
-          { callbacks: { [Callback.TOOL_ERROR]: logToolError } },
+          {
+            callbacks: {
+              [Callback.TOOL_ERROR]: (...args) => {
+                logToolError(...args);
+                void recordAgentFailure(
+                  this.agentStatisticsContext,
+                  'tool',
+                  getUserFacingRequestError('Tool execution failed', args[1], appConfig),
+                  db,
+                  logger,
+                );
+              },
+            },
+          },
           commandOptions,
         );
       } finally {

@@ -15,6 +15,7 @@ import { useUpdateAgentMutation } from '~/data-provider';
 import AdvancedButton from './Advanced/AdvancedButton';
 import VersionButton from './Version/VersionButton';
 import StatisticsButton from './Statistics/Button';
+import StatisticsToggle from './Statistics/Toggle';
 import DuplicateAgent from './DuplicateAgent';
 import AdminSettings from './AdminSettings';
 import DeleteButton from './DeleteButton';
@@ -87,8 +88,13 @@ export default function AgentFooter({
           <AdvancedButton setActivePanel={setActivePanel} />
           {!!agent_id && <VersionButton setActivePanel={setActivePanel} />}
           {showStatistics && (
-            <div className="col-span-2">
+            <div>
               <StatisticsButton setActivePanel={setActivePanel} />
+            </div>
+          )}
+          {agentsConfig?.statistics === true && (
+            <div className={showStatistics ? '' : 'col-span-2'}>
+              <StatisticsToggle />
             </div>
           )}
         </div>

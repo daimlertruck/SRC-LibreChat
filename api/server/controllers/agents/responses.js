@@ -29,6 +29,7 @@ const {
   extractManualSkills,
   recordCollectedUsage,
   recordAgentInvocation,
+  recordAgentFailure,
   recordAgentResponse,
   createAgentStatisticsContext,
   createSubagentUsageSink,
@@ -451,6 +452,8 @@ async function saveResponseOutput(
         conversationId,
         messageId: responseId,
         status,
+        ...(status === 'failed' ? { failureSource: 'llm' } : {}),
+        ...(status === 'failed' ? { failureMessage: response.error?.message ?? responseText } : {}),
         observedAt: new Date(),
       },
       db,
@@ -1250,6 +1253,16 @@ const executeResponse = async (envelope, { req, res }) => {
           callbacks: {
             [Callback.TOOL_ERROR]: (graph, error, toolId) => {
               logger.error(`[Responses API] Tool Error "${toolId}"`, getSafeErrorMetadata(error));
+              void recordAgentFailure(
+                statisticsContext,
+                'tool',
+                getUserFacingProviderError(
+                  error,
+                  hasModelBoundContentProtection(appConfig?.filters, appConfig?.messageFilter?.pii),
+                ),
+                db,
+                logger,
+              );
             },
           },
         });
@@ -1463,6 +1476,16 @@ const executeResponse = async (envelope, { req, res }) => {
           callbacks: {
             [Callback.TOOL_ERROR]: (graph, error, toolId) => {
               logger.error(`[Responses API] Tool Error "${toolId}"`, getSafeErrorMetadata(error));
+              void recordAgentFailure(
+                statisticsContext,
+                'tool',
+                getUserFacingProviderError(
+                  error,
+                  hasModelBoundContentProtection(appConfig?.filters, appConfig?.messageFilter?.pii),
+                ),
+                db,
+                logger,
+              );
             },
           },
         });

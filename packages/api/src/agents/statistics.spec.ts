@@ -1,13 +1,14 @@
 import fs from 'fs';
 import path from 'path';
+import type { AgentStatisticsMethods } from './statistics';
+import type { AgentStatisticsContext } from './statistics';
 import {
   createAgentStatisticsContext,
   projectAgentFeedback,
+  recordAgentFailure,
   recordAgentInvocation,
   recordAgentResponse,
 } from './statistics';
-import type { AgentStatisticsMethods } from './statistics';
-import type { AgentStatisticsContext } from './statistics';
 
 const CALLERS = [
   { caller: 'persisted AgentClient root chat', covered: true, interactiveUser: true },
@@ -212,6 +213,31 @@ describe('agent statistics projection', () => {
       db,
     );
     expect(db.incrementAgentMetricDaily).toHaveBeenCalledTimes(1);
+  });
+
+  test('records a tool failure without changing response counters', async () => {
+    const db = methods();
+    const context = createAgentStatisticsContext({
+      endpoint: { statistics: true },
+      agent: { id: 'agent-1', statistics_enabled: true },
+      occurredAt,
+    });
+
+    await recordAgentFailure(
+      context,
+      'tool',
+      'MCP server\ndid not respond',
+      db,
+      console,
+      occurredAt,
+    );
+
+    expect(db.incrementAgentMetricDaily).toHaveBeenCalledWith(
+      expect.objectContaining({
+        failure: { occurredAt, source: 'tool', message: 'MCP server did not respond' },
+      }),
+    );
+    expect(db.transitionAgentMetricState).not.toHaveBeenCalled();
   });
 
   test('projects exact feedback rating and category corrections', async () => {
