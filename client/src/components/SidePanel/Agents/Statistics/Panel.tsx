@@ -10,10 +10,10 @@ import type {
 import { useAgentStatisticsQuery } from '~/data-provider';
 import { useAgentPanelContext } from '~/Providers';
 import { useLocalize } from '~/hooks';
+import { formatCost } from '~/utils';
 import { Panel } from '~/common';
 
 const numberFormat = new Intl.NumberFormat();
-const usdFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
   year: 'numeric',
   month: 'short',
@@ -78,7 +78,7 @@ function Summary({ data }: { data: AgentStatisticsResponse }) {
           label={localize('com_ui_agent_statistics_cost')}
           value={
             summary.costAvailable && summary.costUSD != null
-              ? usdFormat.format(summary.costUSD)
+              ? formatCost(summary.costUSD)
               : localize('com_ui_agent_statistics_cost_unavailable')
           }
         />
@@ -239,7 +239,7 @@ export default function StatisticsPanel() {
                         <td className="p-2">{numberFormat.format(day.totalTokens)}</td>
                         <td className="whitespace-nowrap p-2">
                           {day.costAvailable && day.costUSD != null
-                            ? usdFormat.format(day.costUSD)
+                            ? formatCost(day.costUSD)
                             : localize('com_ui_agent_statistics_cost_unavailable')}
                         </td>
                       </tr>

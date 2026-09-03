@@ -98,6 +98,23 @@ describe('StatisticsPanel', () => {
     expect(screen.queryByRole('table')).toBeNull();
   });
 
+  it('does not round a sub-cent cost down to zero', () => {
+    mockUseAgentStatisticsQuery.mockReturnValue({
+      data: {
+        ...data,
+        summary: { ...data.summary, costUSD: 0.004 },
+        daily: data.daily.map((day) => ({ ...day, costUSD: 0.004 })),
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+
+    render(<StatisticsPanel />);
+
+    expect(screen.getAllByText('<$0.01')).toHaveLength(2);
+  });
+
   it('supports preset, single-day, and custom range queries', () => {
     render(<StatisticsPanel />);
     fireEvent.click(screen.getByRole('button', { name: '7d' }));
