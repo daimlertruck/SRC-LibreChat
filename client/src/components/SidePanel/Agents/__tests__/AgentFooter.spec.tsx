@@ -136,6 +136,11 @@ jest.mock('../Version/VersionButton', () => ({
   default: jest.fn(() => <div data-testid="version-button" />),
 }));
 
+jest.mock('../Statistics/Button', () => ({
+  __esModule: true,
+  default: jest.fn(() => <div data-testid="statistics-button" />),
+}));
+
 jest.mock('../AdminSettings', () => ({
   __esModule: true,
   default: jest.fn(() => <div data-testid="admin-settings" />),
@@ -271,6 +276,21 @@ describe('AgentFooter', () => {
   });
 
   describe('Main Functionality', () => {
+    test('shows statistics only for a persisted enabled agent when the endpoint is enabled', () => {
+      mockUseWatch.mockImplementation(({ name }) => {
+        if (name === 'agent') return { statistics_enabled: true };
+        if (name === 'id') return 'agent_123';
+        return undefined;
+      });
+      const { rerender } = render(
+        <AgentFooter {...defaultProps} agentsConfig={{ statistics: true }} />,
+      );
+      expect(screen.getByTestId('statistics-button')).toBeInTheDocument();
+
+      rerender(<AgentFooter {...defaultProps} agentsConfig={{ statistics: false }} />);
+      expect(screen.queryByTestId('statistics-button')).toBeNull();
+    });
+
     test('renders with standard components based on default state', () => {
       const { container } = render(<AgentFooter {...defaultProps} />);
       expect(screen.getByText('Save')).toBeInTheDocument();

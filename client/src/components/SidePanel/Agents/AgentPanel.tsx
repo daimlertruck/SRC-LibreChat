@@ -91,6 +91,7 @@ export function composeAgentUpdatePayload(data: AgentForm, agent_id?: string | n
     tool_options,
     skills,
     skills_enabled,
+    statistics_enabled,
     memory_scope,
     avatar_action: avatarActionState,
   } = data;
@@ -132,6 +133,7 @@ export function composeAgentUpdatePayload(data: AgentForm, agent_id?: string | n
       tool_options: normalizedToolOptions,
       skills,
       skills_enabled,
+      statistics_enabled,
       /** A hidden stale 'agent' scope must not survive disabling memory —
        *  runtime partitioning keys off memory_scope alone. */
       memory_scope: data.memory === true ? memory_scope : MemoryScope.user,
@@ -727,6 +729,7 @@ export default function AgentPanel() {
         </div>
         {canEditAgent && !agentQuery.isInitialLoading && (
           <AgentFooter
+            agentsConfig={agentsConfig}
             createMutation={create}
             updateMutation={update}
             isAvatarUploading={isAvatarUploadInFlight || uploadAvatarMutation.isLoading}

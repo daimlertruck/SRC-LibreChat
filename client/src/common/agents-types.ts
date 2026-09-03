@@ -57,6 +57,7 @@ export type AgentForm = {
   [AgentCapabilities.artifacts]?: ArtifactModes | string;
   recursion_limit?: number;
   support_contact?: SupportContact;
+  statistics_enabled?: boolean;
   category: string;
   // Avatar management fields
   avatar_file?: File | null;

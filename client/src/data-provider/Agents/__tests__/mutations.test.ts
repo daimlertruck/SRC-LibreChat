@@ -97,6 +97,9 @@ describe('useDeleteAgentMutation', () => {
     await queryClient.prefetchQuery(unrelatedQueryKey, unrelatedFetch);
     queryClient.setQueryData([QueryKeys.agent, targetId], createAgent(targetId));
     queryClient.setQueryData([QueryKeys.agent, targetId, 'expanded'], createAgent(targetId));
+    queryClient.setQueryData([QueryKeys.agentStatistics, targetId, { range: '30d' }], {
+      summary: {},
+    });
 
     jest.mocked(dataService.deleteAgent).mockResolvedValue();
     const { result } = renderHook(() => useDeleteAgentMutation(), {
@@ -116,10 +119,35 @@ describe('useDeleteAgentMutation', () => {
     expect(queryClient.getQueryData(unrelatedQueryKey)).toEqual(unrelatedAgent);
     expect(queryClient.getQueryData([QueryKeys.agent, targetId])).toBeUndefined();
     expect(queryClient.getQueryData([QueryKeys.agent, targetId, 'expanded'])).toBeUndefined();
+    expect(
+      queryClient.getQueryData([QueryKeys.agentStatistics, targetId, { range: '30d' }]),
+    ).toBeUndefined();
   });
 });
 
 describe('useUpdateAgentMutation', () => {
+  it('clears protected statistics data when collection is disabled', async () => {
+    const queryClient = new QueryClient();
+    const agentId = 'agent_statistics';
+    const statisticsKey = [QueryKeys.agentStatistics, agentId, { range: '30d' }];
+    queryClient.setQueryData(statisticsKey, { summary: { responses: 1 } });
+    jest
+      .mocked(dataService.updateAgent)
+      .mockResolvedValue({ ...createAgent(agentId), statistics_enabled: false });
+    const { result } = renderHook(() => useUpdateAgentMutation(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        agent_id: agentId,
+        data: { statistics_enabled: false },
+      });
+    });
+
+    expect(queryClient.getQueryData(statisticsKey)).toBeUndefined();
+  });
+
   it('preserves the list-cache isEditable flag after a successful update', async () => {
     /** MANAGE_AGENTS can PATCH agents the ACL marks non-editable. Mutation success must
      *  not promote those VIEW rows into the editable-only "My Agents" subset. */

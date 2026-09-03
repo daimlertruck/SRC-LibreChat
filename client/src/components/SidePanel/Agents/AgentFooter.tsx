@@ -14,6 +14,7 @@ import { GenericGrantAccessDialog } from '~/components/Sharing';
 import { useUpdateAgentMutation } from '~/data-provider';
 import AdvancedButton from './Advanced/AdvancedButton';
 import VersionButton from './Version/VersionButton';
+import StatisticsButton from './Statistics/Button';
 import DuplicateAgent from './DuplicateAgent';
 import AdminSettings from './AdminSettings';
 import DeleteButton from './DeleteButton';
@@ -23,6 +24,7 @@ export default function AgentFooter({
   activePanel,
   createMutation,
   updateMutation,
+  agentsConfig,
   setActivePanel,
   setCurrentAgentId,
   isAvatarUploading = false,
@@ -31,6 +33,7 @@ export default function AgentFooter({
   'setCurrentAgentId' | 'createMutation' | 'activePanel' | 'setActivePanel'
 > & {
   updateMutation: ReturnType<typeof useUpdateAgentMutation>;
+  agentsConfig?: Pick<NonNullable<AgentPanelProps['agentsConfig']>, 'statistics'> | null;
   isAvatarUploading?: boolean;
 }) {
   const localize = useLocalize();
@@ -74,6 +77,8 @@ export default function AgentFooter({
   );
 
   const showButtons = activePanel === Panel.builder;
+  const showStatistics =
+    agentsConfig?.statistics === true && !!agent_id && agent?.statistics_enabled === true;
 
   return (
     <div className="mb-1 flex w-full flex-col gap-2">
@@ -81,6 +86,11 @@ export default function AgentFooter({
         <div className={`grid gap-2 ${agent_id ? 'grid-cols-2' : 'grid-cols-1'}`}>
           <AdvancedButton setActivePanel={setActivePanel} />
           {!!agent_id && <VersionButton setActivePanel={setActivePanel} />}
+          {showStatistics && (
+            <div className="col-span-2">
+              <StatisticsButton setActivePanel={setActivePanel} />
+            </div>
+          )}
         </div>
       )}
       {user?.role === SystemRoles.ADMIN && showButtons && <AdminSettings />}

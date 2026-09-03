@@ -5,7 +5,11 @@ import type {
   UseQueryOptions,
   UseInfiniteQueryOptions,
 } from '@tanstack/react-query';
-import type t from 'librechat-data-provider';
+import type {
+  default as t,
+  AgentStatisticsQuery,
+  AgentStatisticsResponse,
+} from 'librechat-data-provider';
 import { isEphemeralAgent } from '~/common';
 
 /**
@@ -165,6 +169,38 @@ export const useGetAgentVersionsQuery = (
       retry: false,
       ...config,
       enabled: isValidAgentId && (config?.enabled ?? true),
+    },
+  );
+};
+
+function normalizeStatisticsQuery(query: AgentStatisticsQuery): AgentStatisticsQuery {
+  if ('date' in query) return { date: query.date };
+  if ('from' in query) return { from: query.from, to: query.to };
+  return query.range ? { range: query.range } : {};
+}
+
+export const useAgentStatisticsQuery = (
+  agentId: string | null | undefined,
+  query: AgentStatisticsQuery,
+  config?: UseQueryOptions<AgentStatisticsResponse, Error>,
+): QueryObserverResult<AgentStatisticsResponse, Error> => {
+  const normalizedQuery = normalizeStatisticsQuery(query);
+  const enabled = !!agentId && !isEphemeralAgent(agentId) && (config?.enabled ?? true);
+  return useQuery<AgentStatisticsResponse, Error>(
+    [QueryKeys.agentStatistics, agentId, normalizedQuery],
+    ({ signal }) =>
+      dataService.getAgentStatistics({
+        agent_id: agentId as string,
+        query: normalizedQuery,
+        signal,
+      }),
+    {
+      staleTime: 30_000,
+      keepPreviousData: true,
+      refetchOnWindowFocus: false,
+      retry: false,
+      ...config,
+      enabled,
     },
   );
 };

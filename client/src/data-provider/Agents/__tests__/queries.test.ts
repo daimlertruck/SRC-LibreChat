@@ -2,9 +2,9 @@ import { createElement } from 'react';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { dataService, QueryKeys, EModelEndpoint, PermissionBits } from 'librechat-data-provider';
-import type { AgentListResponse } from 'librechat-data-provider';
+import type { AgentListResponse, AgentStatisticsResponse } from 'librechat-data-provider';
 import type { ReactNode } from 'react';
-import { defaultAgentParams, useListAgentsQuery } from '../queries';
+import { defaultAgentParams, useAgentStatisticsQuery, useListAgentsQuery } from '../queries';
 
 jest.mock('librechat-data-provider', () => {
   const actual = jest.requireActual('librechat-data-provider');
@@ -13,11 +13,15 @@ jest.mock('librechat-data-provider', () => {
     dataService: {
       ...actual.dataService,
       listAgents: jest.fn(),
+      getAgentStatistics: jest.fn(),
     },
   };
 });
 
 const listAgents = dataService.listAgents as jest.MockedFunction<typeof dataService.listAgents>;
+const getAgentStatistics = dataService.getAgentStatistics as jest.MockedFunction<
+  typeof dataService.getAgentStatistics
+>;
 
 const page = (ids: string[], after: string | null): AgentListResponse =>
   ({
@@ -87,5 +91,37 @@ describe('useListAgentsQuery', () => {
     expect(listAgents).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'cursor-1' }));
     expect(result.current.data?.data.map((agent) => agent.id)).toEqual(['a', 'b', 'c']);
     expect(result.current.data?.has_more).toBe(false);
+  });
+});
+
+describe('useAgentStatisticsQuery', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('isolates cached ranges by agent and normalized query', async () => {
+    const response = { range: { from: '2026-09-01', to: '2026-09-01', days: 1 } };
+    getAgentStatistics.mockResolvedValue(response as AgentStatisticsResponse);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    const { result } = renderHook(
+      () => useAgentStatisticsQuery('agent_1', { date: '2026-09-01' }),
+      { wrapper: createWrapper(queryClient) },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(getAgentStatistics).toHaveBeenCalledWith({
+      agent_id: 'agent_1',
+      query: { date: '2026-09-01' },
+      signal: expect.any(AbortSignal),
+    });
+    expect(
+      queryClient.getQueryData([QueryKeys.agentStatistics, 'agent_1', { date: '2026-09-01' }]),
+    ).toBe(response);
+  });
+
+  it('does not request statistics without a persisted agent', () => {
+    renderHook(() => useAgentStatisticsQuery(undefined, { range: '30d' }), {
+      wrapper: createWrapper(new QueryClient()),
+    });
+    expect(getAgentStatistics).not.toHaveBeenCalled();
   });
 });

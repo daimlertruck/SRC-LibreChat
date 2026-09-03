@@ -28,6 +28,7 @@ export enum QueryKeys {
   assistant = 'assistant',
   agents = 'agents',
   agent = 'agent',
+  agentStatistics = 'agentStatistics',
   files = 'files',
   fileConfig = 'fileConfig',
   tools = 'tools',

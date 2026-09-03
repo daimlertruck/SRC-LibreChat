@@ -1,5 +1,6 @@
 import type { AxiosResponse } from 'axios';
 import type { TInsightsAccessResponse, TInsightsParams, TInsightsResponse } from './types/insights';
+import type { AgentStatisticsQuery, AgentStatisticsResponse } from './agents/statistics';
 import type { TFileConfig } from './file-config';
 import type * as t from './types';
 import * as permissions from './accessPermissions';
@@ -598,6 +599,24 @@ export const getExpandedAgentById = ({ agent_id }: { agent_id: string }): Promis
     endpoints.agents({
       path: `${agent_id}/expanded`,
     }),
+  );
+};
+
+export const getAgentStatistics = ({
+  agent_id,
+  query,
+  signal,
+}: {
+  agent_id: string;
+  query: AgentStatisticsQuery;
+  signal?: AbortSignal;
+}): Promise<AgentStatisticsResponse> => {
+  return request.get(
+    endpoints.agents({
+      path: `${encodeURIComponent(agent_id)}/statistics`,
+      options: query,
+    }),
+    { signal },
   );
 };
 

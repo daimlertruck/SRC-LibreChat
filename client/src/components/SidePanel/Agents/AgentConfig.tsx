@@ -7,6 +7,7 @@ import { useLocalize, useAgentCapabilities } from '~/hooks';
 import { useAgentFileEntries } from './Tools/hooks';
 import { useAgentPanelContext } from '~/Providers';
 import { useProviderIcon } from '~/hooks/Endpoint';
+import StatisticsToggle from './Statistics/Toggle';
 import ToolsSection from './Tools/ToolsSection';
 import { validateEmail, cn } from '~/utils';
 import Instructions from './Instructions';
@@ -150,6 +151,8 @@ export default function AgentConfig() {
           <FileContext agent_id={agent_id} files={contextFiles} />
         </div>
       )}
+
+      <StatisticsToggle />
 
       {/* SUPPORT CONTACT */}
       <div className="mb-3 flex flex-col">

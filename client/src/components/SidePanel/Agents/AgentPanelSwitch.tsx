@@ -3,6 +3,7 @@ import { useRecoilValue } from 'recoil';
 import { AgentPanelProvider, useAgentPanelContext } from '~/Providers/AgentPanelContext';
 import { Panel, isEphemeralAgent } from '~/common';
 import VersionPanel from './Version/VersionPanel';
+import StatisticsPanel from './Statistics/Panel';
 import AgentPanel from './AgentPanel';
 import store from '~/store';
 
@@ -27,6 +28,9 @@ function AgentPanelSwitchWithContext() {
 
   if (activePanel === Panel.version) {
     return <VersionPanel />;
+  }
+  if (activePanel === Panel.statistics) {
+    return <StatisticsPanel />;
   }
   return <AgentPanel />;
 }

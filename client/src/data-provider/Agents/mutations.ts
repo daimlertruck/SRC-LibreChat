@@ -124,6 +124,9 @@ export const useUpdateAgentMutation = (
           [QueryKeys.agent, variables.agent_id, 'expanded'],
           updatedAgent,
         );
+        if (updatedAgent.statistics_enabled !== true) {
+          queryClient.removeQueries([QueryKeys.agentStatistics, variables.agent_id]);
+        }
         invalidateAgentMarketplaceQueries(queryClient);
 
         return options?.onSuccess?.(updatedAgent, variables, context);
@@ -168,6 +171,7 @@ export const useDeleteAgentMutation = (
 
         queryClient.removeQueries([QueryKeys.agent, variables.agent_id]);
         queryClient.removeQueries([QueryKeys.agent, variables.agent_id, 'expanded']);
+        queryClient.removeQueries([QueryKeys.agentStatistics, variables.agent_id]);
         /** Deletion removes the agent from every edge endpoint server-side. Expanded queries
          * opt out of refetch-on-mount, so refresh every cached graph known to reference it. */
         queryClient.invalidateQueries({

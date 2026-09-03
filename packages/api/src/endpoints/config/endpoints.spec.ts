@@ -8,6 +8,7 @@ import {
 } from 'librechat-data-provider';
 
 import type { AppConfig, IConfig } from '@librechat/data-schemas';
+import type { TAgentsEndpoint } from 'librechat-data-provider';
 import type { AppConfigServiceDeps } from '~/app/service';
 import type { EndpointsConfigDeps } from './endpoints';
 import type { ServerRequest } from '~/types';
@@ -165,6 +166,7 @@ describe('createEndpointsConfigService', () => {
                 allowedProviders: ['openAI', 'anthropic'],
                 capabilities: [AgentCapabilities.execute_code],
                 maxSubagents: 20,
+                statistics: true,
               },
             },
           }),
@@ -172,9 +174,11 @@ describe('createEndpointsConfigService', () => {
       });
       const { getEndpointsConfig } = createEndpointsConfigService(deps);
       const result = await getEndpointsConfig(fakeReq());
+      const agents = result?.[EModelEndpoint.agents] as TAgentsEndpoint;
 
-      expect(result?.[EModelEndpoint.agents]?.allowedProviders).toEqual(['openAI', 'anthropic']);
-      expect(result?.[EModelEndpoint.agents]?.maxSubagents).toBe(20);
+      expect(agents.allowedProviders).toEqual(['openAI', 'anthropic']);
+      expect(agents.maxSubagents).toBe(20);
+      expect(agents.statistics).toBe(true);
     });
 
     it('exposes the deployment stateful environment allowlist', async () => {
