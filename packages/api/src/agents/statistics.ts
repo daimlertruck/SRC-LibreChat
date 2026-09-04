@@ -236,7 +236,7 @@ export async function recordAgentFailure(
   message: string | undefined,
   methods: Pick<AgentStatisticsMethods, 'incrementAgentMetricDaily'>,
   logger: StatisticsLogger = console,
-  observedAt = new Date(),
+  observedAt: Date = new Date(),
 ): Promise<void> {
   if (!context || Number.isNaN(observedAt.getTime())) return;
   try {
