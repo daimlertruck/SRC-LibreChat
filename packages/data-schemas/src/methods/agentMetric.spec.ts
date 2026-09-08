@@ -348,7 +348,8 @@ describe('agent metric storage foundation', () => {
       { statistics_enabled: false },
     );
     expect(updated?.statistics_enabled).toBe(false);
-    expect(updated?.versions?.at(-1)?.statistics_enabled).toBe(false);
+    const versions = updated?.versions;
+    expect(versions?.[versions.length - 1]?.statistics_enabled).toBe(false);
     expect(
       (await agentMethods.getAgentWithVersionCount({ id: 'agent-1' }))?.statistics_enabled,
     ).toBe(false);

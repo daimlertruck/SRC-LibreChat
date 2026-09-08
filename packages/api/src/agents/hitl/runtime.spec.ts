@@ -1,8 +1,67 @@
-import { HookRegistry } from '@librechat/agents';
+import { HookRegistry, executeHooks } from '@librechat/agents';
 import { registerToolApprovalHook, clearToolApprovalHooks } from './hooks';
+import { createAttachedCodeEnvironmentPolicyHook } from './byom';
+import { resolveToolApprovalPolicy } from './policy';
 import { buildHITLRunWiring } from './runtime';
 
 describe('buildHITLRunWiring', () => {
+  test.each([
+    ['ask', 'bash_tool', 'ask'],
+    ['deny', 'bash_tool', 'deny'],
+    ['allow', 'bash_tool', 'allow'],
+    ['allow', 'mcp:github:create_issue', 'ask'],
+  ] as const)(
+    'full access preserves endpoint %s rules for %s',
+    async (rule, toolName, expected) => {
+      const settings = new Map([
+        [
+          'attached-agent',
+          {
+            configSchema: {
+              permissions: {
+                fileWrite: {
+                  allowed: ['ask', 'allow'] as Array<'ask' | 'allow'>,
+                  default: 'ask' as const,
+                },
+                commandExecution: {
+                  allowed: ['ask', 'allow'] as Array<'ask' | 'allow'>,
+                  default: 'ask' as const,
+                },
+              },
+            },
+          },
+        ],
+      ]);
+      const wiring = buildHITLRunWiring(
+        { enabled: true, mode: 'default', [rule]: ['bash_tool'] },
+        {},
+        [],
+        [
+          {
+            hook: createAttachedCodeEnvironmentPolicyHook(
+              new Set(settings.keys()),
+              settings,
+              'fullAccess',
+            ),
+          },
+        ],
+      );
+      const result = await executeHooks({
+        registry: wiring!.hooks,
+        matchQuery: toolName,
+        input: {
+          hook_event_name: 'PreToolUse',
+          runId: 'full-access-policy',
+          toolName,
+          toolInput: {},
+          toolUseId: 'tool-code',
+          executingAgentId: 'attached-agent',
+        },
+      });
+      expect(result.decision).toBe(expected);
+    },
+  );
+
   test('returns undefined when HITL is disabled (the default)', () => {
     expect(buildHITLRunWiring(undefined)).toBeUndefined();
     expect(buildHITLRunWiring({})).toBeUndefined();
@@ -53,6 +112,40 @@ describe('buildHITLRunWiring', () => {
     });
     expect(wiring?.hooks.getMatchers('PreToolUse')).toHaveLength(1);
   });
+
+  test.each([
+    ['default', 'ask'],
+    ['dontAsk', 'deny'],
+  ] as const)(
+    'keeps the enabled endpoint %s fallback for unrelated tools in BYOM runs',
+    async (mode, expectedDecision) => {
+      const policy = resolveToolApprovalPolicy({
+        endpoint: { enabled: true, mode },
+        attachedCodeEnvironment: true,
+      });
+      const wiring = buildHITLRunWiring(
+        policy,
+        {},
+        [],
+        [{ hook: createAttachedCodeEnvironmentPolicyHook(new Set(['attached-agent'])) }],
+      );
+
+      const result = await executeHooks({
+        registry: wiring?.hooks as HookRegistry,
+        matchQuery: 'mcp:github:create_issue',
+        input: {
+          hook_event_name: 'PreToolUse',
+          runId: 'run-byom-policy',
+          toolName: 'mcp:github:create_issue',
+          toolInput: {},
+          toolUseId: 'tool-unrelated',
+          executingAgentId: 'attached-agent',
+        },
+      });
+
+      expect(result.decision).toBe(expectedDecision);
+    },
+  );
 });
 
 describe('buildHITLRunWiring host-hook composition', () => {

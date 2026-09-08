@@ -41,6 +41,8 @@ jest.mock('@librechat/client', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const R = require('react');
   return {
+    /** The real recipe, so the geometry assertions below cover shipped classes. */
+    composerControlClasses: jest.requireActual('@librechat/client').composerControlClasses,
     TooltipAnchor: ({
       children,
       render,
@@ -124,6 +126,28 @@ describe('MCPSelect', () => {
     await user.keyboard('{ArrowDown}');
     await user.keyboard('{ArrowDown}');
     expect(items[0]).toHaveFocus();
+  });
+
+  it('labels the badge from the servers the menu offers, not the raw selection', () => {
+    mockMcpServerManager = {
+      ...defaultMcpServerManager,
+      mcpValues: ['server-a', 'hidden-server'],
+    };
+    render(<MCPSelect />);
+
+    expect(screen.getByRole('button', { name: /Server A/i })).toBeInTheDocument();
+    expect(screen.queryByText('com_ui_x_selected')).not.toBeInTheDocument();
+  });
+
+  it('shows no label when every selected server is hidden from the menu', () => {
+    mockMcpServerManager = {
+      ...defaultMcpServerManager,
+      mcpValues: ['hidden-server'],
+    };
+    render(<MCPSelect />);
+
+    expect(screen.getByRole('button', { name: /MCP Servers/i })).toBeInTheDocument();
+    expect(screen.queryByText('hidden-server')).not.toBeInTheDocument();
   });
 
   it('renders nothing when user lacks MCP access', () => {

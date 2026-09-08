@@ -10,6 +10,8 @@ import {
   recordAgentResponse,
 } from './statistics';
 
+const repositoryRoot = path.resolve(__dirname, '../../../..');
+
 const CALLERS = [
   { caller: 'persisted AgentClient root chat', covered: true, interactiveUser: true },
   { caller: 'detached recorder from covered parent', covered: true, interactiveUser: false },
@@ -75,9 +77,14 @@ describe('agent statistics Phase 0 contracts', () => {
     const roots = ['api/server', 'packages/api/src'];
     const actual = Object.fromEntries(
       roots
-        .flatMap(productionFiles)
-        .map((file) => path.relative(process.cwd(), file).replaceAll('\\', '/'))
-        .map((file) => [file, usageCallCount(file)] as const)
+        .flatMap((root) => productionFiles(path.join(repositoryRoot, root)))
+        .map(
+          (file) =>
+            [
+              path.relative(repositoryRoot, file).replaceAll('\\', '/'),
+              usageCallCount(file),
+            ] as const,
+        )
         .filter(([, count]) => count > 0),
     );
     expect(actual).toEqual(CALLER_INVENTORY);
@@ -86,7 +93,7 @@ describe('agent statistics Phase 0 contracts', () => {
   it.each(USAGE_CONTEXT_INVENTORY)(
     '%s has the expected root statistics context coverage',
     (file, marker, expected) => {
-      const source = fs.readFileSync(file, 'utf8');
+      const source = fs.readFileSync(path.join(repositoryRoot, file), 'utf8');
       expect(source.split(marker)).toHaveLength(expected + 1);
     },
   );

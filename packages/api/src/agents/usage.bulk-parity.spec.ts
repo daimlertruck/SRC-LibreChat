@@ -17,7 +17,7 @@ describe('recordCollectedUsage — bulk path parity', () => {
   let mockInsertMany: jest.Mock;
   let mockUpdateBalance: jest.Mock;
   let mockIncrementAgentMetricDaily: jest.Mock;
-  let mockPricing: PricingFns;
+  let mockPricing: jest.Mocked<PricingFns>;
   let mockBulkWriteOps: BulkWriteDeps;
   let deps: RecordUsageDeps;
 

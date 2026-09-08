@@ -8,7 +8,6 @@ import {
 } from 'librechat-data-provider';
 
 import type { AppConfig, IConfig } from '@librechat/data-schemas';
-import type { TAgentsEndpoint } from 'librechat-data-provider';
 import type { AppConfigServiceDeps } from '~/app/service';
 import type { EndpointsConfigDeps } from './endpoints';
 import type { ServerRequest } from '~/types';
@@ -174,11 +173,13 @@ describe('createEndpointsConfigService', () => {
       });
       const { getEndpointsConfig } = createEndpointsConfigService(deps);
       const result = await getEndpointsConfig(fakeReq());
-      const agents = result?.[EModelEndpoint.agents] as TAgentsEndpoint;
-
-      expect(agents.allowedProviders).toEqual(['openAI', 'anthropic']);
-      expect(agents.maxSubagents).toBe(20);
-      expect(agents.statistics).toBe(true);
+      expect(result?.[EModelEndpoint.agents]).toEqual(
+        expect.objectContaining({
+          allowedProviders: ['openAI', 'anthropic'],
+          maxSubagents: 20,
+          statistics: true,
+        }),
+      );
     });
 
     it('exposes the deployment stateful environment allowlist', async () => {
@@ -190,6 +191,7 @@ describe('createEndpointsConfigService', () => {
           appConfig({
             endpoints: {
               [EModelEndpoint.agents]: {
+                toolApproval: { enabled: false },
                 statefulCodeSessions: {
                   allowedEnvironments: ['user', 'agent-user'],
                   environments: [
@@ -198,6 +200,16 @@ describe('createEndpointsConfigService', () => {
                       name: 'Attached VM',
                       type: 'attached',
                       baseURL: 'https://internal-code.example.com/v1',
+                      workerId: 'private-worker-route',
+                      pairing: {
+                        workerId: 'private-worker-route',
+                        tokenEnv: 'CODE_BRIDGE_ADMIN_TOKEN',
+                      },
+                      configSchema: {
+                        permissions: {
+                          commandExecution: { allowed: ['ask', 'deny'], default: 'ask' },
+                        },
+                      },
                       default: true,
                     },
                   ],
@@ -213,15 +225,96 @@ describe('createEndpointsConfigService', () => {
 
       expect(result?.[EModelEndpoint.agents]?.statefulCodeSessions).toEqual({
         allowedEnvironments: ['user', 'agent-user'],
+        approvalsEnabled: false,
+        approvalModes: [],
         environments: [
           {
             id: 'attached-vm',
             name: 'Attached VM',
             type: 'attached',
             default: true,
+            configSchema: {
+              permissions: {
+                commandExecution: { allowed: ['ask', 'deny'], default: 'ask' },
+              },
+            },
           },
         ],
       });
+    });
+
+    it('does not expose a pairing-only control plane as an execution environment', async () => {
+      const deps = createMockDeps({
+        loadDefaultEndpointsConfig: jest.fn().mockResolvedValue({
+          [EModelEndpoint.agents]: { userProvide: false, order: 0 },
+        }),
+        getAppConfig: jest.fn().mockResolvedValue(
+          appConfig({
+            endpoints: {
+              [EModelEndpoint.agents]: {
+                statefulCodeSessions: {
+                  allowedEnvironments: ['user'],
+                  environments: [
+                    {
+                      id: 'self-service',
+                      name: 'Self-service',
+                      type: 'attached',
+                      baseURL: 'https://internal-code.example.com/v1',
+                      pairing: {
+                        allowPrincipalWorkers: true,
+                        tokenEnv: 'CODE_BRIDGE_ADMIN_TOKEN',
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+        ),
+      });
+      const { getEndpointsConfig } = createEndpointsConfigService(deps);
+
+      const result = await getEndpointsConfig(fakeReq());
+
+      expect(result?.[EModelEndpoint.agents]?.statefulCodeSessions).toEqual({
+        allowedEnvironments: ['user'],
+        approvalsEnabled: true,
+        approvalModes: ['ask', 'acceptEdits', 'fullAccess'],
+        environments: [],
+      });
+    });
+
+    it.each([
+      [{ enabled: true }, ['ask']],
+      [{ enabled: true, mode: 'default' }, ['ask']],
+      [{ enabled: true, mode: 'dontAsk' }, ['ask']],
+      [{ enabled: true, mode: 'bypass' }, ['ask', 'acceptEdits', 'fullAccess']],
+    ])('exposes approval modes allowed by endpoint policy %p', async (toolApproval, expected) => {
+      const deps = createMockDeps({
+        loadDefaultEndpointsConfig: jest.fn().mockResolvedValue({
+          [EModelEndpoint.agents]: { userProvide: false, order: 0 },
+        }),
+        getAppConfig: jest.fn().mockResolvedValue(
+          appConfig({
+            endpoints: {
+              [EModelEndpoint.agents]: {
+                toolApproval,
+                statefulCodeSessions: {
+                  allowedEnvironments: ['user'],
+                  environments: [],
+                },
+              },
+            },
+          }),
+        ),
+      });
+      const { getEndpointsConfig } = createEndpointsConfigService(deps);
+
+      const result = await getEndpointsConfig(fakeReq());
+
+      expect(result?.[EModelEndpoint.agents]?.statefulCodeSessions?.approvalModes).toEqual(
+        expected,
+      );
     });
 
     it('merges bedrock availableRegions', async () => {

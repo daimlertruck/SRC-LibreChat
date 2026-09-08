@@ -96,12 +96,14 @@ export enum QueryKeys {
   schedule = 'schedule',
   parentSubagents = 'parentSubagents',
   subagentThread = 'subagentThread',
+  codeEnvironments = 'codeEnvironments',
   agentQueuedTurns = 'agentQueuedTurns',
 }
 
 // Dynamic query keys that require parameters
 export const DynamicQueryKeys = {
   agentFiles: (agentId: string) => ['agentFiles', agentId] as const,
+  codeEnvironmentStatus: (id: string) => [QueryKeys.codeEnvironments, id, 'status'] as const,
 } as const;
 
 export enum MutationKeys {
@@ -152,4 +154,7 @@ export enum MutationKeys {
   updateSchedule = 'updateSchedule',
   deleteSchedule = 'deleteSchedule',
   runSchedule = 'runSchedule',
+  pairCodeEnvironment = 'pairCodeEnvironment',
+  updateCodeEnvironmentSettings = 'updateCodeEnvironmentSettings',
+  deleteCodeEnvironment = 'deleteCodeEnvironment',
 }

@@ -1,5 +1,6 @@
+import { z } from 'zod';
 import type { OpenAPIV3 } from 'openapi-types';
-import type { AssistantsEndpoint, AgentProvider, MemoryScope } from 'src/schemas';
+import type { AssistantsEndpoint, AgentProvider, MemoryScope, SkillsScope } from 'src/schemas';
 import type { StatefulCodeEnvironment } from '../stateful-code';
 import type { Agents, GraphEdge } from './agents';
 import type { ContentTypes } from './runs';
@@ -307,6 +308,30 @@ export type AgentSubagentsConfig = {
   graphs?: AgentSubagentGraph[];
 };
 
+export type AgentGitIdentity = {
+  /** Commit author and committer display name. */
+  name: string;
+  /** Commit author and committer email address. */
+  email: string;
+};
+
+export const agentGitIdentitySchema: z.ZodType<AgentGitIdentity | undefined> = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(128)
+      .refine((value) => !/[\0\r\n]/.test(value)),
+    email: z
+      .string()
+      .trim()
+      .email()
+      .max(254)
+      .refine((value) => !/[\0\r\n]/.test(value)),
+  })
+  .optional();
+
 export type Agent = {
   _id?: string;
   id: string;
@@ -339,6 +364,8 @@ export type Agent = {
   stateful_code_environment?: StatefulCodeEnvironment;
   /** Operator-configured managed or attached stateful execution environment. */
   code_environment_id?: string | null;
+  /** Non-secret Git authorship injected into this agent's sandboxed commands. */
+  git_identity?: AgentGitIdentity | null;
   artifacts?: ArtifactModes;
   recursion_limit?: number;
   isPublic?: boolean;
@@ -370,6 +397,10 @@ export type Agent = {
   skills_enabled?: boolean;
   /** Enables statistics collection when allowed by deployment configuration. */
   statistics_enabled?: boolean;
+  /** Enables runtime skill creation without exposing an existing skill catalog. */
+  skill_authoring_enabled?: boolean;
+  /** Explicit catalog exposure while skills are enabled. Missing preserves legacy semantics. */
+  skills_scope?: SkillsScope;
   /** Subagent spawning configuration — isolated-context child agents. */
   subagents?: AgentSubagentsConfig;
   /** Memory partition: `agent` isolates memories per (user, agent); default shared pool */
@@ -379,6 +410,7 @@ export type Agent = {
 export type TAgentsMap = Record<string, Agent | undefined>;
 
 export type AgentCreateParams = {
+  git_identity?: AgentGitIdentity;
   name?: string | null;
   description?: string | null;
   avatar?: AgentAvatar | null;
@@ -405,6 +437,8 @@ export type AgentCreateParams = {
   | 'skills'
   | 'skills_enabled'
   | 'statistics_enabled'
+  | 'skill_authoring_enabled'
+  | 'skills_scope'
   | 'subagents'
   | 'memory_scope'
 >;
@@ -429,6 +463,7 @@ export type AgentUpdateParams = {
   | 'stateful_code_sessions'
   | 'stateful_code_environment'
   | 'code_environment_id'
+  | 'git_identity'
   | 'artifacts'
   | 'recursion_limit'
   | 'category'
@@ -437,6 +472,8 @@ export type AgentUpdateParams = {
   | 'skills'
   | 'skills_enabled'
   | 'statistics_enabled'
+  | 'skill_authoring_enabled'
+  | 'skills_scope'
   | 'subagents'
   | 'memory_scope'
 >;
@@ -681,6 +718,13 @@ export type SummaryContentPart = {
   content?: Array<{ type: ContentTypes.TEXT; text: string }>;
   tokenCount?: number;
   summarizing?: boolean;
+  /** A summarize round that ended in error. Partial deltas already streamed
+   *  into this slot are kept, so the renderer needs this to avoid presenting
+   *  truncated text under the "Conversation summarized" label. */
+  failed?: boolean;
+  /** Set when the user compacted the context manually rather than the
+   *  automatic detour firing on context pressure. */
+  initiatedBy?: 'user';
   summaryVersion?: number;
   model?: string;
   provider?: string;
