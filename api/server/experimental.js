@@ -36,6 +36,8 @@ const {
   handleJsonParseError,
   initializeFileStorage,
   loadToolApprovalHooks,
+  areStartupTasksDisabled,
+  startupTasksDisabledWarning,
   maybeInjectQueryDevtoolsBootstrap,
   preAuthTenantMiddleware,
   requestContextMiddleware,
@@ -456,10 +458,28 @@ if (cluster.isMaster) {
   });
 
   const startServer = async () => {
+    /* `DISABLE_STARTUP_TASKS` suppresses exactly this set at this entrypoint: database
+     * seeding, interface-permission derivation from `librechat.yaml`, migration checks, the
+     * orphaned-preview sweep, the expired-file sweep, GitHub skill sync, subagent task
+     * routing configuration, the code-environment lifecycle reconciler, MCP initialization,
+     * the OAuth reconnect manager, the agent-trigger service, the RAG health probe, and the
+     * credential-database check. This set differs from `index.js`: this clustered entrypoint
+     * arms no schedule engine (it runs the erasure-only schedule sweep unconditionally, so
+     * no schedule-engine arming or expired-approval callback is gated here), and it has no
+     * deployment-plugin or deployment-skill initialization to gate. The RAG health probe and
+     * the credential-database check are the two members of the set not gated at this site —
+     * both are gated inside `performStartupChecks` (`packages/api/src/app/checks.ts`), which
+     * otherwise runs its environment and configuration validation on every container
+     * regardless of the flag. Readiness signalling, `index.html` loading, file-storage
+     * initialization, and every request path stay on the normal path in both flag states. */
+    const startupTasksDisabled = areStartupTasksDisabled();
+
     logger.info(`Worker ${process.pid} initializing...`);
 
     await waitForKeyvRedisClient();
-    await configureSubagentTaskRouting();
+    if (!startupTasksDisabled) {
+      await configureSubagentTaskRouting();
+    }
 
     if (typeof Bun !== 'undefined') {
       axios.defaults.headers.common['Accept-Encoding'] = 'gzip';
@@ -468,7 +488,9 @@ if (cluster.isMaster) {
     /** Connect to MongoDB */
     await connectDb();
     logger.info(`Worker ${process.pid}: Connected to MongoDB`);
-    startCodeEnvironmentLifecycleReconciler({ mongoose });
+    if (!startupTasksDisabled) {
+      startCodeEnvironmentLifecycleReconciler({ mongoose });
+    }
 
     /** Background index sync (non-blocking) */
     indexSync().catch((err) => {
@@ -504,17 +526,23 @@ if (cluster.isMaster) {
     }
 
     /** Seed database (idempotent) */
-    await runAsSystem(seedDatabase);
+    if (!startupTasksDisabled) {
+      await runAsSystem(seedDatabase);
+    }
 
     /* Mirrors `server/index.js`; `runAsSystem` for tenant-isolated File. */
-    runAsSystem(sweepOrphanedPreviews).catch((err) => {
-      logger.error('[sweepOrphanedPreviews] Background sweep failed:', err);
-    });
+    if (!startupTasksDisabled) {
+      runAsSystem(sweepOrphanedPreviews).catch((err) => {
+        logger.error('[sweepOrphanedPreviews] Background sweep failed:', err);
+      });
+    }
 
     /** Initialize app configuration */
     const appConfig = await getAppConfig();
     initializeFileStorage(appConfig);
-    initializeGitHubSkillSync(appConfig);
+    if (!startupTasksDisabled) {
+      initializeGitHubSkillSync(appConfig);
+    }
     // Register configured tool-approval policy hooks (mirrors the standard startup path).
     // Honors the `enabled` kill switch; hooks are base-config-only, registered process-wide.
     // Read from the BASE config specifically — `appConfig` above (getAppConfig() with no
@@ -526,12 +554,21 @@ if (cluster.isMaster) {
     await loadToolApprovalHooks(toolApproval?.enabled ? toolApproval.hooks : undefined, {
       basePath: path.resolve(__dirname, '../..'),
     });
-    expiredFileSweepOptions = { appConfig, loadAppConfig: getAppConfig };
-    startExpiredFileSweepOnce();
+    /* Leaving `expiredFileSweepOptions` unset is what gates the IPC-triggered path too:
+     * this is the only place it is assigned, so a `file-retention-sweep-worker` message
+     * arriving at any point still finds `startExpiredFileSweepOnce()` a no-op. */
+    if (!startupTasksDisabled) {
+      expiredFileSweepOptions = { appConfig, loadAppConfig: getAppConfig };
+      startExpiredFileSweepOnce();
+    }
     await runAsSystem(async () => {
       await performStartupChecks(appConfig);
-      await updateInterfacePerms({ appConfig, getRoleByName, updateAccessPermissions });
     });
+    if (!startupTasksDisabled) {
+      await runAsSystem(async () => {
+        await updateInterfacePerms({ appConfig, getRoleByName, updateAccessPermissions });
+      });
+    }
 
     /** Load index.html for SPA serving */
     const indexPath = path.join(appConfig.paths.dist, 'index.html');
@@ -705,10 +742,21 @@ if (cluster.isMaster) {
        */
       try {
         /** Initialize MCP servers and OAuth reconnection for this worker */
-        await initializeMCPs();
-        await initializeOAuthReconnectManager();
-        await checkMigrations();
-        await initializeAgentTriggerService({ address: server.address() });
+        if (!startupTasksDisabled) {
+          await initializeMCPs();
+        }
+        if (!startupTasksDisabled) {
+          await initializeOAuthReconnectManager();
+        }
+        if (!startupTasksDisabled) {
+          await checkMigrations();
+        }
+        if (!startupTasksDisabled) {
+          await initializeAgentTriggerService({ address: server.address() });
+        }
+        if (startupTasksDisabled) {
+          logger.warn(startupTasksDisabledWarning);
+        }
       } catch (initErr) {
         logger.error(`Worker ${process.pid} post-listen initialization failed:`, initErr);
         process.exit(1);

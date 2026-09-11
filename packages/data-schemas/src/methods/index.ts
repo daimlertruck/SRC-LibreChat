@@ -205,11 +205,21 @@ export {
   AgentQueuedTurnLaneRetiredError,
 };
 
+/**
+ * Token method set bound to the `AuthToken` model on the `authtokens` collection,
+ * exposed under a namespace key rather than spread, so the flat `createToken`,
+ * `findToken`, `updateToken`, and `deleteTokens` keep resolving `tokens`.
+ */
+export interface AuthTokenMethods {
+  authTokens: TokenMethods;
+}
+
 export type AllMethods = UserMethods &
   SessionMethods &
   TokenMethods &
   RefreshTokenBridgeMethods &
   OpenIDRefreshFlightMethods &
+  AuthTokenMethods &
   RoleMethods &
   KeyMethods &
   FileMethods &
@@ -431,6 +441,7 @@ export function createMethods(
     ...createTokenMethods(mongoose),
     ...createRefreshTokenBridgeMethods(mongoose),
     ...createOpenIDRefreshFlightMethods(mongoose),
+    authTokens: createTokenMethods(mongoose, 'AuthToken'),
     ...roleMethods,
     ...createKeyMethods(mongoose),
     ...createFileMethods(mongoose),
