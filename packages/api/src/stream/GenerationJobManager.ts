@@ -8,8 +8,8 @@ import {
   ApprovalEvents,
   SteerEvents,
   parseTextParts,
-  reconcileContextUsage,
-  promptTokensFromUsage,
+  hasToolCallErrorPrefix,
+  reconcileContextUsageFromEvent,
 } from 'librechat-data-provider';
 import type {
   TMessageContentParts,
@@ -127,7 +127,7 @@ function completedToolExecutionStatus(call: Agents.ToolCall): ToolExecutionStatu
   }
   const output = call.output;
   return typeof output === 'string' &&
-    (/^Error:\s*(\[.*?\]\s*)*tool call failed:/i.test(output) ||
+    (hasToolCallErrorPrefix(output) ||
       /^Error processing tool(?::|$)/i.test(output) ||
       /^Error:[\s\S]*\n Please fix your mistakes\.$/i.test(output))
     ? 'error'
@@ -2904,6 +2904,7 @@ class GenerationJobManagerClass {
         agent_id: jobData.agent_id,
         // Surface whether the turn was temporary so a resume keeps it non-persisted.
         isTemporary: jobData.isTemporary,
+        retentionExpiresAt: jobData.retentionExpiresAt,
         agentEventDeliveryKey: jobData.agentEventDeliveryKey,
         agentEventInvocationKey: jobData.agentEventInvocationKey,
         agentEventInvocationGenerationCreatedAt: jobData.agentEventInvocationGenerationCreatedAt,
@@ -7713,9 +7714,14 @@ class GenerationJobManagerClass {
           snapshot != null &&
           (snapshot.runId == null || usage.runId == null || snapshot.runId === usage.runId)
         ) {
-          update.contextUsage = JSON.stringify(
-            reconcileContextUsage(snapshot, promptTokensFromUsage(usage)),
+          const { completedOutputTokens, ...reconciled } = reconcileContextUsageFromEvent(
+            snapshot,
+            usage,
           );
+          update.contextUsage = JSON.stringify({
+            ...reconciled,
+            resumedOutputTokens: completedOutputTokens,
+          });
         }
       } catch {
         /* leave the stored snapshot as-is on parse failure */

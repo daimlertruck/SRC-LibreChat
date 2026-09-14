@@ -78,6 +78,7 @@ export function createEndpointsConfigService(deps: EndpointsConfigDeps): {
         statefulCodeSessions,
         maxSubagents,
         statistics,
+        fileSharing,
       } = appConfig.endpoints[EModelEndpoint.agents];
       const toolApproval = appConfig.endpoints[EModelEndpoint.agents].toolApproval;
       /** Only advertise Accept edits when the endpoint fallback cannot force every
@@ -121,6 +122,7 @@ export function createEndpointsConfigService(deps: EndpointsConfigDeps): {
         statefulCodeSessions: clientStatefulCodeSessions,
         maxSubagents,
         statistics,
+        fileSharing,
       };
     }
 

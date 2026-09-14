@@ -1,4 +1,4 @@
-const { logger, tenantStorage } = require('@librechat/data-schemas');
+const { logger, tenantStorage, createChatExpirationDate } = require('@librechat/data-schemas');
 const { v5: uuidv5 } = require('uuid');
 const {
   Constants,
@@ -29,6 +29,8 @@ const {
   deleteAgentCheckpoint,
   getAttachmentTitleText,
   createMCPRuntimeRequestBody,
+  resolveRunCodeWorkspaces,
+  getSafeErrorText,
   isAgentEventRetentionActive,
   createAgentEventActorTurn,
   createAgentEventActorDetachedActionLifecycle,
@@ -44,6 +46,10 @@ const {
   recordAgentResponse,
   createAgentStatisticsContext,
   logAgentMemorySnapshot,
+  getCodeWorkspaceSelectionErrorDetails,
+  shouldPersistCodeWorkspaceInitializationError,
+  getFailedTurnTraceFields,
+  resolveFailedTurnContent,
 } = require('@librechat/api');
 const { disposeClient } = require('~/server/cleanup');
 const {
@@ -125,6 +131,7 @@ function getInitializationFailure(error) {
   return {
     status: candidateStatus,
     ...(typeof error?.code === 'string' ? { code: error.code } : {}),
+    ...getCodeWorkspaceSelectionErrorDetails(error),
     error: error?.message || 'Failed to start generation',
   };
 }
@@ -362,6 +369,7 @@ async function saveErrorTurn(
     errorText,
     liveUserMessage,
     liveResponseMessageId,
+    runCreated = false,
     sender,
     initialAgentId,
   },
@@ -447,8 +455,12 @@ async function saveErrorTurn(
 
     const reqCtx = {
       userId,
-      isTemporary: req?._agentEventBindingRetention?.isTemporary ?? req?.body?.isTemporary,
-      expiredAt: req?._agentEventBindingRetention?.expiredAt,
+      isTemporary:
+        req?._agentEventBindingRetention?.isTemporary ??
+        req?.resolvedConversation?.isTemporary ??
+        req?.body?.isTemporary,
+      expiredAt:
+        req?._agentEventBindingRetention?.expiredAt ?? req?.resolvedConversation?.expiredAt,
       interfaceConfig: req?.config?.interfaceConfig,
     };
     const context = 'api/server/controllers/agents/request.js - failed turn';
@@ -490,9 +502,15 @@ async function saveErrorTurn(
       }
       await recordAgentInvocation(statisticsContext, agentStatisticsMethods, logger);
     }
+    const langfuseTraceFields = await getFailedTurnTraceFields(req.config, {
+      messageId: errorMessageId,
+      runId: liveResponseMessageId,
+      runCreated,
+    });
     const savedErrorMessage = await saveMessage(
       reqCtx,
       {
+        ...langfuseTraceFields,
         messageId: errorMessageId,
         conversationId,
         parentMessageId: errorParentMessageId,
@@ -505,6 +523,7 @@ async function saveErrorTurn(
         error: true,
         unfinished: false,
         isCreatedByUser: false,
+        ...resolveFailedTurnContent(req.body, errorText),
       },
       { context },
     );
@@ -514,6 +533,7 @@ async function saveErrorTurn(
 
     const chatProjectId = endpointOption?.chatProjectId ?? req.body?.chatProjectId;
     const seedConvo = isNewConvo || req.resolvedConversation === null;
+    const codeEnvironmentDecision = req._codeEnvironmentDecision;
     const convoFields = seedConvo
       ? {
           ...(endpoint != null && { endpoint }),
@@ -525,6 +545,12 @@ async function saveErrorTurn(
           ...(endpointOption?.spec != null && { spec: endpointOption.spec }),
           ...(agentId != null && { agent_id: agentId }),
           ...(typeof chatProjectId === 'string' && chatProjectId.length > 0 && { chatProjectId }),
+          ...(codeEnvironmentDecision?.mode != null && {
+            codeEnvironmentMode: codeEnvironmentDecision.mode,
+            ...(codeEnvironmentDecision.codeWorkspaces != null && {
+              codeWorkspaces: codeEnvironmentDecision.codeWorkspaces,
+            }),
+          }),
         }
       : {};
     await saveConvo(
@@ -1533,6 +1559,12 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
   const mcpRequestBody = createMCPRuntimeRequestBody({
     messageId: preallocatedResponseMessageId,
     conversationId: effectiveConversationId,
+    codeEnvironmentMode: req.body.codeEnvironmentMode,
+    codeWorkspaces: resolveRunCodeWorkspaces({
+      conversationId: effectiveConversationId,
+      requestedSelections: req.body.codeWorkspaces,
+      conversation: req.resolvedConversation,
+    }),
     parentMessageId:
       editedContent != null ? preallocatedResponseMessageId : preallocatedUserMessageId,
   });
@@ -1637,7 +1669,24 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         agent_id: endpointOption.agent_id ?? req.body?.agent_id,
         // Persist temporary-chat state so a HITL resume keeps the resumed response
         // non-persisted instead of trusting the resume request to re-send the flag.
-        isTemporary: req._agentEventBindingRetention?.isTemporary ?? req.body?.isTemporary,
+        isTemporary:
+          req._agentEventBindingRetention?.isTemporary ??
+          req.resolvedConversation?.isTemporary ??
+          req.body?.isTemporary,
+        ...((req._agentEventBindingRetention?.expiredAt ?? req.resolvedConversation?.expiredAt) !=
+          null && {
+          retentionExpiresAt: new Date(
+            req._agentEventBindingRetention?.expiredAt ?? req.resolvedConversation.expiredAt,
+          ).toISOString(),
+        }),
+        ...((req._agentEventBindingRetention?.expiredAt ?? req.resolvedConversation?.expiredAt) ==
+          null &&
+          req.config?.interfaceConfig?.retentionMode === 'all' && {
+            retentionExpiresAt: createChatExpirationDate(
+              req.config.interfaceConfig,
+              req.resolvedConversation?.isTemporary ?? req.body?.isTemporary,
+            ).toISOString(),
+          }),
         ...(agentEventDelivery != null && {
           agentEventDeliveryKey: agentEventDelivery.deliveryKey,
           ...(internalDetachedCompletion == null
@@ -1899,8 +1948,12 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           saveMessage(
             {
               userId,
-              isTemporary: req?._agentEventBindingRetention?.isTemporary ?? req?.body?.isTemporary,
-              expiredAt: req?._agentEventBindingRetention?.expiredAt,
+              isTemporary:
+                req?._agentEventBindingRetention?.isTemporary ??
+                req?.resolvedConversation?.isTemporary ??
+                req?.body?.isTemporary,
+              expiredAt:
+                req?._agentEventBindingRetention?.expiredAt ?? req?.resolvedConversation?.expiredAt,
               interfaceConfig: req?.config?.interfaceConfig,
             },
             partialMessage,
@@ -1935,10 +1988,27 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
       signal: job.abortController.signal,
       jobCreatedAt,
       checkpointNamespace: job.metadata?.checkpointNamespace,
+      foregroundRunId: mcpRequestBody.messageId,
       requestBody: mcpRequestBody,
     });
     startupTelemetry?.mark('client_initialized');
     client = result.client;
+    const normalizedMCPRequestBody = createMCPRuntimeRequestBody({
+      messageId: mcpRequestBody.messageId,
+      conversationId: mcpRequestBody.conversationId,
+      codeEnvironmentMode: req.body.codeEnvironmentMode,
+      codeWorkspaces: req.body.codeWorkspaces,
+      ...(Object.prototype.hasOwnProperty.call(mcpRequestBody, 'parentMessageId') && {
+        parentMessageId: mcpRequestBody.parentMessageId,
+      }),
+    });
+    if (JSON.stringify(normalizedMCPRequestBody) !== JSON.stringify(mcpRequestBody)) {
+      await GenerationJobManager.updateMetadata(
+        streamId,
+        { mcpRequestBody: normalizedMCPRequestBody },
+        jobCreatedAt,
+      );
+    }
     if (
       typeof client?.options?.agent?.id === 'string' &&
       !isEphemeralAgentId(client.options.agent.id)
@@ -2683,8 +2753,12 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
                     {
                       userId,
                       isTemporary:
-                        req?._agentEventBindingRetention?.isTemporary ?? req?.body?.isTemporary,
-                      expiredAt: req?._agentEventBindingRetention?.expiredAt,
+                        req?._agentEventBindingRetention?.isTemporary ??
+                        req?.resolvedConversation?.isTemporary ??
+                        req?.body?.isTemporary,
+                      expiredAt:
+                        req?._agentEventBindingRetention?.expiredAt ??
+                        req?.resolvedConversation?.expiredAt,
                       interfaceConfig: req?.config?.interfaceConfig,
                     },
                     userMessage,
@@ -2705,8 +2779,12 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
                 {
                   userId,
                   isTemporary:
-                    req?._agentEventBindingRetention?.isTemporary ?? req?.body?.isTemporary,
-                  expiredAt: req?._agentEventBindingRetention?.expiredAt,
+                    req?._agentEventBindingRetention?.isTemporary ??
+                    req?.resolvedConversation?.isTemporary ??
+                    req?.body?.isTemporary,
+                  expiredAt:
+                    req?._agentEventBindingRetention?.expiredAt ??
+                    req?.resolvedConversation?.expiredAt,
                   interfaceConfig: req?.config?.interfaceConfig,
                 },
                 {
@@ -2884,8 +2962,12 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         // where client refetch happens before database is updated
         const reqCtx = {
           userId: req?.user?.id,
-          isTemporary: req?._agentEventBindingRetention?.isTemporary ?? req?.body?.isTemporary,
-          expiredAt: req?._agentEventBindingRetention?.expiredAt,
+          isTemporary:
+            req?._agentEventBindingRetention?.isTemporary ??
+            req?.resolvedConversation?.isTemporary ??
+            req?.body?.isTemporary,
+          expiredAt:
+            req?._agentEventBindingRetention?.expiredAt ?? req?.resolvedConversation?.expiredAt,
           interfaceConfig: req?.config?.interfaceConfig,
         };
         const terminalMemoryContext = {
@@ -3193,6 +3275,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
                     errorText: generationError,
                     liveUserMessage: userMessage,
                     liveResponseMessageId,
+                    runCreated: client?.run != null,
                     sender: client?.sender,
                     initialAgentId: verifiedInitialAgentId,
                   }),
@@ -3296,7 +3379,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         );
       });
   } catch (error) {
-    logger.error('[ResumableAgentController] Initialization error:', error);
+    logger.error(`[ResumableAgentController] Initialization error: ${getSafeErrorText(error)}`);
     const initializationFailure = getInitializationFailure(error);
     const streamStarted = res.headersSent;
     try {
@@ -3391,7 +3474,13 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
       const initializationError = initializationFailure
         ? JSON.stringify(initializationFailure)
         : error.message || 'Failed to start generation';
-      const completionPromise = streamStarted
+      const persistInitializationError = shouldPersistCodeWorkspaceInitializationError({
+        streamStarted,
+        isNewConversation: isNewConvo,
+        failureCode: initializationFailure?.code,
+        hasValidatedDecision: req._codeEnvironmentDecision != null,
+      });
+      const completionPromise = persistInitializationError
         ? GenerationJobManager.completeJob(streamId, initializationError, jobCreatedAt, {
             beforeErrorPublication: () =>
               saveErrorTurn(req, {

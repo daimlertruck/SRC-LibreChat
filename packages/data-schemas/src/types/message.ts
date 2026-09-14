@@ -88,6 +88,8 @@ export interface IMessage extends Document {
   agentMetricState?: IAgentMetricState;
   langfuseSampled?: boolean;
   langfuseDestinationIds?: string[];
+  /** The run whose trace this response reports, when that run's id is not the message's own (a failed turn's error row). */
+  langfuseRunId?: string;
   _meiliIndex?: boolean;
   files?: unknown[];
   plugin?: {
@@ -125,6 +127,8 @@ export interface IMessage extends Document {
       kind: 'manual' | 'wakeup';
       claimId: string;
       claimedAt: Date;
+      /** Response generation that owns a manual delivery claim. */
+      generationId?: string;
     };
     controlReceipts?: ISubagentTaskControlReceipt[];
   };

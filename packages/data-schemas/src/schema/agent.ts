@@ -98,6 +98,7 @@ const agentSchema: Schema<IAgent> = new Schema<IAgent>(
     code_environment_id: {
       type: String,
     },
+    code_workspace_id: { type: String },
     git_identity: {
       type: new Schema(
         {

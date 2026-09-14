@@ -1,6 +1,31 @@
 import { EModelEndpoint } from 'librechat-data-provider';
 import type { AppConfig } from '@librechat/data-schemas';
-import { mergeAccessibleCodeEnvironments } from './config';
+import {
+  isImplicitStatefulCodeRouteAvailable,
+  mergeAccessibleCodeEnvironments,
+  resolveCodeEnvironmentDecisionVersion,
+} from './config';
+
+describe('resolveCodeEnvironmentDecisionVersion', () => {
+  it('advertises the exact supported protocol version', () => {
+    expect(resolveCodeEnvironmentDecisionVersion('1')).toBe(1);
+  });
+
+  it.each([undefined, '0', '2', '1.0', 'true'])(
+    'keeps unsupported configured version %s on the legacy-safe path',
+    (version) => {
+      expect(resolveCodeEnvironmentDecisionVersion(version)).toBeUndefined();
+    },
+  );
+});
+
+describe('isImplicitStatefulCodeRouteAvailable', () => {
+  it('requires both the deployed protocol version and a non-empty managed base URL', () => {
+    expect(isImplicitStatefulCodeRouteAvailable('1', 'https://code.example/v1')).toBe(true);
+    expect(isImplicitStatefulCodeRouteAvailable(undefined, 'https://code.example/v1')).toBe(false);
+    expect(isImplicitStatefulCodeRouteAvailable('1', '  ')).toBe(false);
+  });
+});
 
 describe('mergeAccessibleCodeEnvironments', () => {
   test('adds principal environments without allowing them to shadow deployment entries', async () => {
@@ -134,6 +159,9 @@ describe('mergeAccessibleCodeEnvironments', () => {
                   permissions: {
                     commandExecution: { allowed: ['ask', 'deny'], default: 'ask' },
                   },
+                  limits: {
+                    maxCommandTimeoutMs: 120_000,
+                  },
                 },
               },
             ],
@@ -171,6 +199,9 @@ describe('mergeAccessibleCodeEnvironments', () => {
       configSchema: {
         permissions: {
           commandExecution: { allowed: ['ask', 'deny'], default: 'ask' },
+        },
+        limits: {
+          maxCommandTimeoutMs: 120_000,
         },
       },
       settings: { permissions: { commandExecution: 'deny' } },
@@ -401,6 +432,9 @@ describe('mergeAccessibleCodeEnvironments', () => {
       });
 
       const environments = result.endpoints?.agents?.statefulCodeSessions?.environments;
+      expect(environments?.find((environment) => environment.id === 'personal-vm')).toEqual(
+        expect.objectContaining({ controlPlaneId: 'self-service', baseURL: pairingOnly.baseURL }),
+      );
       expect(environments?.find((environment) => environment.id === 'self-service')?.default).toBe(
         false,
       );
