@@ -206,3 +206,44 @@ between either collection pair.
   nothing reads those two namespaces there any more. Leave `ENCODED_DOMAINS` alone. It stays on
   `logs`, it is permanent rather than TTL'd, and `domainParser` needs it to decode long
   hostnames — that asymmetry is why the ban namespaces move and it does not.
+
+## The OAuth flow window
+
+Two more settings must resolve identically between the containers, for the same reason the
+`identical` rows above must — divergence is a defect, not an accepted variant.
+
+| Setting                    | Auth surface | API container | Compare   |
+| -------------------------- | ------------ | ------------- | --------- |
+| `MCP_OAUTH_HANDLING_TIMEOUT` | any value    | same value    | identical |
+| `MCP_OAUTH_FLOW_TTL`         | any value    | same value    | identical |
+
+The `oauth_session` cookie's lifetime derives from both. It is `max(mcpConfig.OAUTH_FLOW_TTL,
+FLOWS_TTL)` — the flow window, 15 minutes at default configuration — and `mcpConfig.OAUTH_FLOW_TTL`
+is in turn computed from `MCP_OAUTH_HANDLING_TIMEOUT` and `MCP_OAUTH_FLOW_TTL`. A divergence in
+either variable gives the two containers different lifetimes for the same flow: the container that
+initiates writes the cookie with one lifetime, and the container that resolves the callback expects
+another. Set both to the same resolved value on both containers. A difference fails configuration
+verification naming the variable.
+
+## The two keys the gate holds
+
+The gate validates the four cookie-exemption patterns against two keys. Neither is a container
+environment variable, and neither container reads either at the edge — they are what the gate holds,
+recorded here so a configuration comparison accounts for them rather than treating them as
+unexplained.
+
+- **`JWT_REFRESH_SECRET`** validates the asset-pair exemptions — `/images/*` and
+  `/api/share/:shareId/files/:file_id` with its `/preview` and `/download` variants. It is the same
+  value both containers already hold (see the `JWT_SECRET`, `JWT_REFRESH_SECRET` row above),
+  additionally provisioned to the gate for cookie validation on those two patterns.
+- **The Session_Cookie_Key** validates the callback-pair exemptions —
+  `/api/mcp/:serverName/oauth/callback` and `/api/actions/:action_id/oauth/callback`. It is derived
+  by HKDF-SHA256 under the fixed info label `librechat.oauth_session.v1` and signs exactly one token
+  type, the `oauth_session` cookie.
+
+The Session_Cookie_Key is **derived deterministically** from a secret both containers already hold,
+so it is **distributed to the gate rather than generated** — no new secret is created and none is
+stored on either container. The derivation is one-way: a gate holding the derived key cannot recover
+the input secret. `JWT_SECRET` is **never provisioned to the gate**, because HS256 makes verify
+capability equal sign capability and `JWT_SECRET` signs access tokens — a gate holding it could mint
+them.
