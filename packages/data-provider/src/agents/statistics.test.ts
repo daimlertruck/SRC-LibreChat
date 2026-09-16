@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Agent, AgentCreateParams, AgentUpdateParams } from '../types/assistants';
+import type { Agent, AgentCreateParams, AgentUpdateParams } from '../types/agents';
 import { agentsEndpointSchema } from '../config';
 import {
   AGENT_STATISTICS_DEFAULT_DAYS,

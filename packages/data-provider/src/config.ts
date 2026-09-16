@@ -27,12 +27,12 @@ import {
   MAX_SUBAGENTS_CEILING,
   DEFAULT_MAX_RETAINED_TOOL_COUNT_CHARS,
 } from './limits';
+import { CODE_ENVIRONMENT_DECISION_VERSION, CODE_ENVIRONMENT_MOVE_VERSION } from './code/workspace';
 import { ComponentTypes, SettingTypes, OptionTypes } from './generate';
-import { CODE_ENVIRONMENT_DECISION_VERSION } from './code/workspace';
 import { STATEFUL_CODE_ENVIRONMENTS } from './stateful-code';
 import { specsConfigSchema, TSpecsConfig } from './models';
-import { isActionTool } from './types/assistants';
 import { fileConfigSchema } from './file-config';
+import { isActionTool } from './types/tools';
 import { apiBaseUrl } from './api-endpoints';
 import { FileSources } from './types/files';
 import { MCPServersSchema } from './mcp';
@@ -44,6 +44,7 @@ export {
   MAX_GRAPH_SUBAGENT_MEMBERS,
   MAX_CHAT_PROJECT_NAME_LENGTH,
   MAX_CHAT_PROJECT_DESCRIPTION_LENGTH,
+  DEFAULT_RETAINED_ANSWER_TOKENS,
   DEFAULT_MAX_RETAINED_TOOL_COUNT_CHARS,
 } from './limits';
 
@@ -1036,6 +1037,32 @@ export const toolApprovalPolicySchema = z
 
 export type TToolApprovalPolicy = z.infer<typeof toolApprovalPolicySchema>;
 
+export const askUserQuestionRetainedAnswersSchema = z.object({
+  /** `false` stops carrying answers forward; they then live only in the messages. */
+  enabled: z.boolean().optional(),
+  /** Token ceiling for the carried block. Older answers drop first once it is
+   *  exceeded; the newest set is always kept. Defaults to
+   *  `DEFAULT_RETAINED_ANSWER_TOKENS` (4096). */
+  maxTokens: z.number().int().positive().optional(),
+});
+
+/**
+ * Behavior of the `ask_user_question` tool beyond the admin kill switch
+ * (`filteredTools` / `includedTools`).
+ *
+ * `retainedAnswers`: every answer the user gave to an agent's question is
+ * quoted verbatim in the run's user context, so it survives after the
+ * messages that carried it were summarized, pruned or dropped from the context
+ * window. On by default.
+ */
+export const askUserQuestionConfigSchema = z
+  .object({
+    retainedAnswers: askUserQuestionRetainedAnswersSchema.optional(),
+  })
+  .optional();
+
+export type TAskUserQuestionConfig = z.infer<typeof askUserQuestionConfigSchema>;
+
 /**
  * Durable checkpointer backing human-in-the-loop resume.
  *
@@ -1267,6 +1294,13 @@ export const agentsEndpointSchema = baseEndpointSchema
               maxPerUser: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
             })
             .optional(),
+          /** Server-only policy letting a conversation's owner move its sealed attached decision
+           * onto the environments its agents now use. Omit to keep sealed decisions immovable. */
+          conversationMoves: z
+            .object({
+              enabled: z.boolean().optional(),
+            })
+            .optional(),
           /** Operator-managed execution environments. Attached entries route to a
            * Code API deployment backed by an outbound librechat-code worker. */
           environments: z
@@ -1415,6 +1449,8 @@ export const agentsEndpointSchema = baseEndpointSchema
       remoteApi: remoteApiSchema.optional(),
       /** Human-in-the-loop tool approval policy. Off by default. */
       toolApproval: toolApprovalPolicySchema,
+      /** Ask User question behavior; see {@link askUserQuestionConfigSchema}. */
+      askUserQuestion: askUserQuestionConfigSchema,
       /** Durable checkpointer backing tool-approval and Ask User resume.
        *  Defaults to the app's MongoDB when either flow needs it. */
       checkpointer: checkpointerSchema,
@@ -2222,6 +2258,9 @@ export type TStartupConfig = {
   /** Conversation-owned code-environment decision protocol supported by the API.
    * Clients must not emit selection-less decisions unless this is advertised. */
   codeEnvironmentDecisionVersion?: typeof CODE_ENVIRONMENT_DECISION_VERSION;
+  /** Owner moves of a sealed code-environment decision supported by the API. Clients must not
+   * offer to move a conversation unless this is advertised. */
+  codeEnvironmentMoveVersion?: typeof CODE_ENVIRONMENT_MOVE_VERSION;
   interface?: TInterfaceConfig;
   turnstile?: TTurnstileConfig;
   balance?: TBalanceConfig;
@@ -3203,10 +3242,9 @@ const fitlerAssistantModels = (str: string) => {
 const openAIModels = defaultModels[EModelEndpoint.openAI];
 
 /**
- * The OpenAI catalog without the models only the first-party OpenAI endpoint
- * can run. Azure OpenAI shares this list, but Astra is neither routed to the
- * Responses API nor given its request constraints there, and listing it first
- * would let it become the default selection.
+ * Preserve Azure's fallback default selection when the OpenAI catalog gains
+ * Responses-preferred models. Configured Azure deployments supply their own
+ * model list, including Astra when deployed.
  */
 const nonResponsesOnlyOpenAIModels = openAIModels.filter(
   (model) => !responsesOnlyOpenAIModels.includes(model),
@@ -4234,6 +4272,8 @@ export enum LocalStorageKeys {
   PIN_WEB_SEARCH_ = 'PIN_WEB_SEARCH_',
   /** Pin state for Code Interpreter per conversation ID */
   PIN_CODE_INTERPRETER_ = 'PIN_CODE_INTERPRETER_',
+  /** Key for the last selected code approval mode */
+  LAST_CODE_APPROVAL_MODE = 'lastCodeApprovalMode',
 }
 
 export enum ForkOptions {

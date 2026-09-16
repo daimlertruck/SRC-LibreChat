@@ -99,6 +99,54 @@ describe('AgentClient code approval persistence', () => {
     });
   });
 
+  it('never writes its run-start decision over a stored one a move replaced', () => {
+    const client = Object.create(AgentClient.prototype);
+    client.agentConfigs = new Map();
+    client.conversationId = 'convo-1';
+    client.options = {
+      endpoint: EModelEndpoint.agents,
+      agent: { id: 'attached-agent' },
+      req: {
+        body: { conversationId: 'convo-1' },
+        _codeEnvironmentDecision: {
+          mode: 'attached',
+          codeWorkspaces: [{ environmentId: 'mac', workspaceId: 'primary' }],
+        },
+        resolvedConversation: {
+          conversationId: 'convo-1',
+          codeEnvironmentMode: 'attached',
+          codeWorkspaces: [{ environmentId: 'vm', workspaceId: 'projects' }],
+        },
+        config: { endpoints: { [EModelEndpoint.agents]: {} } },
+      },
+    };
+
+    const saveOptions = client.getSaveOptions();
+    expect(saveOptions).not.toHaveProperty('codeEnvironmentMode');
+    expect(saveOptions).not.toHaveProperty('codeWorkspaces');
+  });
+
+  it('records only the mode a legacy conversation inferred', () => {
+    const client = Object.create(AgentClient.prototype);
+    client.agentConfigs = new Map();
+    client.conversationId = 'convo-1';
+    const codeWorkspaces = [{ environmentId: 'mac', workspaceId: 'primary' }];
+    client.options = {
+      endpoint: EModelEndpoint.agents,
+      agent: { id: 'attached-agent' },
+      req: {
+        body: { conversationId: 'convo-1' },
+        _codeEnvironmentDecision: { mode: 'attached', codeWorkspaces },
+        resolvedConversation: { conversationId: 'convo-1', codeWorkspaces },
+        config: { endpoints: { [EModelEndpoint.agents]: {} } },
+      },
+    };
+
+    const saveOptions = client.getSaveOptions();
+    expect(saveOptions.codeEnvironmentMode).toBe('attached');
+    expect(saveOptions).not.toHaveProperty('codeWorkspaces');
+  });
+
   it('does not combine a normalized no-attached mode with stale request selections', () => {
     const client = Object.create(AgentClient.prototype);
     client.agentConfigs = new Map();
@@ -241,7 +289,7 @@ describe('AgentClient - event actor history adapter', () => {
         contextFingerprint: fingerprint,
         skillManifest,
         discoveredToolNames: ['deferred_tool'],
-        summary: { text: 'Earlier compacted context.', tokenCount: 12 },
+        summary: { text: 'Earlier compacted context.', tokenCount: 12, version: 1 },
         contextMeta: { calibrationRatio: 1.25, encoding: 'o200k_base' },
         compactionSemanticIndex,
       }),
@@ -272,6 +320,7 @@ describe('AgentClient - event actor history adapter', () => {
     expect(client.eventActorSummary).toEqual({
       text: 'Earlier compacted context.',
       tokenCount: 12,
+      version: 1,
     });
     expect(client.contextMeta).toEqual({ calibrationRatio: 1.25, encoding: 'o200k_base' });
     expect(client.compactionSemanticIndexSnapshot).toEqual({
@@ -388,6 +437,7 @@ describe('AgentClient - event actor history adapter', () => {
         type: ContentTypes.SUMMARY,
         content: [{ type: ContentTypes.TEXT, text: 'Fresh compacted context.' }],
         tokenCount: 18,
+        boundary: { messageId: 'step_summary', contentIndex: 0 },
       },
     ];
     client.contextMeta = { calibrationRatio: 1.3, encoding: 'o200k_base' };
@@ -3454,6 +3504,7 @@ describe('AgentClient - startup telemetry', () => {
           type: ContentTypes.SUMMARY,
           content: [{ type: ContentTypes.TEXT, text: 'Fresh compacted context.' }],
           tokenCount: 18,
+          boundary: { messageId: 'step_summary', contentIndex: 0 },
         },
         { type: ContentTypes.TEXT, text: 'Done.' },
       );
@@ -3559,6 +3610,7 @@ describe('AgentClient - startup telemetry', () => {
     expect(client.eventActorSummary).toEqual({
       text: 'Fresh compacted context.',
       tokenCount: 18,
+      version: 1,
     });
     expect(client.contentParts).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ type: ContentTypes.SUMMARY })]),
@@ -5419,6 +5471,9 @@ describe('AgentClient - titleConvo', () => {
         },
       };
       mockRes = {};
+      mockAgent.deliveryRouting = jest
+        .requireActual('@librechat/api')
+        .resolveTurnDeliveryRouting({ agent: mockAgent, config: mockReq.config });
 
       client = new AgentClient({
         req: mockReq,
@@ -6653,6 +6708,71 @@ describe('AgentClient - titleConvo', () => {
           }),
         ]);
         expect(files).toEqual([currentFile]);
+      },
+    );
+
+    it.each(['current', 'history', 'history-disabled'])(
+      'resolves %s tool-routed text only for an authorized handoff without a reader',
+      async (location) => {
+        const file = {
+          ...makeUploadedFile('fallback-file', 'sales.csv', 'text/csv'),
+          text: 'handoff fallback content',
+          llmDeliveryPath: 'none',
+          metadata: { destinationChosen: false },
+        };
+        const { resolveTurnDeliveryRouting } = jest.requireActual('@librechat/api');
+        client.options.req.config.fileConfig = {
+          endpoints: {
+            default: {
+              defaultLLMDeliveryPath: { overrides: { 'text/csv': 'none' } },
+              textFallbackWithoutTools: true,
+            },
+          },
+        };
+        mockAgent.deliveryRouting = resolveTurnDeliveryRouting({
+          agent: mockAgent,
+          config: client.options.req.config,
+        });
+        mockAgent.fileConsumers = { executeCode: true, fileSearch: false };
+        const handoffAgent = {
+          id: 'handoff-agent',
+          endpoint: EModelEndpoint.openAI,
+          provider: EModelEndpoint.openAI,
+          instructions: 'Handoff instructions',
+          model_parameters: { model: 'gpt-4' },
+          tools: [],
+          deliveryRouting: mockAgent.deliveryRouting,
+          fileConsumers: { executeCode: false, fileSearch: false },
+        };
+        const isolatedAgent = { ...handoffAgent, id: 'isolated-agent' };
+        mockAgent.subagentAgentConfigs = new Map([['isolated-agent', isolatedAgent]]);
+        client.agentConfigs = new Map([['handoff-agent', handoffAgent]]);
+        client.options.resendFiles = location !== 'history-disabled';
+        client.options.attachments = location === 'current' ? [file] : [];
+        client.authorizedHistoricalFiles = new Map([[file.file_id, file]]);
+        client.message_file_map = {};
+        const messages = [
+          {
+            messageId: 'msg-1',
+            sender: 'User',
+            text: 'Read it',
+            isCreatedByUser: true,
+            ...(location !== 'current' ? { files: [{ file_id: file.file_id }] } : {}),
+          },
+        ];
+        const result = await client.buildMessages(messages, 'msg-1', {});
+        expect(JSON.stringify(result.prompt)).not.toContain(file.text);
+        expect(mockAgent.additional_instructions ?? '').not.toContain(file.text);
+        expect(isolatedAgent.additional_instructions ?? '').not.toContain(file.text);
+        if (location === 'history-disabled') {
+          expect(handoffAgent.additional_instructions ?? '').not.toContain(file.text);
+        } else {
+          expect(handoffAgent.additional_instructions).toContain(file.text);
+          expect(client.turnScopedAttachmentsByAgentId.get('handoff-agent')).toEqual([
+            { ...file, llmDeliveryPath: 'text' },
+          ]);
+        }
+        expect(file.llmDeliveryPath).toBe('none');
       },
     );
 
