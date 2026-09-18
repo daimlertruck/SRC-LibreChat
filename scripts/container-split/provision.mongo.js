@@ -2,8 +2,9 @@
 /**
  * Provision the two MongoDB credentials the auth/API container split requires.
  *
- * Run with mongosh against the LibreChat database, as a user that can manage
- * roles and users on it (`userAdmin` on this database, or `root`):
+ * Run with mongosh connected to the LibreChat database — the script reads the
+ * connected database's name to scope every privilege to it — as a user that can
+ * manage roles and users on `admin` (`userAdminAnyDatabase`, or `root`):
  *
  *   mongosh "$MONGO_ADMIN_URI" \
  *     --eval 'var AUTH_PASSWORD = "..."; var API_PASSWORD = "..."' \
@@ -22,8 +23,22 @@
  * manual ban copy that accompany these grants are in
  * `scripts/container-split/env-matrix.md`.
  *
- * Roles and users are created on the database mongosh is connected to, so each
- * container's connection string carries `authSource=<that database>`.
+ * Where the roles and users live
+ * -------------------------------
+ * Both roles and both users are created on the `admin` database, while every
+ * privilege inside them stays scoped to the LibreChat database and to named
+ * collections within it. Those are two independent things: the authentication
+ * database is where a credential is defined, and the privilege resource is what
+ * it reaches. Putting the definitions on `admin` keeps all database credentials
+ * in one place for rotation and audit, and leaves room for a role that needs a
+ * resource outside the LibreChat database — which a role defined on a
+ * non-admin database cannot express at all.
+ *
+ * The consequence for the containers is that each connection string carries
+ * `authSource=admin`, not `authSource=<the LibreChat database>`. A credential
+ * provisioned by an earlier version of this script was defined on the LibreChat
+ * database instead; re-running here does not move it, so drop the old user from
+ * that database once the containers authenticate against `admin`.
  *
  * What this provisions
  * --------------------
@@ -36,9 +51,11 @@
  *     grant reaches exactly twelve collections: read-write on `users`,
  *     `sessions`, `authtokens`, `balances`, `bans`, `groups`,
  *     `refreshtokenbridges`, and `openidrefreshflights`; read-only on `roles`,
- *     `configs`, `systemgrants`, and `banners`. Nothing else — no
- *     database-wide privilege, no pattern-based privilege, and no inherited
- *     role that could widen it.
+ *     `configs`, `systemgrants`, and `banners`. Read-write here includes
+ *     `createIndex`, because the auth surface's own request paths build
+ *     indexes on collections it writes — see `WRITE_ACTIONS` below. Nothing
+ *     else — no database-wide privilege, no pattern-based privilege, and no
+ *     inherited role that could widen it.
  *
  *   - The API container (container 2) — reachable only through the auth gate,
  *     and holding read-write access to every collection in the database.
@@ -72,7 +89,15 @@
  * narrowed by re-running rather than left in place.
  */
 
+/**
+ * The connected database is the one every privilege is scoped to. The roles and
+ * users themselves are created on `admin`, so the two names are kept separate
+ * throughout: `dbName` appears only inside privilege resources, `ADMIN_DB` only
+ * in role and user management.
+ */
 const dbName = db.getName();
+const ADMIN_DB = 'admin';
+const adminDb = db.getSiblingDB(ADMIN_DB);
 
 /**
  * Read-write for the auth surface. Every one of these is forced by a path
@@ -124,21 +149,57 @@ const AUTH_READ_ONLY = ['roles', 'configs', 'systemgrants', 'banners'];
 /**
  * Collections this feature introduces, which may not exist yet when the auth
  * surface first writes to one. It runs `MONGO_AUTO_CREATE=false`, so nothing
- * pre-creates them; the collection materializes from the first insert or
- * upsert, and implicit creation needs `createCollection` on that collection.
- *
- * `createIndex` is deliberately absent. The auth surface runs
- * `MONGO_AUTO_INDEX=false`, and the `authtokens` TTL index on `expiresAt` is
- * built by the API container when the model registers, or provisioned out of
- * band alongside the rest of the index set in deployments that disable
- * autoIndex everywhere.
+ * pre-creates them and the collection materializes from the first insert or
+ * upsert. MongoDB's `createCollection` action governs the explicit
+ * `db.createCollection()` call rather than implicit creation, which `insert`
+ * alone permits, so this list is not what makes the first write land. It is
+ * here for the deployment that leaves `MONGO_AUTO_CREATE` on, where Mongoose
+ * does issue an explicit `createCollection` at model registration.
  */
 const IMPLICITLY_CREATED = ['authtokens', 'bans'];
 
 /** Collection-scoped read actions. Nothing here applies at database scope. */
 const READ_ACTIONS = ['find', 'listIndexes', 'collStats', 'planCacheRead', 'changeStream'];
 
-const WRITE_ACTIONS = ['insert', 'update', 'remove'];
+/**
+ * `createIndex` is granted on every read-write collection, not on the subset
+ * known to need it today.
+ *
+ * `MONGO_AUTO_INDEX=false` suppresses Mongoose's automatic build at model
+ * registration. It does not suppress an explicit `Model.createIndexes()`, and
+ * several method layers in `@librechat/data-schemas` issue exactly that,
+ * memoized per process, before their first write:
+ *
+ *   - `sessions` — `createSession` and `upsertSession`, so every login
+ *   - `refreshtokenbridges` — `storeRefreshTokenBridge`, on `/api/auth/refresh`
+ *   - `openidrefreshflights` — `acquireOpenIDRefreshFlight` on the refresh path
+ *     and `revokeOpenIDRefreshFlight` on `/api/auth/logout`
+ *
+ * All three sit on paths routed to the auth surface, so it is the container
+ * that indexes those collections. That is deliberate: indexing before the
+ * first write is what keeps these collections out of the first-boot ordering
+ * window that `authtokens` has, where documents can land before the TTL index
+ * exists. Requirement 8.34 states it as the intended arrangement.
+ *
+ * Three details make a narrower grant fail rather than degrade. Authorization
+ * is checked before the server decides a build is a no-op, so an
+ * already-indexed collection is refused identically. The memo is per process,
+ * so every worker issues the build on its first write, not once per
+ * deployment. And `createIndexesWithRetry` treats an authorization error as
+ * non-retryable, so it throws on the first attempt out of a live auth path.
+ *
+ * Granting the action across all eight keeps the grant correct when another
+ * method layer adopts the same pattern, which is a change no one would think
+ * to re-provision for. The alternative fails closed on login or refresh, in
+ * production, with nothing in the diff pointing here. The action's reach is
+ * narrow by comparison: it builds indexes on eight collections this credential
+ * can already write, it cannot drop an index (`dropIndex` is not granted), and
+ * the indexes built are the ones the shared schema declares.
+ *
+ * As a side effect this also covers the first write to a collection that does
+ * not exist yet, since `createIndex` on a missing collection creates it.
+ */
+const WRITE_ACTIONS = ['insert', 'update', 'remove', 'createIndex'];
 
 const CREATE_ACTIONS = ['createCollection'];
 
@@ -173,8 +234,24 @@ const authPrivileges = AUTH_READ_WRITE.map(readWritePrivilege).concat(
  * every collection in the database and defeat the whole point of the grant.
  * A collection listed in both modes would do the same, since privileges union
  * rather than override.
+ *
+ * Connecting to `admin` and running this is the third way to get a wrong
+ * grant, and the most plausible one now that the roles and users are created
+ * there: `dbName` would resolve to `admin`, and the privileges would name
+ * collections on the credential database rather than on LibreChat's.
  */
 const assertGrantIsScoped = function (privileges) {
+  if (dbName === ADMIN_DB) {
+    throw new Error(
+      'Refusing to provision: connect to the LibreChat database, not ' +
+        ADMIN_DB +
+        '. Privileges are scoped to the connected database; the roles and users are ' +
+        'created on ' +
+        ADMIN_DB +
+        ' regardless of where this runs from.',
+    );
+  }
+
   const unscoped = privileges.filter(function (privilege) {
     return !privilege.resource.collection || privilege.resource.db !== dbName;
   });
@@ -199,6 +276,33 @@ const assertGrantIsScoped = function (privileges) {
   if (privileges.length !== AUTH_READ_WRITE.length + AUTH_READ_ONLY.length) {
     throw new Error('Refusing to provision: privilege count does not match the collection lists');
   }
+
+  /**
+   * `createIndex` is granted broadly across the read-write list, so the guard
+   * that keeps it from reaching the read-only list has to be explicit: a
+   * collection moved from one list to the other must lose every mutating
+   * action, and `createIndex` is the one most easily left behind.
+   */
+  const mutating = WRITE_ACTIONS.concat(CREATE_ACTIONS);
+  const writableReadOnly = privileges.filter(function (privilege) {
+    if (AUTH_READ_ONLY.indexOf(privilege.resource.collection) === -1) {
+      return false;
+    }
+    return privilege.actions.some(function (action) {
+      return mutating.indexOf(action) !== -1;
+    });
+  });
+  if (writableReadOnly.length !== 0) {
+    throw new Error(
+      'Refusing to provision: ' +
+        writableReadOnly
+          .map(function (privilege) {
+            return privilege.resource.collection;
+          })
+          .join(', ') +
+        ' is read-only but carries a mutating action',
+    );
+  }
 };
 
 const authRoleName =
@@ -215,8 +319,9 @@ const dryRun = typeof DRY_RUN !== 'undefined' && DRY_RUN === true;
 
 print('');
 print('LibreChat container grant provisioning');
-print('  database: ' + dbName);
-print('  mode:     ' + (dryRun ? 'DRY RUN (no writes)' : 'apply'));
+print('  privileges scoped to: ' + dbName);
+print('  roles and users on:   ' + ADMIN_DB + ' (each container uses authSource=' + ADMIN_DB + ')');
+print('  mode:                 ' + (dryRun ? 'DRY RUN (no writes)' : 'apply'));
 print('');
 
 assertGrantIsScoped(authPrivileges);
@@ -225,7 +330,8 @@ print('Auth surface (container 1) — role ' + authRoleName + ', user ' + authUs
 print('  read-write: ' + AUTH_READ_WRITE.join(', '));
 print('  read-only:  ' + AUTH_READ_ONLY.join(', '));
 print('  reaches nothing else: no database-wide or pattern-based privilege, no inherited role');
-print('  implicit creation permitted on: ' + IMPLICITLY_CREATED.join(', '));
+print('  index creation permitted on every read-write collection above, and on no other');
+print('  explicit collection creation permitted on: ' + IMPLICITLY_CREATED.join(', '));
 print('');
 print('API container (container 2) — role ' + apiRoleName + ', user ' + apiUserName);
 print('  read-write: every collection on ' + dbName + ' (inherits built-in readWrite)');
@@ -253,35 +359,43 @@ if (dryRun) {
   }
 
   /**
+   * Created on `admin`, with privileges that name the LibreChat database.
+   *
    * `updateRole` replaces the fields it is given rather than merging them, so
    * passing both `privileges` and `roles` recomputes the grant from the lists
    * above and drops anything a previous run left behind.
    */
   const applyRole = function (name, privileges, inherited) {
     const definition = { privileges: privileges, roles: inherited };
-    if (db.getRole(name) !== null) {
-      db.updateRole(name, definition);
-      print('  role ' + name + ': recomputed');
+    if (adminDb.getRole(name) !== null) {
+      adminDb.updateRole(name, definition);
+      print('  role ' + ADMIN_DB + '.' + name + ': recomputed');
       return;
     }
-    db.createRole({
+    adminDb.createRole({
       role: name,
       privileges: privileges,
       roles: inherited,
     });
-    print('  role ' + name + ': created');
+    print('  role ' + ADMIN_DB + '.' + name + ': created');
   };
 
-  /** `updateUser` replaces the role array, narrowing a previously broader user. */
+  /**
+   * Created on `admin`, which is therefore each container's `authSource`. The
+   * role reference names `admin` too, since that is where `applyRole` defined
+   * it — a `db` of the LibreChat database here would not resolve.
+   *
+   * `updateUser` replaces the role array, narrowing a previously broader user.
+   */
   const applyUser = function (name, password, roleName) {
-    const grant = [{ role: roleName, db: dbName }];
-    if (db.getUser(name) !== null) {
-      db.updateUser(name, { pwd: password, roles: grant });
-      print('  user ' + name + ': password and roles replaced');
+    const grant = [{ role: roleName, db: ADMIN_DB }];
+    if (adminDb.getUser(name) !== null) {
+      adminDb.updateUser(name, { pwd: password, roles: grant });
+      print('  user ' + ADMIN_DB + '.' + name + ': password and roles replaced');
       return;
     }
-    db.createUser({ user: name, pwd: password, roles: grant });
-    print('  user ' + name + ': created');
+    adminDb.createUser({ user: name, pwd: password, roles: grant });
+    print('  user ' + ADMIN_DB + '.' + name + ': created');
   };
 
   print('Provisioning...');
@@ -293,17 +407,35 @@ if (dryRun) {
   print('');
   print('Done.');
   print('');
-  print('Give each container its own credential, and only its own:');
+  print('Give each container its own credential, and only its own.');
+  print('Both users live on ' + ADMIN_DB + ', so both connection strings authenticate there');
+  print('while addressing ' + dbName + ' as the default database:');
   print(
-    '  container 1: mongodb://' + authUserName + ':<pw>@<host>/' + dbName + '?authSource=' + dbName,
+    '  container 1: mongodb://' +
+      authUserName +
+      ':<pw>@<host>/' +
+      dbName +
+      '?authSource=' +
+      ADMIN_DB,
   );
   print(
-    '  container 2: mongodb://' + apiUserName + ':<pw>@<host>/' + dbName + '?authSource=' + dbName,
+    '  container 2: mongodb://' +
+      apiUserName +
+      ':<pw>@<host>/' +
+      dbName +
+      '?authSource=' +
+      ADMIN_DB,
   );
   print('');
-  print('Verify with:');
-  print("  db.getRole('" + authRoleName + "', { showPrivileges: true })");
-  print("  db.getUser('" + authUserName + "')");
+  print('Verify with, from any connected database:');
+  print(
+    "  db.getSiblingDB('" +
+      ADMIN_DB +
+      "').getRole('" +
+      authRoleName +
+      "', { showPrivileges: true })",
+  );
+  print("  db.getSiblingDB('" + ADMIN_DB + "').getUser('" + authUserName + "')");
   print('');
   print('Then boot each container against its own credential and confirm zero authorization');
   print('errors across its startup logs before any request-level verification.');

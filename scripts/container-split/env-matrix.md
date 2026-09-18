@@ -7,7 +7,7 @@ between the two containers.
 - **Container 1, the auth surface.** Internet-facing. Serves login, registration, 2FA,
   password reset, email verification, the admin login and OAuth paths, `/api/config`,
   `/api/banner`, and the SPA. Runs under the auth-surface credential from the provisioning
-  script, which reaches ten collections.
+  script, which reaches twelve collections.
 - **Container 2, the API container.** Reachable only through the auth gate. Serves every
   remaining path. Runs under the API credential, which reaches the whole database.
 
@@ -36,7 +36,7 @@ variant to accept.
 | `MONGO_AUTO_CREATE`                   | `false`                 | may stay on     | differs    |
 | `SEARCH`                              | `false` or absent       | `true` if used  | differs    |
 | `MEILI_HOST`, `MEILI_MASTER_KEY`      | absent; inert if set    | set if used     | differs    |
-| `MONGO_URI`                           | auth-surface credential | API credential  | differs    |
+| `MONGO_URI` (`authSource=admin`)      | auth-surface credential | API credential  | differs    |
 | `RAG_API_URL`                         | not needed              | set as today    | may differ |
 | `ALLOW_SHARED_LINKS_PUBLIC`           | absent or false         | absent or false | identical  |
 | `FORCED_IN_MEMORY_CACHE_NAMESPACES`   | absent                  | absent          | identical  |
@@ -57,11 +57,21 @@ perform it. Environment validation, readiness signalling, and the SPA `index.htm
 the normal path. Unset on the API container, which owns that work.
 
 **`MONGO_AUTO_INDEX`** and **`MONGO_AUTO_CREATE`** are `false` on the auth surface because index
-creation and collection creation are writes, and its boot issues none. `bans` and `authtokens`
-still materialize on first write — the provisioned grant permits `createCollection` on exactly
-those two. Both may stay on for the API container, whose autoIndex is what builds the
-`authtokens` TTL index on `expiresAt` alongside every other index in the schema set. That is a
-deliberate trade: broader write reach than strictly needed, on the better-protected container.
+creation and collection creation are writes, and its **boot** issues none. `bans` and `authtokens`
+still materialize on first write. Both may stay on for the API container, whose autoIndex is what
+builds the `authtokens` TTL index on `expiresAt` alongside every other index in the schema set.
+That is a deliberate trade: broader write reach than strictly needed, on the better-protected
+container.
+
+`MONGO_AUTO_INDEX=false` is a statement about boot, not about the process. It suppresses
+Mongoose's automatic build at model registration and leaves an explicit `Model.createIndexes()`
+untouched, and three method layers the auth surface reaches on request issue exactly that before
+their first write: `sessions` on every login, `refreshtokenbridges` on `/api/auth/refresh`, and
+`openidrefreshflights` on the refresh and logout paths. So the auth surface is the container that
+indexes those collections, by design — indexing before the first write is what keeps them out of
+the first-boot ordering window described for `authtokens` in the design document. The provisioned
+grant therefore permits `createIndex` on all eight of its read-write collections, and on nothing
+else. Do not read `MONGO_AUTO_INDEX=false` as meaning the auth surface builds no indexes.
 
 **Search and MeiliSearch.** With search enabled, `indexSync()` reads all of `conversations` and
 `messages` at boot, both outside the auth surface's grant — so disabling it there is a
@@ -88,8 +98,17 @@ any document is ever saved. Absent remains the recommendation on the auth surfac
 recorded here rather than omitted so a configuration comparison accounts for them instead of
 treating them as unexplained.
 
-**`MONGO_URI`** carries a different credential per container. Two distinct credentials, each
-used by exactly one container. See the provisioning script.
+**`MONGO_URI`** carries `authSource=admin` on both containers. The provisioning script defines
+both roles and both users on the `admin` database while scoping every privilege to the LibreChat
+database, so `admin` is where each credential authenticates and the LibreChat database is only
+what it reaches. Point the URI's default database at the LibreChat database as before and let
+`authSource` name `admin`; a URI that omits `authSource` authenticates against the default
+database and fails. If a credential was provisioned by an earlier revision of the script it was
+defined on the LibreChat database instead — re-running does not move it, so drop the stale user
+from that database once both containers authenticate against `admin`.
+
+Beyond that, `MONGO_URI` carries a different credential per container. Two distinct
+credentials, each used by exactly one container. See the provisioning script.
 
 **`RAG_API_URL`** backs file upload and file search, both API-container paths. No path routed
 to the auth surface uses RAG, and its boot-time health probe there is suppressed by
