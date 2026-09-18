@@ -35,7 +35,7 @@ variant to accept.
 | `MONGO_AUTO_INDEX`                    | `false`                 | may stay on     | differs    |
 | `MONGO_AUTO_CREATE`                   | `false`                 | may stay on     | differs    |
 | `SEARCH`                              | `false` or absent       | `true` if used  | differs    |
-| `MEILI_HOST`, `MEILI_MASTER_KEY`      | absent                  | set if used     | differs    |
+| `MEILI_HOST`, `MEILI_MASTER_KEY`      | absent; inert if set    | set if used     | differs    |
 | `MONGO_URI`                           | auth-surface credential | API credential  | differs    |
 | `RAG_API_URL`                         | not needed              | set as today    | may differ |
 | `ALLOW_SHARED_LINKS_PUBLIC`           | absent or false         | absent or false | identical  |
@@ -51,10 +51,10 @@ variant to accept.
 
 **`DISABLE_STARTUP_TASKS`** suppresses the deployment-wide bootstrap work — seeding, permission
 derivation from `librechat.yaml`, migration checks, the orphaned-preview and expired-file
-sweeps, deployment and GitHub skill sync, MCP initialization, OAuth reconnect, and the RAG
-health probe — so the auth surface boots clean under a credential that cannot perform it.
-Environment validation, readiness signalling, and the SPA `index.html` read stay on the normal
-path. Unset on the API container, which owns that work.
+sweeps, deployment and GitHub skill sync, MCP initialization, OAuth reconnect, the RAG health
+probe, and search indexing — so the auth surface boots clean under a credential that cannot
+perform it. Environment validation, readiness signalling, and the SPA `index.html` read stay on
+the normal path. Unset on the API container, which owns that work.
 
 **`MONGO_AUTO_INDEX`** and **`MONGO_AUTO_CREATE`** are `false` on the auth surface because index
 creation and collection creation are writes, and its boot issues none. `bans` and `authtokens`
@@ -65,9 +65,28 @@ deliberate trade: broader write reach than strictly needed, on the better-protec
 
 **Search and MeiliSearch.** With search enabled, `indexSync()` reads all of `conversations` and
 `messages` at boot, both outside the auth surface's grant — so disabling it there is a
-clean-boot requirement, not a performance preference. MeiliSearch is provisioned for the API
-container and for no other container. `MEILI_NO_SYNC` is not a substitute for `SEARCH=false`:
-it suppresses the sync while leaving search enabled.
+clean-boot requirement, not a performance preference. The startup task gate suppresses that
+sync independently of `SEARCH`: `indexSync()` returns before doing any work when
+`DISABLE_STARTUP_TASKS` is set, whatever `SEARCH` resolves to, which makes `SEARCH=false`
+redundant for boot-time reads. It stays required anyway, and search stays recorded as disabled
+on the auth surface here. The two guards are independent and both apply — the gate backs the
+configuration control rather than retiring it, so a container that loses the flag is still
+covered. MeiliSearch is provisioned for the API container and for no other container.
+`MEILI_NO_SYNC` is not a substitute for `SEARCH=false`: it suppresses the sync while leaving
+search enabled.
+
+**`MEILI_HOST` and `MEILI_MASTER_KEY`** are inert on the auth surface **by suppression, not by
+nature**. Their presence is what attaches the search plugin: the attach condition in the
+conversations and messages model factories tests those two variables and nothing else, so
+neither `SEARCH` nor `indexSync()`'s guard reaches it. The plugin's index-provisioning block
+then issues outbound MeiliSearch calls at model registration — an index-info read, an index
+creation with its task wait, and a settings write making `user` filterable — once per schema
+the plugin is attached to. The startup task gate is what stops that block, and nothing else
+does. They are **not** inert because the plugin's document-save hooks fire only on save: that
+is true of the hooks and says nothing about the provisioning block, which runs whether or not
+any document is ever saved. Absent remains the recommendation on the auth surface; they are
+recorded here rather than omitted so a configuration comparison accounts for them instead of
+treating them as unexplained.
 
 **`MONGO_URI`** carries a different credential per container. Two distinct credentials, each
 used by exactly one container. See the provisioning script.

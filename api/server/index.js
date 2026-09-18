@@ -174,11 +174,17 @@ const startServer = async () => {
    * sync, MCP initialization, the OAuth reconnect manager, deployment-plugin initialization
    * and its hook registration, subagent task routing configuration, the code-environment
    * lifecycle reconciler, the agent-trigger service, schedule-engine arming (with its
-   * expired-approval callback), the RAG health probe, and the credential-database check.
-   * The RAG health probe and the credential-database check are the two members of that set
-   * not gated at this site — both are gated inside `performStartupChecks`
+   * expired-approval callback), the RAG health probe, the credential-database check, the
+   * search index sync, and the search plugin's index-provisioning block.
+   * Four members of that set are not gated at this site. The RAG health probe and the
+   * credential-database check are gated inside `performStartupChecks`
    * (`packages/api/src/app/checks.ts`), which otherwise runs its environment and
-   * configuration validation on every container regardless of the flag.
+   * configuration validation on every container regardless of the flag. The search index
+   * sync is gated inside `indexSync()` (`api/db/indexSync.js`), beside its existing `SEARCH`
+   * guard, so both entrypoints inherit the suppression from one place. The plugin's
+   * index-provisioning block is gated inside
+   * `packages/data-schemas/src/models/plugins/mongoMeili.ts`, because it runs when the plugin
+   * is attached to a schema during model registration rather than at a call made here.
    * Readiness signalling, `appConfig` resolution, `index.html` loading, file-storage
    * initialization, and every request path stay on the normal path in both flag states. */
   const startupTasksDisabled = areStartupTasksDisabled();

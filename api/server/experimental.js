@@ -462,15 +462,21 @@ if (cluster.isMaster) {
      * seeding, interface-permission derivation from `librechat.yaml`, migration checks, the
      * orphaned-preview sweep, the expired-file sweep, GitHub skill sync, subagent task
      * routing configuration, the code-environment lifecycle reconciler, MCP initialization,
-     * the OAuth reconnect manager, the agent-trigger service, the RAG health probe, and the
-     * credential-database check. This set differs from `index.js`: this clustered entrypoint
+     * the OAuth reconnect manager, the agent-trigger service, the RAG health probe, the
+     * credential-database check, the search index sync, and the search plugin's
+     * index-provisioning block. This set differs from `index.js`: this clustered entrypoint
      * arms no schedule engine (it runs the erasure-only schedule sweep unconditionally, so
      * no schedule-engine arming or expired-approval callback is gated here), and it has no
-     * deployment-plugin or deployment-skill initialization to gate. The RAG health probe and
-     * the credential-database check are the two members of the set not gated at this site —
-     * both are gated inside `performStartupChecks` (`packages/api/src/app/checks.ts`), which
-     * otherwise runs its environment and configuration validation on every container
-     * regardless of the flag. Readiness signalling, `index.html` loading, file-storage
+     * deployment-plugin or deployment-skill initialization to gate. Four members of the set
+     * are not gated at this site. The RAG health probe and the credential-database check are
+     * gated inside `performStartupChecks` (`packages/api/src/app/checks.ts`), which otherwise
+     * runs its environment and configuration validation on every container regardless of the
+     * flag. The search index sync is gated inside `indexSync()` (`api/db/indexSync.js`),
+     * beside its existing `SEARCH` guard, so both entrypoints inherit the suppression from
+     * one place. The plugin's index-provisioning block is gated inside
+     * `packages/data-schemas/src/models/plugins/mongoMeili.ts`, because it runs when the
+     * plugin is attached to a schema during model registration rather than at a call made
+     * here. Readiness signalling, `index.html` loading, file-storage
      * initialization, and every request path stay on the normal path in both flag states. */
     const startupTasksDisabled = areStartupTasksDisabled();
 

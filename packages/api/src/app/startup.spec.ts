@@ -50,6 +50,7 @@ describe('startupTasksDisabledWarning', () => {
     expect(startupTasksDisabledWarning).toMatch(/migration checks/i);
     expect(startupTasksDisabledWarning).toMatch(/file sweeps/i);
     expect(startupTasksDisabledWarning).toMatch(/skill sync/i);
+    expect(startupTasksDisabledWarning).toMatch(/search indexing/i);
     expect(startupTasksDisabledWarning).toMatch(/MCP initialization/i);
   });
 
