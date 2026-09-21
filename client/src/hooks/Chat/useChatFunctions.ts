@@ -1,4 +1,5 @@
 import { v4 } from 'uuid';
+import { useStore } from 'jotai';
 import { cloneDeep } from 'lodash';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -40,7 +41,9 @@ import useFocusRegeneratedResponse from '~/hooks/Chat/useFocusRegeneratedRespons
 import useGetConversation from '~/hooks/Conversations/useGetConversation';
 import useCodeApprovalMode from '~/hooks/Agents/useCodeApprovalMode';
 import useSetFilesToDelete from '~/hooks/Files/useSetFilesToDelete';
+import useCodeWorkspace from '~/hooks/Agents/useCodeWorkspace';
 import useGetSender from '~/hooks/Conversations/useGetSender';
+import { revealedQueuedTurnFamily } from '~/store/steer';
 import store, { useGetEphemeralAgent } from '~/store';
 import { startupConfigKey } from '~/data-provider';
 import useUserKey from '~/hooks/Input/useUserKey';
@@ -226,12 +229,14 @@ export default function useChatFunctions({
   const setSubmissionStart = useSetRecoilState(store.submissionStartFamily(index));
   const setShowStopButton = useSetRecoilState(store.showStopButtonByIndex(index));
   const focusRegeneratedResponse = useFocusRegeneratedResponse();
+  const jotaiStore = useStore();
   const getConversation = useGetConversation(index);
   const addedConversation = useRecoilValue(store.conversationByKeySelector(1));
   const { modes: codeApprovalModes, selected: fallbackCodeApprovalMode } = useCodeApprovalMode(
     immutableConversation,
     addedConversation,
   );
+  const codeWorkspaceState = useCodeWorkspace(immutableConversation, addedConversation);
 
   /**
    * Atomically read + reset the per-conversation queue of manually-invoked
@@ -318,6 +323,8 @@ export default function useChatFunctions({
     const regenerateShaped = isRegenerate || compact;
     if (
       !!isSubmitting ||
+      jotaiStore.get(revealedQueuedTurnFamily(immutableConversation?.conversationId ?? '')) !=
+        null ||
       (!regenerateShaped && !isSubmittableMessage(text, (files?.size ?? 0) + replayFileCount))
     ) {
       return false;
@@ -329,6 +336,18 @@ export default function useChatFunctions({
       latestCodeApprovalMode != null && codeApprovalModes.includes(latestCodeApprovalMode)
         ? latestCodeApprovalMode
         : fallbackCodeApprovalMode;
+    const latestCodeWorkspaces = getConversation()?.codeWorkspaces ?? conversation?.codeWorkspaces;
+    const latestCodeEnvironmentMode =
+      getConversation()?.codeEnvironmentMode ?? conversation?.codeEnvironmentMode;
+    const workspaceSubmission = codeWorkspaceState.resolveSubmission(
+      latestCodeWorkspaces,
+      latestCodeEnvironmentMode,
+    );
+    if (workspaceSubmission == null) {
+      logger.warn('[useChatFunctions] Refusing to send without an available code workspace');
+      return false;
+    }
+    const { codeEnvironmentMode, codeWorkspaces } = workspaceSubmission;
 
     const endpoint = conversation?.endpoint;
     if (endpoint === null) {
@@ -518,7 +537,11 @@ export default function useChatFunctions({
         endpoint,
         endpointType,
         overrideConvoId,
-        overrideUserMessageId,
+        overrideUserMessageId:
+          overrideUserMessageId ??
+          (endpoint === EModelEndpoint.agents && !regenerateShaped && !isContinued
+            ? `${intermediateId}${Constants.COMMON_DIVIDER}0`
+            : undefined),
       },
       convo,
       chatProjectId ? { chatProjectId } : {},
@@ -593,6 +616,7 @@ export default function useChatFunctions({
         filepath: file.filepath,
         filename: file.filename,
         type: file.type ?? '', // Ensure type is not undefined
+        llmDeliveryPath: file.llmDeliveryPath,
         height: file.height,
         width: file.width,
       }));
@@ -634,6 +658,7 @@ export default function useChatFunctions({
       model: convo?.model,
       error: false,
       iconURL,
+      clientQueueParentMessageId: regenerateShaped ? (messageId ?? undefined) : intermediateId,
       /**
        * Seed the assistant placeholder with the turn's manually-invoked
        * skill names so `ContentParts` can render interim `SkillCall` cards
@@ -721,6 +746,7 @@ export default function useChatFunctions({
       conversation: {
         ...conversation,
         ...(chatProjectId ? { chatProjectId } : {}),
+        ...(latestCodeApprovalMode != null ? { codeApprovalMode: latestCodeApprovalMode } : {}),
         conversationId,
       },
       endpointOption,
@@ -743,6 +769,8 @@ export default function useChatFunctions({
       addedConvo,
       manualSkills: manualSkills.length > 0 ? manualSkills : undefined,
       codeApprovalMode,
+      codeEnvironmentMode,
+      codeWorkspaces,
       clientRequestId,
       recoverySteerId: overrideRecoverySteerId,
       expectedPredecessorCreatedAt: overrideExpectedPredecessorCreatedAt,

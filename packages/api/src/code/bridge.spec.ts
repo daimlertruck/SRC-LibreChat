@@ -5,6 +5,40 @@ import {
 } from './bridge';
 
 describe('getCodeBridgeWorkerStatus', () => {
+  test('accepts the maximum declared environment metadata population', async () => {
+    const workspaces = Array.from({ length: 32 }, (_, index) => ({
+      id: `root-${index}`,
+      name: 'n'.repeat(128),
+      environment: {
+        fingerprint: 'a'.repeat(64),
+        repo: `a/${'b'.repeat(254)}`,
+        ref: '\t'.repeat(255) + 'x',
+        actions: Array.from({ length: 32 }, (_, action) => `${action}${'a'.repeat(62)}`),
+      },
+    }));
+    const payload = {
+      protocolVersion: 1,
+      workerId: 'personal-vm',
+      online: true,
+      ready: true,
+      leaseExpiresInMs: 45000,
+      capabilities: {
+        statefulWorkspace: false,
+        sandboxProfile: 'native-srt',
+        runtimes: [],
+        workspaceTools: { protocolVersion: 1, operations: ['execute_command'], workspaces },
+      },
+    };
+    expect(Buffer.byteLength(JSON.stringify(payload))).toBeGreaterThan(64 * 1024);
+    await expect(
+      getCodeBridgeWorkerStatus({
+        baseURL: 'https://code.example.com/v1',
+        token: 'token',
+        workerId: 'personal-vm',
+        fetchImpl: jest.fn().mockResolvedValue(Response.json(payload)),
+      }),
+    ).resolves.toMatchObject({ status: 'ready', workspaces });
+  });
   test('normalizes a ready worker while exposing only bounded capability metadata', async () => {
     const fetchImpl = jest.fn().mockResolvedValue(
       new Response(
@@ -18,7 +52,14 @@ describe('getCodeBridgeWorkerStatus', () => {
             statefulWorkspace: true,
             sandboxProfile: 'native-srt',
             runtimes: ['bash'],
-            workspaceTools: { operations: ['read_file', 'execute_command'] },
+            workspaceTools: {
+              protocolVersion: 1,
+              operations: ['read_file', 'execute_command'],
+              workspaces: [
+                { id: 'project-a', name: 'Project A' },
+                { id: 'docs', operations: ['read_file'] },
+              ],
+            },
             identityId: 'must-not-cross-the-boundary',
           },
           binding: { tenantId: 'tenant-1', principal: { type: 'user', id: 'user-1' } },
@@ -35,10 +76,15 @@ describe('getCodeBridgeWorkerStatus', () => {
       }),
     ).resolves.toEqual({
       status: 'ready',
+      statefulWorkspace: true,
       leaseExpiresInMs: 45_000,
       sandboxProfile: 'native-srt',
       runtimes: ['bash'],
       operations: ['read_file', 'execute_command'],
+      workspaces: [
+        { id: 'project-a', name: 'Project A' },
+        { id: 'docs', operations: ['read_file'] },
+      ],
     });
     expect(fetchImpl).toHaveBeenCalledWith(
       'https://code.example.com/v1/bridge/workers/personal-vm/status',
@@ -47,6 +93,42 @@ describe('getCodeBridgeWorkerStatus', () => {
         redirect: 'error',
       }),
     );
+  });
+
+  test('keeps legacy worker status readable without inventing a primary workspace', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          protocolVersion: 1,
+          workerId: 'personal-vm',
+          online: true,
+          ready: true,
+          leaseExpiresInMs: 45_000,
+          capabilities: {
+            statefulWorkspace: true,
+            sandboxProfile: 'native-srt',
+            runtimes: ['bash'],
+            workspaceTools: { operations: ['read_file', 'execute_command'] },
+          },
+        }),
+      ),
+    );
+
+    await expect(
+      getCodeBridgeWorkerStatus({
+        baseURL: 'https://code.example.com/v1',
+        token: 'administrator-token',
+        workerId: 'personal-vm',
+        fetchImpl,
+      }),
+    ).resolves.toEqual({
+      status: 'ready',
+      statefulWorkspace: true,
+      leaseExpiresInMs: 45_000,
+      sandboxProfile: 'native-srt',
+      runtimes: ['bash'],
+      operations: ['read_file', 'execute_command'],
+    });
   });
 
   test.each([
@@ -58,6 +140,51 @@ describe('getCodeBridgeWorkerStatus', () => {
       online: true,
       ready: true,
       capabilities: { sandboxProfile: 'native-srt', runtimes: Array(33).fill('bash') },
+    },
+    {
+      online: true,
+      ready: true,
+      leaseExpiresInMs: 5_000,
+      capabilities: {
+        statefulWorkspace: true,
+        sandboxProfile: 'native-srt',
+        runtimes: ['bash'],
+        workspaceTools: {
+          protocolVersion: 1,
+          operations: ['read_file'],
+          workspaces: [{ id: '../escape' }],
+        },
+      },
+    },
+    {
+      online: true,
+      ready: true,
+      leaseExpiresInMs: 5_000,
+      capabilities: {
+        statefulWorkspace: true,
+        sandboxProfile: 'native-srt',
+        runtimes: ['bash'],
+        workspaceTools: {
+          protocolVersion: 1,
+          operations: ['read_file'],
+          workspaces: [{ id: 'project-a', operations: ['execute_command'] }],
+        },
+      },
+    },
+    {
+      online: true,
+      ready: true,
+      leaseExpiresInMs: 5_000,
+      capabilities: {
+        statefulWorkspace: true,
+        sandboxProfile: 'native-srt',
+        runtimes: ['bash'],
+        workspaceTools: {
+          protocolVersion: 1,
+          operations: ['read_file'],
+          workspaces: [{ id: 'project-a', operations: null }],
+        },
+      },
     },
   ])('rejects an invalid upstream status response: %p', async (invalid) => {
     const fetchImpl = jest
@@ -78,10 +205,10 @@ describe('getCodeBridgeWorkerStatus', () => {
     );
   });
 
-  test('rejects an upstream response before buffering more than 64 KiB', async () => {
+  test('rejects an upstream response before buffering more than 256 KiB', async () => {
     const fetchImpl = jest
       .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ ignored: 'x'.repeat(65 * 1024) })));
+      .mockResolvedValue(new Response(JSON.stringify({ ignored: 'x'.repeat(257 * 1024) })));
 
     await expect(
       getCodeBridgeWorkerStatus({

@@ -14,6 +14,7 @@ import type {
   IAgentEventActorSuspensionEvidence,
   IChatProject,
   IConversation,
+  AppConfig,
 } from '../types';
 import { ConversationMethods, createConversationMethods } from './conversation';
 import { tenantStorage, runAsSystem } from '~/config/tenantContext';
@@ -122,7 +123,7 @@ describe('Conversation Operations', () => {
     userId: string;
     isTemporary?: boolean;
     expiredAt?: Date;
-    interfaceConfig?: { temporaryChatRetention?: number; retentionMode?: RetentionMode };
+    interfaceConfig?: AppConfig['interfaceConfig'];
   };
   let mockConversationData: {
     conversationId: string;
@@ -1078,6 +1079,228 @@ describe('Conversation Operations', () => {
     });
   });
 
+  describe('code environment persistence during ordinary saves', () => {
+    const mac = { environmentId: 'code-mac', workspaceId: 'primary' };
+    const vm = { environmentId: 'code-vm', workspaceId: 'primary' };
+    const userId = 'user123';
+    const unsetFields = { codeEnvironmentMode: 1, codeWorkspaces: 1 };
+
+    it.each([
+      { codeEnvironmentMode: 'attached', codeWorkspaces: [mac] },
+      { codeEnvironmentMode: 'without_attached' },
+    ])(
+      'preserves $codeEnvironmentMode through an approval pause and later saves',
+      async (decision) => {
+        const conversationId = uuidv4();
+        await saveConvo({ userId }, { conversationId, ...decision });
+
+        for (const title of ['Approval required', 'Resumed', 'Completed']) {
+          await saveConvo({ userId }, { conversationId, title }, { unsetFields });
+          const stored = await getConvo(userId, conversationId);
+          expect(stored?.codeEnvironmentMode).toBe(decision.codeEnvironmentMode);
+          expect(stored?.codeWorkspaces).toEqual(decision.codeWorkspaces);
+          expect(stored?.title).toBe(title);
+        }
+      },
+    );
+
+    it('cannot overwrite an explicit move with a stale turn-start snapshot', async () => {
+      const conversationId = uuidv4();
+      const decision = { codeEnvironmentMode: 'attached' as const, codeWorkspaces: [mac] };
+      await saveConvo({ userId }, { conversationId, ...decision });
+      await methods.replaceConvoCodeEnvironmentDecision({
+        user: userId,
+        conversationId,
+        expected: decision,
+        codeWorkspaces: [vm],
+      });
+
+      await saveConvo({ userId }, { conversationId, ...decision });
+      expect((await getConvo(userId, conversationId))?.codeWorkspaces).toEqual([vm]);
+      await saveConvo(
+        { userId },
+        { conversationId, codeEnvironmentMode: null, codeWorkspaces: [] },
+      );
+      const stored = await getConvo(userId, conversationId);
+      expect(stored?.codeEnvironmentMode).toBe('attached');
+      expect(stored?.codeWorkspaces).toEqual([vm]);
+    });
+
+    it('seeds imported decisions without letting repeated imports undo a move', async () => {
+      const conversationId = uuidv4();
+      const decision = { codeEnvironmentMode: 'attached' as const, codeWorkspaces: [mac] };
+      const imported = { conversationId, user: userId, ...decision };
+      await methods.bulkSaveConvos([imported]);
+      expect((await getConvo(userId, conversationId))?.codeWorkspaces).toEqual([mac]);
+      await methods.replaceConvoCodeEnvironmentDecision({
+        user: userId,
+        conversationId,
+        expected: decision,
+        codeWorkspaces: [vm],
+      });
+      await methods.bulkSaveConvos([imported]);
+      const stored = await getConvo(userId, conversationId);
+      expect(stored?.codeEnvironmentMode).toBe('attached');
+      expect(stored?.codeWorkspaces).toEqual([vm]);
+    });
+
+    it.each([{}, { codeWorkspaces: [mac] }])(
+      'preserves a legacy decision: %j',
+      async (decision) => {
+        const conversationId = uuidv4();
+        await Conversation.collection.insertOne({ conversationId, user: userId, ...decision });
+        await saveConvo(
+          { userId },
+          { conversationId, codeEnvironmentMode: 'attached', codeWorkspaces: [vm] },
+          { unsetFields },
+        );
+        const stored = await getConvo(userId, conversationId);
+        expect(stored?.codeEnvironmentMode).toBeUndefined();
+        expect(stored?.codeWorkspaces).toEqual(decision.codeWorkspaces);
+      },
+    );
+  });
+
+  describe('replaceConvoCodeEnvironmentDecision', () => {
+    const anchor = new Date('2026-09-12T11:22:22.976Z');
+    const mac = { environmentId: 'code-mac', workspaceId: 'primary' };
+    const team = { environmentId: 'code-team', workspaceId: 'shared' };
+    const vm = { environmentId: 'code-vm', workspaceId: 'projects' };
+
+    /** Raw inserts bypass Mongoose casting, the way legacy rows and operator repairs are stored. */
+    const seedDecision = async (decision: Record<string, unknown>, user = 'user123') => {
+      const conversationId = uuidv4();
+      await Conversation.collection.insertOne({
+        conversationId,
+        user,
+        title: 'Mortgage analysis',
+        endpoint: EModelEndpoint.agents,
+        messages: [],
+        createdAt: anchor,
+        updatedAt: anchor,
+        ...decision,
+      });
+      return conversationId;
+    };
+
+    const moveFromStored = async (
+      conversationId: string,
+      codeWorkspaces: NonNullable<IConversation['codeWorkspaces']>,
+      user = 'user123',
+    ) => {
+      const stored = await getConvo('user123', conversationId);
+      return methods.replaceConvoCodeEnvironmentDecision({
+        user,
+        conversationId,
+        expected: {
+          codeEnvironmentMode: stored?.codeEnvironmentMode,
+          codeWorkspaces: stored?.codeWorkspaces,
+        },
+        codeWorkspaces,
+      });
+    };
+
+    it('replaces the decision it read without disturbing timestamps', async () => {
+      const conversationId = await seedDecision({
+        codeEnvironmentMode: 'attached',
+        codeWorkspaces: [mac, team],
+      });
+
+      const result = await moveFromStored(conversationId, [team, vm]);
+
+      expect(result?.codeEnvironmentMode).toBe('attached');
+      expect(result?.codeWorkspaces).toEqual([team, vm]);
+      expect(new Date(result?.updatedAt ?? 0).toISOString()).toBe(anchor.toISOString());
+    });
+
+    it('replaces a legacy decision stored without a mode', async () => {
+      const conversationId = await seedDecision({ codeWorkspaces: [mac] });
+
+      const result = await moveFromStored(conversationId, [vm]);
+
+      expect(result?.codeEnvironmentMode).toBe('attached');
+      expect(result?.codeWorkspaces).toEqual([vm]);
+    });
+
+    it('replaces a decision that saveConvo persisted', async () => {
+      const conversationId = uuidv4();
+      await saveConvo(
+        { userId: 'user123' },
+        {
+          conversationId,
+          endpoint: EModelEndpoint.agents,
+          codeEnvironmentMode: 'attached',
+          codeWorkspaces: [mac, team],
+        },
+      );
+      expect((await getConvo('user123', conversationId))?.codeWorkspaces).toEqual([mac, team]);
+
+      const result = await moveFromStored(conversationId, [vm]);
+
+      expect(result?.codeWorkspaces).toEqual([vm]);
+    });
+
+    it('leaves a decision that changed after it was read untouched', async () => {
+      const conversationId = await seedDecision({
+        codeEnvironmentMode: 'attached',
+        codeWorkspaces: [mac],
+      });
+      const stored = await getConvo('user123', conversationId);
+      await Conversation.collection.updateOne(
+        { conversationId },
+        { $set: { codeWorkspaces: [team] } },
+      );
+
+      const result = await methods.replaceConvoCodeEnvironmentDecision({
+        user: 'user123',
+        conversationId,
+        expected: {
+          codeEnvironmentMode: stored?.codeEnvironmentMode,
+          codeWorkspaces: stored?.codeWorkspaces,
+        },
+        codeWorkspaces: [vm],
+      });
+
+      expect(result).toBeNull();
+      const current = await getConvo('user123', conversationId);
+      expect(current?.codeWorkspaces).toEqual([team]);
+    });
+
+    it('does not treat a reordered selection list as the decision it read', async () => {
+      const conversationId = await seedDecision({
+        codeEnvironmentMode: 'attached',
+        codeWorkspaces: [mac, team],
+      });
+
+      const result = await methods.replaceConvoCodeEnvironmentDecision({
+        user: 'user123',
+        conversationId,
+        expected: { codeEnvironmentMode: 'attached', codeWorkspaces: [team, mac] },
+        codeWorkspaces: [vm],
+      });
+
+      expect(result).toBeNull();
+    });
+
+    it('cannot move another user’s conversation', async () => {
+      const conversationId = await seedDecision(
+        { codeEnvironmentMode: 'attached', codeWorkspaces: [mac] },
+        'other-user',
+      );
+
+      const result = await methods.replaceConvoCodeEnvironmentDecision({
+        user: 'user123',
+        conversationId,
+        expected: { codeEnvironmentMode: 'attached', codeWorkspaces: [mac] },
+        codeWorkspaces: [vm],
+      });
+
+      expect(result).toBeNull();
+      const stored = await Conversation.findOne({ conversationId }).lean<IConversation>();
+      expect(stored?.codeWorkspaces).toEqual([mac]);
+    });
+  });
+
   describe('saveConvo appendMessageIds', () => {
     const ctx = { userId: 'append-user' };
     const conversationId = 'append-conversation';
@@ -1374,6 +1597,73 @@ describe('Conversation Operations', () => {
 
       expect(secondSave?.title).toBe('Updated Title');
       expect(secondSave?.expiredAt).toBeNull();
+    });
+
+    it.each([true, false, undefined])(
+      'uses the independent retention period for isTemporary=%s',
+      async (isTemporary) => {
+        mockCtx.isTemporary = isTemporary;
+        mockCtx.interfaceConfig = {
+          temporaryChatRetention: 1,
+          generalChatRetention: 2160,
+          retentionMode: RetentionMode.ALL,
+        };
+        const now = Date.now();
+        const result = await saveConvo(mockCtx, mockConversationData);
+        const expectedHours = isTemporary === true ? 1 : 2160;
+
+        expect(result?.isTemporary).toBe(isTemporary === true);
+        expect(result?.expiredAt?.getTime()).toBeGreaterThanOrEqual(now + expectedHours * 3600000);
+        expect(result?.expiredAt?.getTime()).toBeLessThan(now + expectedHours * 3600000 + 5000);
+      },
+    );
+
+    it('ignores caller-supplied retention fields', async () => {
+      mockCtx.isTemporary = undefined;
+      mockCtx.interfaceConfig = {
+        temporaryChatRetention: 1,
+        generalChatRetention: 2160,
+        retentionMode: RetentionMode.ALL,
+      };
+      const suppliedExpiration = new Date('2099-01-01T00:00:00.000Z');
+
+      const result = await saveConvo(mockCtx, {
+        ...mockConversationData,
+        isTemporary: true,
+        expiredAt: suppliedExpiration,
+      });
+
+      expect(result?.isTemporary).toBe(false);
+      expect(result?.expiredAt).not.toEqual(suppliedExpiration);
+    });
+
+    it.each([true, false])(
+      'preserves the stored deadline when chat type %s is omitted',
+      async (isTemporary) => {
+        mockCtx.isTemporary = isTemporary;
+        mockCtx.interfaceConfig = {
+          temporaryChatRetention: 1,
+          generalChatRetention: 2160,
+          retentionMode: RetentionMode.ALL,
+        };
+        const first = await saveConvo(mockCtx, mockConversationData);
+        mockCtx.isTemporary = undefined;
+        const second = await saveConvo(mockCtx, { ...mockConversationData });
+        expect(second?.isTemporary).toBe(isTemporary);
+        expect(second?.expiredAt).toEqual(first?.expiredAt);
+      },
+    );
+
+    it('preserves an explicitly inherited deadline with separate retention periods', async () => {
+      mockCtx.isTemporary = false;
+      mockCtx.expiredAt = new Date(Date.now() + 60000);
+      mockCtx.interfaceConfig = {
+        temporaryChatRetention: 1,
+        generalChatRetention: 2160,
+        retentionMode: RetentionMode.ALL,
+      };
+      const result = await saveConvo(mockCtx, mockConversationData);
+      expect(result?.expiredAt).toEqual(mockCtx.expiredAt);
     });
 
     it('should set expiredAt for non-temporary conversation when retentionMode is ALL', async () => {

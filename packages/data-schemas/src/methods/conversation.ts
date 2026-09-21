@@ -42,9 +42,9 @@ import {
   refreshChatProjectStatsForUser,
   updateChatProjectLastConversationForUser,
 } from './chatProject';
+import { createChatExpirationDate, createTempChatExpirationDate } from '~/utils/tempChatRetention';
 import { isAgentFadingTier, isAgentFadingTierEntries } from '~/utils/fading';
 import { isCompactionSemanticIndexProjection } from '~/types/compaction';
-import { createTempChatExpirationDate } from '~/utils/tempChatRetention';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { decrementTagCounts } from './conversationTag';
@@ -285,6 +285,12 @@ export interface ConversationMethods {
     conversationId: string,
     pinned: boolean,
   ): Promise<IConversation | null>;
+  replaceConvoCodeEnvironmentDecision(params: {
+    user: string;
+    conversationId: string;
+    expected: Pick<IConversation, 'codeEnvironmentMode' | 'codeWorkspaces'>;
+    codeWorkspaces: NonNullable<IConversation['codeWorkspaces']>;
+  }): Promise<IConversation | null>;
   bulkSaveConvos(conversations: Array<Record<string, unknown>>): Promise<unknown>;
   getConvosByCursor(
     user: string,
@@ -486,7 +492,7 @@ export interface ConversationMethods {
   getConvoRetention(
     user: string,
     conversationId: string,
-  ): Promise<Pick<IConversation, 'expiredAt'> | null>;
+  ): Promise<Pick<IConversation, 'expiredAt' | 'isTemporary'> | null>;
   getConvoTitle(user: string, conversationId: string): Promise<string | null>;
   deleteConvos(
     user: string,
@@ -2069,11 +2075,11 @@ export function createConversationMethods(
   async function getConvoRetention(
     user: string,
     conversationId: string,
-  ): Promise<Pick<IConversation, 'expiredAt'> | null> {
+  ): Promise<Pick<IConversation, 'expiredAt' | 'isTemporary'> | null> {
     try {
       const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      return await Conversation.findOne({ user, conversationId }, 'expiredAt').lean<
-        Pick<IConversation, 'expiredAt'>
+      return await Conversation.findOne({ user, conversationId }, 'expiredAt isTemporary').lean<
+        Pick<IConversation, 'expiredAt' | 'isTemporary'>
       >();
     } catch (error) {
       logger.error('[getConvoRetention] Error getting conversation retention fields', error);
@@ -2172,7 +2178,18 @@ export function createConversationMethods(
 
       const appendMessageIds = metadata?.appendMessageIds;
       const update: Record<string, unknown> = { ...convo, user: userId };
+      delete update.isTemporary;
+      delete update.expiredAt;
       delete update.initial_agent_id;
+      /** Ordinary saves may seed a decision, but only an explicit move may replace it. */
+      const decisionOnInsert = {
+        ...(convo.codeEnvironmentMode != null && {
+          codeEnvironmentMode: convo.codeEnvironmentMode,
+        }),
+        ...(convo.codeWorkspaces != null && { codeWorkspaces: convo.codeWorkspaces }),
+      };
+      delete update.codeEnvironmentMode;
+      delete update.codeWorkspaces;
       stripActorCheckpointFields(update);
       if (appendMessageIds == null) {
         update.messages = await getMessages({ conversationId, user: userId }, '_id');
@@ -2181,6 +2198,8 @@ export function createConversationMethods(
       }
       const unsetFields: Record<string, number> = { ...(metadata?.unsetFields ?? {}) };
       delete unsetFields.initial_agent_id;
+      delete unsetFields.codeEnvironmentMode;
+      delete unsetFields.codeWorkspaces;
       stripActorCheckpointFields(unsetFields);
 
       if (Object.prototype.hasOwnProperty.call(update, 'chatProjectId') && update.chatProjectId) {
@@ -2218,6 +2237,7 @@ export function createConversationMethods(
         update.conversationId = newConversationId;
       }
 
+      let retentionOnInsert: { expiredAt: Date; isTemporary: false } | undefined;
       if (expiredAt instanceof Date && !Number.isNaN(expiredAt.getTime())) {
         if (typeof isTemporary === 'boolean') {
           update.isTemporary = isTemporary;
@@ -2227,12 +2247,31 @@ export function createConversationMethods(
         if (typeof isTemporary === 'boolean') {
           update.isTemporary = isTemporary;
         }
-        try {
-          update.expiredAt = createTempChatExpirationDate(interfaceConfig);
-        } catch (err) {
-          logger.error('Error creating temporary chat expiration date:', err);
-          logger.info(`---\`saveConvo\` context: ${metadata?.context}`);
-          update.expiredAt = createFallbackRetentionDate();
+        if (
+          typeof isTemporary === 'boolean' ||
+          interfaceConfig.generalChatRetention === undefined
+        ) {
+          try {
+            update.expiredAt = createChatExpirationDate(interfaceConfig, isTemporary);
+          } catch (err) {
+            logger.error('Error creating chat expiration date:', err);
+            logger.info(`---\`saveConvo\` context: ${metadata?.context}`);
+            update.expiredAt = createFallbackRetentionDate();
+          }
+        } else {
+          try {
+            retentionOnInsert = {
+              expiredAt: createChatExpirationDate(interfaceConfig, false),
+              isTemporary: false,
+            };
+          } catch (err) {
+            logger.error('Error creating chat expiration date:', err);
+            logger.info(`---\`saveConvo\` context: ${metadata?.context}`);
+            retentionOnInsert = {
+              expiredAt: createFallbackRetentionDate(),
+              isTemporary: false,
+            };
+          }
         }
       } else if (isTemporary === true) {
         update.isTemporary = true;
@@ -2290,6 +2329,8 @@ export function createConversationMethods(
           : createdAtOnInsert;
         operation.$setOnInsert = {
           initial_agent_id: initialAgentId,
+          ...decisionOnInsert,
+          ...retentionOnInsert,
           ...(createdAtForInsert ? { createdAt: createdAtForInsert } : {}),
         };
         return operation;
@@ -2374,6 +2415,31 @@ export function createConversationMethods(
       if (!conversation) {
         logger.debug('[saveConvo] Conversation not found, skipping update');
         return null;
+      }
+
+      /** Reuse the saved row's chat type when callers omit it, preserving existing deadlines. */
+      if (
+        interfaceConfig?.retentionMode === RetentionMode.ALL &&
+        interfaceConfig.generalChatRetention !== undefined &&
+        typeof isTemporary !== 'boolean' &&
+        conversation.expiredAt == null
+      ) {
+        const deadline = createChatExpirationDate(
+          interfaceConfig,
+          conversation.isTemporary === true,
+        );
+        const result = await Conversation.updateOne(
+          {
+            _id: conversation._id,
+            expiredAt: null,
+            isTemporary: conversation.isTemporary === true ? true : { $ne: true },
+          },
+          { $set: { expiredAt: deadline } },
+          { timestamps: false },
+        );
+        if (result.modifiedCount > 0) {
+          conversation.expiredAt = deadline;
+        }
       }
 
       if (
@@ -2484,6 +2550,41 @@ export function createConversationMethods(
   }
 
   /**
+   * Compare-and-swap for an owner's explicit move of an attached code-environment decision.
+   * The filter repeats the stored decision being replaced, so a writer that changed it first
+   * leaves this update unmatched rather than overwritten. A missing and a null mode both
+   * describe a legacy decision inferred from its selections.
+   */
+  async function replaceConvoCodeEnvironmentDecision({
+    user,
+    conversationId,
+    expected,
+    codeWorkspaces,
+  }: {
+    user: string;
+    conversationId: string;
+    expected: Pick<IConversation, 'codeEnvironmentMode' | 'codeWorkspaces'>;
+    codeWorkspaces: NonNullable<IConversation['codeWorkspaces']>;
+  }) {
+    try {
+      const Conversation = mongoose.models.Conversation as Model<IConversation>;
+      return await Conversation.findOneAndUpdate(
+        {
+          conversationId,
+          user,
+          codeEnvironmentMode: expected.codeEnvironmentMode ?? { $in: [null] },
+          codeWorkspaces: expected.codeWorkspaces ?? { $in: [null] },
+        },
+        { $set: { codeEnvironmentMode: 'attached', codeWorkspaces } },
+        { new: true, timestamps: false },
+      ).lean<IConversation>();
+    } catch (error) {
+      logger.error('[replaceConvoCodeEnvironmentDecision] Error moving code environment', error);
+      throw new Error('Error moving code environment');
+    }
+  }
+
+  /**
    * Saves multiple conversations in bulk.
    */
   async function bulkSaveConvos(conversations: Array<Record<string, unknown>>) {
@@ -2553,7 +2654,7 @@ export function createConversationMethods(
 
       const affectedProjectStats = new Map<string, { user: string; projectId: string }>();
       const bulkOps = conversations.map((convo) => {
-        const sanitized = { ...convo };
+        const { codeEnvironmentMode, codeWorkspaces, ...sanitized } = convo;
         delete sanitized.initial_agent_id;
         stripActorCheckpointFields(sanitized);
         if (typeof sanitized.user === 'string' && typeof sanitized.chatProjectId === 'string') {
@@ -2587,7 +2688,11 @@ export function createConversationMethods(
             },
             update: {
               $set: sanitized,
-              $setOnInsert: { initial_agent_id: null },
+              $setOnInsert: {
+                initial_agent_id: null,
+                ...(codeEnvironmentMode != null && { codeEnvironmentMode }),
+                ...(codeWorkspaces != null && { codeWorkspaces }),
+              },
             },
             upsert: true,
             timestamps: false,
@@ -2848,8 +2953,11 @@ export function createConversationMethods(
       sortObj._id = sortOrder;
 
       const convos = await Conversation.find(query)
+        /* `isArchived` rides along so a row can offer archive or restore from its own state:
+           the sidebar lists archived and unarchived chats in the same session, and the
+           active list also carries the unarchived pins beside them. */
         .select(
-          'conversationId endpoint title createdAt updatedAt archivedAt user model agent_id assistant_id spec iconURL chatProjectId pinned',
+          'conversationId endpoint title createdAt updatedAt archivedAt isArchived user model agent_id assistant_id spec iconURL chatProjectId pinned',
         )
         .sort(sortObj)
         .limit(pageSize + 1)
@@ -3297,6 +3405,7 @@ export function createConversationMethods(
     deleteNullOrEmptyConversations,
     saveConvo,
     setConvoPinned,
+    replaceConvoCodeEnvironmentDecision,
     bulkSaveConvos,
     getConvosByCursor,
     getConvosQueried,
