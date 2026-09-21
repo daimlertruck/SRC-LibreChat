@@ -324,7 +324,7 @@ describe('setOpenIDMarkerCookies', () => {
  * the lifetime cases set the environment, `jest.resetModules()`, and re-import
  * `./csrf` to pick up a freshly evaluated `getOAuthSessionMaxAge`. Because those
  * cases re-import the module, they also re-derive the signing key from the
- * per-test `JWT_SECRET`, so each case stands on its own.
+ * per-test `JWT_REFRESH_SECRET`, so each case stands on its own.
  */
 describe('oauth_session cookie: key separation (Property 16)', () => {
   const originalEnv = process.env;
@@ -401,7 +401,11 @@ describe('oauth_session cookie: lifetime derived from the flow window (Property 
 
   beforeEach(() => {
     jest.resetModules();
-    process.env = { ...originalEnv, JWT_SECRET: 'jwt-secret' };
+    process.env = {
+      ...originalEnv,
+      JWT_SECRET: 'jwt-secret',
+      JWT_REFRESH_SECRET: 'jwt-refresh-secret',
+    };
     delete process.env.SESSION_COOKIE_SECURE;
     delete process.env.MCP_OAUTH_HANDLING_TIMEOUT;
     delete process.env.MCP_OAUTH_FLOW_TTL;
@@ -474,7 +478,11 @@ describe('oauth_session cookie: mint, overwrite, and validate (Property 16)', ()
 
   beforeEach(() => {
     jest.resetModules();
-    process.env = { ...originalEnv, JWT_SECRET: 'jwt-secret' };
+    process.env = {
+      ...originalEnv,
+      JWT_SECRET: 'jwt-secret',
+      JWT_REFRESH_SECRET: 'jwt-refresh-secret',
+    };
     delete process.env.SESSION_COOKIE_SECURE;
   });
 

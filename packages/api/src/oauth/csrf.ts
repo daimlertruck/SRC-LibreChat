@@ -57,14 +57,15 @@ export const OAUTH_SESSION_KEY_INFO = 'librechat.oauth_session.v1';
  * Derives the Session_Cookie_Key that signs and verifies the `oauth_session`
  * cookie.
  *
- * The key is derived with HKDF-SHA256 from `JWT_SECRET` — an application secret
- * both containers already hold — under the fixed info label
- * `librechat.oauth_session.v1`. No new secret is generated and none is added to
- * either container's environment; the gate is handed only this *derived* key.
+ * The key is derived with HKDF-SHA256 from `JWT_REFRESH_SECRET` under the fixed
+ * info label `librechat.oauth_session.v1`. Deriving from the refresh secret
+ * means the gate container only needs `JWT_REFRESH_SECRET` (which it already
+ * holds for refresh-token verification) — `JWT_SECRET` stays confined to the
+ * API container and does not need to be distributed to the gate.
  *
  * The derivation is one-way: HKDF-SHA256 is a pseudorandom function, so a party
- * holding the derived key (the Auth_Gate) cannot recover `JWT_SECRET` and gains
- * no refresh- or access-token minting ability from it.
+ * holding the derived key (the Auth_Gate) cannot recover `JWT_REFRESH_SECRET`
+ * and gains no refresh-token minting ability from it.
  *
  * INVARIANT — this key signs exactly ONE token type (`oauth_session`). The info
  * label is what carries the purpose separation, in place of a `typ`/`aud`
@@ -76,9 +77,9 @@ export const OAUTH_SESSION_KEY_INFO = 'librechat.oauth_session.v1';
  * new info label instead.
  */
 export function deriveOAuthSessionKey(): Buffer {
-  const secret = process.env.JWT_SECRET;
+  const secret = process.env.JWT_REFRESH_SECRET;
   if (!secret) {
-    throw new Error('JWT_SECRET is required to derive the OAuth session cookie key');
+    throw new Error('JWT_REFRESH_SECRET is required to derive the OAuth session cookie key');
   }
   /** Empty salt keeps the derivation deterministic across both containers and the
    *  gate; the input secret already carries the entropy and the info label
@@ -273,8 +274,8 @@ export function setOAuthSession(req: Request, res: Response, next: NextFunction)
  * the Auth_Gate verify the cookie without knowing the subject or the flow: a bare
  * keyed digest over the subject cannot be verified without already knowing the
  * subject, and the subject does not appear in a callback request. The token is
- * signed with the Session_Cookie_Key (derived one-way from `JWT_SECRET`), never
- * with `JWT_SECRET` or `JWT_REFRESH_SECRET` directly.
+ * signed with the Session_Cookie_Key (derived one-way from `JWT_REFRESH_SECRET`),
+ * never with `JWT_SECRET` or `JWT_REFRESH_SECRET` directly.
  *
  * The `exp` claim and the cookie `maxAge` are set from the same duration so the
  * browser (on `maxAge`) and the gate (on `exp`) agree on the lifetime. That

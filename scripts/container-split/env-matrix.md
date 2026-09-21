@@ -263,25 +263,21 @@ initiates writes the cookie with one lifetime, and the container that resolves t
 another. Set both to the same resolved value on both containers. A difference fails configuration
 verification naming the variable.
 
-## The two keys the gate holds
+## The key the gate holds
 
-The gate validates the four cookie-exemption patterns against two keys. Neither is a container
-environment variable, and neither container reads either at the edge — they are what the gate holds,
-recorded here so a configuration comparison accounts for them rather than treating them as
-unexplained.
+The gate validates all four cookie-exemption patterns with **one secret**: `JWT_REFRESH_SECRET`. It
+is the same value both containers already hold (see the `JWT_SECRET`, `JWT_REFRESH_SECRET` row
+above), additionally provisioned to the gate.
 
-- **`JWT_REFRESH_SECRET`** validates the asset-pair exemptions — `/images/*` and
-  `/api/share/:shareId/files/:file_id` with its `/preview` and `/download` variants. It is the same
-  value both containers already hold (see the `JWT_SECRET`, `JWT_REFRESH_SECRET` row above),
-  additionally provisioned to the gate for cookie validation on those two patterns.
-- **The Session_Cookie_Key** validates the callback-pair exemptions —
-  `/api/mcp/:serverName/oauth/callback` and `/api/actions/:action_id/oauth/callback`. It is derived
-  by HKDF-SHA256 under the fixed info label `librechat.oauth_session.v1` and signs exactly one token
-  type, the `oauth_session` cookie.
+- **Asset-pair exemptions** — `/images/*` and `/api/share/:shareId/files/:file_id` with its
+  `/preview` and `/download` variants — are validated by verifying the `refreshToken` and
+  `openid_user_id` cookies directly against `JWT_REFRESH_SECRET`.
+- **Callback-pair exemptions** — `/api/mcp/:serverName/oauth/callback` and
+  `/api/actions/:action_id/oauth/callback` — are validated by verifying the `oauth_session` cookie
+  against the Session_Cookie_Key, which the gate derives from `JWT_REFRESH_SECRET` via HKDF-SHA256
+  under the fixed info label `librechat.oauth_session.v1`.
 
-The Session_Cookie_Key is **derived deterministically** from a secret both containers already hold,
-so it is **distributed to the gate rather than generated** — no new secret is created and none is
-stored on either container. The derivation is one-way: a gate holding the derived key cannot recover
-the input secret. `JWT_SECRET` is **never provisioned to the gate**, because HS256 makes verify
-capability equal sign capability and `JWT_SECRET` signs access tokens — a gate holding it could mint
-them.
+The derivation exists for **key separation**: it makes an `oauth_session` cookie and a refresh token
+structurally non-interchangeable, so no `typ` claim is needed. It does not exist to avoid
+provisioning a second secret — the gate holds `JWT_REFRESH_SECRET` regardless, for the asset-pair
+cookies.
