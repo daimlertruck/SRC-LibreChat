@@ -53,7 +53,9 @@
  *     `refreshtokenbridges`, and `openidrefreshflights`; read-only on `roles`,
  *     `configs`, `systemgrants`, and `banners`. Read-write here includes
  *     `createIndex`, because the auth surface's own request paths build
- *     indexes on collections it writes — see `WRITE_ACTIONS` below. Nothing
+ *     indexes on collections it writes — see `WRITE_ACTIONS` below. The action
+ *     vocabulary used throughout is the portable intersection across MongoDB
+ *     and Amazon DocumentDB 5.0, verified against a real cluster. Nothing
  *     else — no database-wide privilege, no pattern-based privilege, and no
  *     inherited role that could widen it.
  *
@@ -147,19 +149,20 @@ const AUTH_READ_WRITE = [
 const AUTH_READ_ONLY = ['roles', 'configs', 'systemgrants', 'banners'];
 
 /**
- * Collections this feature introduces, which may not exist yet when the auth
- * surface first writes to one. It runs `MONGO_AUTO_CREATE=false`, so nothing
- * pre-creates them and the collection materializes from the first insert or
- * upsert. MongoDB's `createCollection` action governs the explicit
- * `db.createCollection()` call rather than implicit creation, which `insert`
- * alone permits, so this list is not what makes the first write land. It is
- * here for the deployment that leaves `MONGO_AUTO_CREATE` on, where Mongoose
- * does issue an explicit `createCollection` at model registration.
+ * Collection-scoped read actions. Nothing here applies at database scope.
+ *
+ * The set is `find` alone because that is the portable intersection across
+ * MongoDB and Amazon DocumentDB 5.0: DocumentDB's `createRole` does not accept
+ * `planCacheRead`, and `listIndexes`, `collStats`, and `changeStream` are not
+ * used by any path routed to the auth surface — change streams are
+ * additionally unavailable on DocumentDB elastic clusters.
+ *
+ * A narrower read set fails closed at the database layer rather than
+ * degrading, which is the intended behavior of this grant: a path that needs
+ * more than `find` on one of these collections is refused outright instead of
+ * quietly returning less.
  */
-const IMPLICITLY_CREATED = ['authtokens', 'bans'];
-
-/** Collection-scoped read actions. Nothing here applies at database scope. */
-const READ_ACTIONS = ['find', 'listIndexes', 'collStats', 'planCacheRead', 'changeStream'];
+const READ_ACTIONS = ['find'];
 
 /**
  * `createIndex` is granted on every read-write collection, not on the subset
@@ -201,8 +204,6 @@ const READ_ACTIONS = ['find', 'listIndexes', 'collStats', 'planCacheRead', 'chan
  */
 const WRITE_ACTIONS = ['insert', 'update', 'remove', 'createIndex'];
 
-const CREATE_ACTIONS = ['createCollection'];
-
 const privilegeFor = function (collection, actions) {
   return {
     resource: { db: dbName, collection: collection },
@@ -210,12 +211,19 @@ const privilegeFor = function (collection, actions) {
   };
 };
 
+/**
+ * `createCollection` is not granted anywhere in this role. The grant verified
+ * against a real Amazon DocumentDB 5.0 cluster omits it, and nothing needs it:
+ * `createIndex` already creates a missing collection, so `authtokens` and
+ * `bans` still materialize on first use, and the auth surface runs
+ * `MONGO_AUTO_CREATE=false` per `scripts/container-split/env-matrix.md`, so no
+ * code path on that container issues an explicit `createCollection`.
+ *
+ * Re-adding it would break provisioning on DocumentDB, whose `createRole` does
+ * not accept the action. It is not a fix for a first-write failure.
+ */
 const readWritePrivilege = function (collection) {
-  const actions = READ_ACTIONS.concat(WRITE_ACTIONS);
-  if (IMPLICITLY_CREATED.indexOf(collection) === -1) {
-    return privilegeFor(collection, actions);
-  }
-  return privilegeFor(collection, actions.concat(CREATE_ACTIONS));
+  return privilegeFor(collection, READ_ACTIONS.concat(WRITE_ACTIONS));
 };
 
 const readOnlyPrivilege = function (collection) {
@@ -283,7 +291,7 @@ const assertGrantIsScoped = function (privileges) {
    * collection moved from one list to the other must lose every mutating
    * action, and `createIndex` is the one most easily left behind.
    */
-  const mutating = WRITE_ACTIONS.concat(CREATE_ACTIONS);
+  const mutating = WRITE_ACTIONS;
   const writableReadOnly = privileges.filter(function (privilege) {
     if (AUTH_READ_ONLY.indexOf(privilege.resource.collection) === -1) {
       return false;
@@ -331,7 +339,6 @@ print('  read-write: ' + AUTH_READ_WRITE.join(', '));
 print('  read-only:  ' + AUTH_READ_ONLY.join(', '));
 print('  reaches nothing else: no database-wide or pattern-based privilege, no inherited role');
 print('  index creation permitted on every read-write collection above, and on no other');
-print('  explicit collection creation permitted on: ' + IMPLICITLY_CREATED.join(', '));
 print('');
 print('API container (container 2) — role ' + apiRoleName + ', user ' + apiUserName);
 print('  read-write: every collection on ' + dbName + ' (inherits built-in readWrite)');

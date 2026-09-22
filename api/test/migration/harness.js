@@ -208,13 +208,14 @@ const ROOT_PASSWORD = 'migration-root-password';
 const RESTRICTED_DB_NAME = 'librechat_migration_refused';
 
 /**
- * The same collection-scoped action lists `scripts/container-split/provision.mongo.js`
- * builds its grants from, so a credential here is refused for the same reason a
- * deployed container's credential would be.
+ * The collection-scoped action lists `scripts/container-split/provision.mongo.js`
+ * builds its grants from, kept in agreement with it so a credential here is
+ * refused for the same reason a deployed container's credential would be. They
+ * are the DocumentDB-portable intersection: `find` is the whole read set, and
+ * the write set carries `createIndex` because the provisioned grant does.
  */
-const READ_ACTIONS = ['find', 'listIndexes', 'collStats', 'planCacheRead', 'changeStream'];
-const WRITE_ACTIONS = ['insert', 'update', 'remove'];
-const CREATE_ACTIONS = ['createCollection'];
+const READ_ACTIONS = ['find'];
+const WRITE_ACTIONS = ['insert', 'update', 'remove', 'createIndex'];
 
 /**
  * Two credentials, each withholding exactly one of the two privileges the
@@ -236,7 +237,7 @@ const RESTRICTED_GRANTS = {
     privileges: (dbName) => [
       {
         resource: { db: dbName, collection: TARGET },
-        actions: [...READ_ACTIONS, ...WRITE_ACTIONS, ...CREATE_ACTIONS],
+        actions: [...READ_ACTIONS, ...WRITE_ACTIONS],
       },
     ],
   },
