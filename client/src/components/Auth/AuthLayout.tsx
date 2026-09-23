@@ -40,7 +40,10 @@ function AuthLayout({
         <div className="mx-auto sm:max-w-sm">
           <ErrorMessage>
             {localize('com_auth_error_invalid_reset_token')}{' '}
-            <a className="font-semibold text-green-600 hover:underline" href="/forgot-password">
+            <a
+              className="font-semibold text-accent-primary hover:underline"
+              href="/forgot-password"
+            >
               {localize('com_auth_click_here')}
             </a>{' '}
             {localize('com_auth_to_try_again')}
@@ -60,7 +63,7 @@ function AuthLayout({
   const logoText = startupConfig?.interface?.loginText;
 
   return (
-    <div className="relative flex min-h-screen flex-col bg-white dark:bg-gray-900">
+    <div className="relative flex min-h-screen flex-col bg-surface-primary">
       <Banner />
       <BlinkAnimation active={isFetching}>
         {logoUrl ? (
@@ -86,7 +89,7 @@ function AuthLayout({
       {!hasStartupConfigError && !isFetching && header && (
         <div className="mt-6 text-center">
           <h1
-            className="mb-4 text-3xl font-semibold text-black dark:text-white"
+            className="mb-4 text-3xl font-semibold text-text-primary"
             style={{ userSelect: 'none' }}
           >
             {header}
@@ -102,7 +105,7 @@ function AuthLayout({
 
       {/* ——— WELCOME SECTIONS ——— */}
       {logoText && (
-        <section className="mx-auto w-full max-w-2xl space-y-8 p-6 text-black dark:text-white">
+        <section className="mx-auto w-full max-w-2xl space-y-8 p-6 text-text-primary">
           <div>
             <div className="prose dark:prose-invert w-full max-w-none !text-text-primary">
               <MarkdownLite content={logoText} />
@@ -117,7 +120,7 @@ function AuthLayout({
       </div>
 
       <main className="flex flex-grow items-center justify-center">
-        <div className="w-authPageWidth overflow-hidden bg-white px-6 py-4 dark:bg-gray-900 sm:max-w-md sm:rounded-lg">
+        <div className="w-authPageWidth overflow-hidden bg-surface-primary px-6 py-4 sm:max-w-md sm:rounded-lg">
           {children}
         </div>
       </main>

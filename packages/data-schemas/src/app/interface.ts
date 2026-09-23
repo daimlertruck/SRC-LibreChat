@@ -44,6 +44,7 @@ export async function loadDefaultInterface({
     buildInfo: interfaceConfig?.buildInfo ?? defaults.buildInfo,
     contextUsage: interfaceConfig?.contextUsage ?? defaults.contextUsage,
     contextCost: interfaceConfig?.contextCost ?? defaults.contextCost,
+    feedback: interfaceConfig?.feedback ?? defaults.feedback,
     currency: interfaceConfig?.currency ?? defaults.currency,
 
     // Permissions and related settings - only include if explicitly configured
@@ -54,17 +55,21 @@ export async function loadDefaultInterface({
     agents: interfaceConfig?.agents,
     temporaryChat: interfaceConfig?.temporaryChat,
     temporaryChatRetention: interfaceConfig?.temporaryChatRetention,
+    generalChatRetention: interfaceConfig?.generalChatRetention,
     retentionMode: interfaceConfig?.retentionMode,
     retainAgentFiles: interfaceConfig?.retainAgentFiles,
     runCode: interfaceConfig?.runCode,
     webSearch: interfaceConfig?.webSearch,
     fileSearch: interfaceConfig?.fileSearch,
     fileCitations: interfaceConfig?.fileCitations,
+    traceViewer: interfaceConfig?.traceViewer,
+    defaultPinnedTools: interfaceConfig?.defaultPinnedTools,
     peoplePicker: interfaceConfig?.peoplePicker,
     marketplace: interfaceConfig?.marketplace,
     remoteAgents: interfaceConfig?.remoteAgents,
     skills: interfaceConfig?.skills,
     sharedLinks: interfaceConfig?.sharedLinks,
+    schedules: interfaceConfig?.schedules,
   });
 
   return loadedInterface;
