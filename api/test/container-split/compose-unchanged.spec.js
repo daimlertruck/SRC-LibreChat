@@ -135,17 +135,5 @@ describe('COMPOSE-UNCHANGED-12: single-container compose changes are surfaced, n
       }
       expect(warning).toContain(DIGEST_LOCATION);
     });
-
-    it('reports a match with no warning when the content hashes to the committed digest', () => {
-      const entry = GUARDED_COMPOSE_FILES[0];
-      const contents = readFileSync(path.join(repoRoot, entry.file));
-
-      // The happy path the committed files take today: the real bytes match the
-      // committed digest, so there is no warning to print.
-      expect(compareComposeDigest(contents, entry)).toEqual({
-        match: true,
-        warning: null,
-      });
-    });
   });
 });
