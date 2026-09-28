@@ -77,6 +77,8 @@ import {
 } from './layer-a-outcome.mjs';
 import { parseUndecided } from './undecided.mjs';
 import { PATH_OUTCOMES_PATH, consumePublishedPathOutcomes } from './path-outcomes.mjs';
+import { readImageRecord } from './image-record.mjs';
+import { referenceSummary as suiteParityReferenceSummary } from './checks/suite-parity.filter.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -266,10 +268,14 @@ export function collectOutcomes(aggregate) {
 //     The catalog marks the static guard `layer: 'static'` and the grant/provision suites `layer: 'A'`;
 //     both are backend-lane checks for this derivation.
 //
-// PARITY-SUITE-31 is layer 'recorded' — it is decided by reference and its spec always registers a
-// pass (no live gate, no self-skip: suite-parity.spec.mjs), so it normally has a Jest result and this
-// derivation does not fire for it. Should it ever be absent, it is DECIDED_BY_REFERENCE, the reason
-// its recorded nature warrants. Every other id with no result is NOT_EXECUTED — a check that would
+// PARITY-SUITE-31 is layer 'recorded' — it is decided by reference. Its spec registers NO
+// `[PARITY-SUITE-31]` check (suite-parity.spec.mjs carries only internal well-formedness exercises,
+// none tagged with the catalog id), so the id produces NO Jest result and THIS derivation is what
+// records it — a `skip` with skipReason DECIDED_BY_REFERENCE, never a `pass`, because a pass would
+// claim an observation the run did not make (task 17.6). The skip's observation is the recorded
+// reference itself (referenceSummary): the backend lane, its workflow path, its jobs, the
+// DISABLE_STARTUP_TASKS-absent criterion, and the additive roots. Every other id with no result is
+// NOT_EXECUTED — a check that would
 // have run against a live topology but did not this run, which is NOT an enumerated benign skip and
 // so blocks exit 0 (design: "Unexecuted is not passed").
 function derivedSkipReasonFor(id) {
@@ -307,7 +313,11 @@ function derivedSkipObservationFor(reason) {
         'accounted for rather than a gap.'
       );
     case SKIP_REASON.DECIDED_BY_REFERENCE:
-      return 'decided elsewhere and recorded by reference; no local execution this run.';
+      // The recorded reference itself is the observation: the backend lane, its workflow path, its
+      // jobs, the DISABLE_STARTUP_TASKS-absent criterion, and the additive roots that make the existing
+      // suite's counts carry. It states — never asserts — whether the cited lane path resolves (NG10),
+      // and carries no transcribed pass/fail count and no claim of a local execution (task 17.6).
+      return suiteParityReferenceSummary();
     case SKIP_REASON.OPTIONAL_DEPENDENCY_ABSENT:
       // Deliberately does NOT assert that `mongosh` was missing. This branch is reached only when the
       // reporter was handed no Layer A verdict at all (a bare `npx jest`, no runner), so the honest
@@ -370,6 +380,12 @@ export default class ContainerSplitReporter {
     // they carry what Layer A actually decided. null on a plain `jest` invocation, where no Layer A
     // ran and claiming knowledge of one would be the same false statement in the other direction.
     this._layerA = options.layerA ?? readLayerASummary(process.env);
+    // The tested-image record, as the runner handed it over (HARNESS_IMAGE_RECORD). The image is
+    // resolved at stage 2 in the runner's process; the record crosses to this Jest run through the
+    // environment (image-record.mjs), the same channel Layer A's verdict uses, so the stage-11 report
+    // carries the top-level `image` block (Req 5.12). null on a plain `jest` invocation, where no
+    // runner resolved an image and claiming one would be a false statement in the artifact.
+    this._image = options.image ?? readImageRecord(process.env);
   }
 
   // A sidecar that was there and could not be used. It is NOT attached — a malformed list throws in
@@ -526,6 +542,7 @@ export default class ContainerSplitReporter {
       startedAt: this._startedAt,
       setupFailure: this._setupFailure,
       teardownFailure: this._teardownFailure,
+      image: this._image,
     });
 
     await mkdir(path.dirname(this._reportPath), { recursive: true });

@@ -78,7 +78,7 @@ export const CHECK_CATALOG = Object.freeze({
     requirements: ['2.5', '2.6'],
     property: 'setup precondition',
   },
-  'COMPOSE-UNCHANGED-12': { layer: 'static', requirements: ['1.1', '4.1'], property: 'P12' },
+  'COMPOSE-UNCHANGED-12': { layer: 'static', requirements: ['1.14'], property: 'P12' },
   // SPLIT-ONLY. The claim is digest EQUALITY BETWEEN the two services (Req 1.2) — "not the same image"
   // is the only thing it can report. The collapsed profile runs one container, so there is no second
   // digest to compare and the comparison has no subject at all.
@@ -147,8 +147,9 @@ export const CHECK_CATALOG = Object.freeze({
   // legitimate request-path `createIndex` the grant deliberately carries among them. Nothing is
   // renumbered, exactly as with the vacant id 30: PATH-EXERCISE-25 onward keep their numbers.
   // The decision rule (3.4, 3.12, 3.13), the recorded payloads (3.14, 3.15), the seed and session
-  // fixtures (3.16, 3.17), the Unconfigured_Provider carve-out (3.19, 3.20, 3.21) and the fixture
-  // failure a session-gated path exercised anonymously reports (3.22). The record has to name every
+  // fixtures (3.16, 3.17), the Unconfigured_Provider carve-out (3.19, 3.20, 3.21), the fixture
+  // failure a session-gated path exercised anonymously reports (3.22) and the fixture failure a
+  // not-recorded-as-gated path answering a clean 401 reports (3.23). The record has to name every
   // one of them: the reporter derives each check record from this table, so a criterion missing here
   // is a criterion the run decided and did not report (Req 5.4). 3.18 is deliberately absent —
   // BOOT-NOWRITE-23 decides it.
@@ -166,6 +167,8 @@ export const CHECK_CATALOG = Object.freeze({
       '3.20',
       '3.21',
       '3.22',
+      '3.23',
+      '2.11',
     ],
     property: 'P5',
   },
@@ -180,7 +183,7 @@ export const CHECK_CATALOG = Object.freeze({
   // there is one upstream. The split run decides it at full strength.
   'ROUTE-ALLOW-27': {
     layer: 'B',
-    requirements: ['3.10'],
+    requirements: ['3.10', '2.11'],
     property: 'P2',
     // Decides the load-balancer half of P2 only; the full property also depends on the Auth_Gate,
     // which the harness does not stand up (NG6). The record says so rather than claiming all of P2.
@@ -194,7 +197,7 @@ export const CHECK_CATALOG = Object.freeze({
   // selects.
   'ROUTE-DEFAULT-28': {
     layer: 'B',
-    requirements: ['3.11'],
+    requirements: ['3.11', '2.11'],
     property: 'P11',
     partial: "routed path partition (P11's load-balancer half)",
     profiles: SPLIT_ONLY,
@@ -207,10 +210,31 @@ export const CHECK_CATALOG = Object.freeze({
   // byte-identical bodies. Nothing is renumbered: the ids are cited by test titles and by the design's
   // negative-control recipes, so PARITY-COLLAPSE-29, PARITY-SUITE-31 and RUN-REPORT-32 keep their
   // numbers and 30 stays empty.
-  'PARITY-SUITE-31': { layer: 'recorded', requirements: ['4.4'], property: 'P12' },
+  // Req 4.4 is the property this record owns (the existing suite's counts, carried by reference). It
+  // ALSO owns 5.10 and 5.11: the id is decided by reference and reported as a `skip` with skipReason
+  // `decided-by-reference` (never a `pass`), which is exactly the reporting contract 5.10 (an
+  // unexecuted/recorded check must appear as a skip, not read as passed) and 5.11 (the skip carries a
+  // reason from the closed, enumerated set) name (task 17.6).
+  'PARITY-SUITE-31': { layer: 'recorded', requirements: ['4.4', '5.10', '5.11'], property: 'P12' },
   'RUN-REPORT-32': {
     layer: 'both',
-    requirements: ['5.1', '5.2', '5.3', '5.4', '5.5'],
+    // Task 17.5 brings image-identity reporting (5.12) and the reuse notice (5.13) under RUN-REPORT-32,
+    // matching the design's Check Catalog. 5.6 stays absent (it is the env-example contract, carried by
+    // TOPO-ENV-14), so the list is 5.1–5.5 and 5.7–5.13.
+    requirements: [
+      '5.1',
+      '5.2',
+      '5.3',
+      '5.4',
+      '5.5',
+      '5.7',
+      '5.8',
+      '5.9',
+      '5.10',
+      '5.11',
+      '5.12',
+      '5.13',
+    ],
     property: null,
   },
 });

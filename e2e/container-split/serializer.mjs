@@ -358,6 +358,24 @@ function normalizeRunFailure(failure) {
   };
 }
 
+// Normalize the tested-image record into the report's top-level `image` block (task 17.5, Req 5.12).
+// Returns null for a null/absent record (a run that ended before image resolution), or the four
+// reported fields otherwise — `reference`, `id`, `createdAt`, `provenance` — with `id`/`createdAt`
+// null when the inspect produced no usable value, reported as null rather than fabricated. Reads only
+// those four fields, so a caller handing a richer object does not leak working fields into the
+// artifact.
+function normalizeImageBlock(image) {
+  if (image === null || image === undefined || typeof image !== 'object') {
+    return null;
+  }
+  return {
+    reference: image.reference ?? null,
+    id: image.id ?? null,
+    createdAt: image.createdAt ?? null,
+    provenance: image.provenance ?? null,
+  };
+}
+
 // Serialize a whole run into the JSON summary the CI lane attaches and the human-readable text a
 // reader scans — the two views of the same records, produced together so they cannot disagree
 // (RUN-REPORT-32, reporting half). `records` is the array from buildRecords; `setupFailure` and
@@ -366,9 +384,23 @@ function normalizeRunFailure(failure) {
 //
 // Returns `{ json, text, outcome }`: `json` is the object to write as the machine artifact, `text` is
 // the human summary, `outcome` is runOutcome's verdict (including the exit code the runner uses).
+//
+// `image` is the tested-image identity record (task 17.5, Req 5.12): `{ reference, id, createdAt,
+// provenance }`, the image both containers started from. When supplied it is written as a top-level
+// `image` block beside `profile` and `startedAt`, and its four fields are rendered in the human text.
+// When ABSENT — a run that ended before image resolution (a setup failure in `prepareSetup`, before
+// stage 2) — the `image` key is set to NULL rather than omitted: the artifact shape stays uniform, and
+// `image === null` reads unambiguously as "no image was resolved this run" rather than as a key a
+// consumer forgot to write. (Chosen over omission so every report carries the key.)
 export function serializeRun(
   records,
-  { profile = 'split', startedAt = null, setupFailure = null, teardownFailure = null } = {},
+  {
+    profile = 'split',
+    startedAt = null,
+    setupFailure = null,
+    teardownFailure = null,
+    image = null,
+  } = {},
 ) {
   const outcome = runOutcome(records, { setupFailure, teardownFailure });
 
@@ -378,6 +410,10 @@ export function serializeRun(
     schema: 'container-split-run-report/1',
     profile,
     startedAt,
+    // The tested image, beside profile and startedAt (design: "The tested image, at the top of the
+    // report"). null when the run ended before image resolution (Req 5.12 distinction), a four-field
+    // block otherwise.
+    image: normalizeImageBlock(image),
     generatedAt: new Date().toISOString(),
     outcome: {
       ok: outcome.ok,
@@ -426,6 +462,16 @@ function renderText(json, records) {
       `  reason: ${json.outcome.nonEnumeratedSkipIds.length} skip(s) with a non-enumerated reason ` +
         `(treated as setup failure): ${json.outcome.nonEnumeratedSkipIds.join(', ')}.`,
     );
+  }
+  // The tested image, printed as its four fields (Req 5.12) — the same values the JSON `image` block
+  // carries. Absent when the run ended before image resolution, in which case there is nothing tested
+  // to name and the line is omitted.
+  if (json.image) {
+    lines.push(
+      `Image: ${json.image.reference ?? '(unknown)'} (${json.image.provenance ?? 'unknown'})`,
+    );
+    lines.push(`  id: ${json.image.id ?? '(unknown)'}`);
+    lines.push(`  created: ${json.image.createdAt ?? '(unknown)'}`);
   }
   lines.push('');
 

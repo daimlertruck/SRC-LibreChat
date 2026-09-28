@@ -1,76 +1,55 @@
-// checks/suite-parity.spec.mjs — PARITY-SUITE-31, the existing-suite parity RECORD (task 12.3).
+// checks/suite-parity.spec.mjs — PARITY-SUITE-31, the existing-suite parity RECORD (task 12.3, task 17.6).
 //
 // Property 4, single-container parity (parent P12, Req 4.4). Requirement 4.4 asks that, run with
 // `DISABLE_STARTUP_TASKS` absent, the existing automated test suite finish with the SAME count of
 // passing and failing tests it produces against the pre-split image, having modified ZERO existing
 // test files and ZERO existing assertions.
 //
-// == This check RECORDS a reference; it does not re-run the suite ==
+// == This check is DECIDED BY REFERENCE — it neither re-runs the suite nor reports a pass ==
 // Unlike every sibling check, PARITY-SUITE-31 is `layer: 'recorded'` in the Check Catalog
-// (check-catalog.mjs) — it is decided OUTSIDE the harness and recorded BY REFERENCE here. The design
-// is explicit (design.md: "`PARITY-SUITE-31` is decided outside the harness. Re-running the backend
-// suite inside a topology run would double the cost to re-derive a result the backend lane already
-// produces on every pull request, so the harness records the reference and the observation and
-// asserts nothing itself. Recording it is what keeps Requirement 4.4 visible in the run summary
-// instead of unowned.").
+// (check-catalog.mjs) — it is decided OUTSIDE the harness. The backend CI lane runs the existing suite
+// with `DISABLE_STARTUP_TASKS` absent (its ordinary configuration) on every pull request and produces
+// the pass/fail counts Req 4.4 asks about; re-running the suite inside a topology run would double the
+// cost to re-derive a result the lane already owns (design.md). So the harness records the reference —
+// the lane name, its workflow path, its jobs, the DISABLE_STARTUP_TASKS-absent condition, and the
+// additive roots that make the counts carry — and ASSERTS NOTHING about a local execution.
 //
-// So this spec:
+// The run report carries this id as a `skip` with skipReason `decided-by-reference`, NEVER a `pass`:
+// a pass would claim an observation the run did not make (task 17.6). The skip is not announced by
+// this spec as a `test.skip` (which the reporter reads as NOT_EXECUTED, a run-blocking absence);
+// instead this spec REGISTERS NO `[PARITY-SUITE-31]` check, and reporter.mjs derives the
+// decided-by-reference skip for the id from the catalog when the id produces no Jest result, carrying
+// `referenceSummary()` as the observation. Absence-derived is how every recorded/unexecuted skip is
+// expressed in this harness (design: "Unexecuted is not passed"; the Layer B live specs self-skip the
+// same way, by registering nothing rather than a definition-time skip).
 //
-//   1. RECORDS the reference — the backend lane that runs the existing suite, the criterion under
-//      which it runs it (`DISABLE_STARTUP_TASKS` absent — the backend lane's ordinary configuration,
-//      which never sets the gate), and where the pass/fail counts the lane produces are read from —
-//      as a single committed constant (SUITE_PARITY_REFERENCE below). The count itself is not a number
-//      transcribed here (a transcribed count would rot the moment the suite grows a test); it is a
-//      pointer to the lane whose run IS the count, plus the invariant Req 4.4 turns on: the two counts
-//      MATCH because the harness added zero changes to any existing test.
+// == Why this file still exists and runs ==
+// It carries the committed reference (SUITE_PARITY_REFERENCE, in the sibling suite-parity.filter.mjs)
+// and INTERNAL well-formedness exercises over it — that the reference names the requirement it owns,
+// the DISABLE_STARTUP_TASKS-absent criterion, a lane path, and the additive roots. That well-formedness
+// is validation of the RECORD, not the check's outcome: a malformed reference is a bug in this file
+// worth failing a `.spec.mjs` test on, but the id's OUTCOME in the run report is a decided-by-reference
+// skip regardless. None of these exercises carry the `[PARITY-SUITE-31]` catalog tag in a bracket, so
+// reporter.mjs's parseCheckId does not map any of them onto the check record — the id stays absent from
+// the aggregate and the reporter derives its skip.
 //
-//   2. RECORDS the observation that zero existing test files and zero existing assertions were
-//      modified — the load-bearing half of Req 4.4. The harness is entirely additive: every artifact
-//      it introduces lives under NEW paths (e2e/container-split/, api/test/container-split/), it
-//      changes no application source (NG1) and neither container-split script (NG2), so no existing
-//      test's file or assertion moved. That additivity is WHY the existing suite's count is unchanged,
-//      and it is the thing this record commits to so a future edit that touched an existing test would
-//      have to update this record deliberately rather than pass silently.
+// == NG10: no failure on a missing or renamed workflow file ==
+// Whether the cited lane path resolves on disk is REPORTED in the skip's observation
+// (referenceSummary states a dangling pointer), never turned into a check failure. A recorded check
+// may not depend on project code or config staying unchanged (NG10): a lane that was renamed still
+// leaves Req 4.4 owned in the run summary, with the observation telling a reader to update the path.
 //
-//   3. ASSERTS NOTHING about a local execution. The single `[PARITY-SUITE-31]` check does not run the
-//      backend suite, spawn Jest, or reach any topology. Its `pass` means "the reference is recorded
-//      and internally well-formed" — the check record's `status` reflects the RECORDED REFERENCE
-//      rather than a local run (tasks.md 12.3: "the check record's `status` reflects the recorded
-//      reference rather than a local execution"). This is what keeps Req 4.4 owned in the run summary
-//      without paying to re-derive a result the backend lane already produces.
-//
-// == Why a pass carries no observation, and where the recorded facts live ==
-// The serializer forbids a `pass` record from carrying an observation (serializer.mjs: "a pass is
-// decided by the check id and its property, not by prose") — a `pass` is the correct status here
-// because the reference IS recorded and well-formed, and the recorded facts (the lane, the criterion,
-// the no-modification observation) live in the committed SUITE_PARITY_REFERENCE constant and are
-// written to process.stderr when the file loads, so the run's console carries the reference a reader
-// scans even though the check record proper stays a clean pass. A run in which the reference were
-// malformed or its cited lane file were absent would `fail` with that as the observation — the record
-// then carries prose, as a fail must.
-//
-// == The check-record tag convention ==
-// The single check's title STARTS with `[PARITY-SUITE-31]`, which reporter.mjs parses to map the Jest
-// result onto the check record (check-catalog.mjs owns id → {layer, requirements, property}:
-// PARITY-SUITE-31 → layer 'recorded', Req 4.4, property P12).
-//
-// == No live gate, no self-skip ==
-// This check reads only committed repository files (the cited lane workflow) and a committed constant.
-// It needs no topology and no mongosh, so it neither gates on HARNESS_LIVE nor self-skips — it decides
-// the same way on every run, in the backend lane and under the Layer B runner alike. That is what a
-// `recorded` check is: a reference the run report carries, checked for well-formedness, not a live
-// observation.
-//
-// NG1/NG2 hold: this records a reference to an existing CI lane and reads a committed workflow file to
-// confirm the reference resolves. It adds no application code, no route mount and no HTTP path (NG1),
-// and edits neither container-split script (NG2). NG6 holds: no credential validation happens here.
+// NG1/NG2 hold: this records a reference to an existing CI lane and adds no application code, no route
+// mount and no HTTP path (NG1), and edits neither container-split script (NG2). NG6 holds: no
+// credential validation happens here.
 
-// The exported constants and pure deciders live in suite-parity.filter.mjs (a non-spec sibling) so this
-// spec file exports nothing (task 14.6). The spec imports what its checks exercise.
+// The exported constants and pure helpers live in suite-parity.filter.mjs (a non-spec sibling) so this
+// spec file exports nothing (task 14.6). The spec imports what its exercises read.
 import {
   CHECK_ID,
   SUITE_PARITY_REFERENCE,
   decideSuiteParityReference,
+  laneResolves,
   referenceSummary,
 } from './suite-parity.filter.mjs';
 
@@ -81,78 +60,71 @@ import {
 process.stderr.write(`[container-split] ${referenceSummary()}\n`);
 
 // ---------------------------------------------------------------------------------------------
-// The check. A single `[PARITY-SUITE-31]` test that decides the recorded reference is well-formed and
-// resolves — it runs the existing suite NOWHERE, reaches no topology, and reflects the RECORDED
-// REFERENCE rather than a local execution (tasks.md 12.3). Its title starts with the catalog id so
-// reporter.mjs maps the result onto the check record.
+// Internal well-formedness exercises for the recorded reference. They run NOW (no topology, no gate),
+// so the reference logic is exercised on every run. NONE of them carries the `[PARITY-SUITE-31]`
+// catalog tag in a bracket, so the reporter does not map them onto the check record: the id produces
+// no Jest result and the reporter derives its decided-by-reference skip (reporter.mjs). Each asserts
+// both a well-formed and a malformed case so no branch is vacuous (Property 6: no check passes
+// vacuously).
+//
+// The cited lane's existence is NOT a well-formedness condition (NG10): `laneResolves` is exercised
+// through an injectable `fileExists` and reported into the summary, never asserted as a pass gate.
 // ---------------------------------------------------------------------------------------------
-describe(`${CHECK_ID}: the existing-suite parity result is recorded by reference`, () => {
-  test(`[${CHECK_ID}] the existing-suite parity reference is recorded, additive, and resolves to the backend lane`, () => {
-    const decision = decideSuiteParityReference();
-    expect(decision.ok ? '' : decision.reason).toBe('');
-  });
-});
-
-// ---------------------------------------------------------------------------------------------
-// Static unit exercises for the pure decider — they run NOW (no topology, no gate), so the
-// recorded-reference logic is exercised on every run. Each asserts both a pass and a fail so no
-// branch is vacuous (Property 6: no check passes vacuously). The cited lane's existence is stubbed
-// through the injectable `fileExists` so the exercises do not depend on the real workflow file being
-// present in the unit's view.
-// ---------------------------------------------------------------------------------------------
-describe(`${CHECK_ID}: pure decider unit exercises`, () => {
-  const present = () => true;
-  const absent = () => false;
-
-  test('the committed reference is well-formed and resolves', () => {
-    // Against the real repo root and the real filesystem: the cited lane workflow exists in-tree.
+describe(`${CHECK_ID}: the recorded suite-parity reference is well-formed`, () => {
+  test('the committed reference is well-formed', () => {
     expect(decideSuiteParityReference().ok).toBe(true);
-    // And explicitly with a stubbed present filesystem, so the exercise does not depend on cwd.
-    expect(decideSuiteParityReference(SUITE_PARITY_REFERENCE, { fileExists: present }).ok).toBe(
-      true,
-    );
-  });
-
-  test('a non-zero modified-existing-test count fails — the counts can no longer carry by reference', () => {
-    const edited = { ...SUITE_PARITY_REFERENCE, modifiedExistingTestFiles: 1 };
-    const decision = decideSuiteParityReference(edited, { fileExists: present });
-    expect(decision.ok).toBe(false);
-    expect(decision.reason).toContain('modified');
-  });
-
-  test('a non-zero modified-assertion count fails for the same reason', () => {
-    const edited = { ...SUITE_PARITY_REFERENCE, modifiedExistingAssertions: 3 };
-    expect(decideSuiteParityReference(edited, { fileExists: present }).ok).toBe(false);
+    expect(decideSuiteParityReference(SUITE_PARITY_REFERENCE).ok).toBe(true);
   });
 
   test('a wrong requirement fails — the record owns Req 4.4', () => {
     const wrongReq = { ...SUITE_PARITY_REFERENCE, requirement: '4.3' };
-    expect(decideSuiteParityReference(wrongReq, { fileExists: present }).ok).toBe(false);
+    expect(decideSuiteParityReference(wrongReq).ok).toBe(false);
   });
 
   test('a missing DISABLE_STARTUP_TASKS criterion fails — the condition must be recorded', () => {
     const noCriterion = { ...SUITE_PARITY_REFERENCE, criterion: 'some other condition' };
-    expect(decideSuiteParityReference(noCriterion, { fileExists: present }).ok).toBe(false);
+    expect(decideSuiteParityReference(noCriterion).ok).toBe(false);
   });
 
-  test('a dangling lane pointer fails — the reference must resolve', () => {
-    // The reference is well-formed but the cited lane file is absent (renamed or removed).
-    const decision = decideSuiteParityReference(SUITE_PARITY_REFERENCE, { fileExists: absent });
+  test('an empty lane path fails — the reference must point at something', () => {
+    const noPath = { ...SUITE_PARITY_REFERENCE, lanePath: '   ' };
+    const decision = decideSuiteParityReference(noPath);
     expect(decision.ok).toBe(false);
-    expect(decision.reason).toContain(SUITE_PARITY_REFERENCE.lanePath);
+    expect(decision.reason).toContain('lane path');
   });
 
   test('an empty additive-roots list fails — additivity is what makes the counts carry', () => {
     const noRoots = { ...SUITE_PARITY_REFERENCE, additiveRoots: [] };
-    expect(decideSuiteParityReference(noRoots, { fileExists: present }).ok).toBe(false);
+    expect(decideSuiteParityReference(noRoots).ok).toBe(false);
   });
 
   test('a non-object reference fails rather than throwing', () => {
-    expect(decideSuiteParityReference(null, { fileExists: present }).ok).toBe(false);
+    expect(decideSuiteParityReference(null).ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The cited lane path is REPORTED, not asserted (NG10). A missing or renamed workflow file does not
+// fail the check — it is stated in the skip's observation. These exercises pin that laneResolves is a
+// report and that referenceSummary states a dangling pointer rather than throwing or failing.
+// ---------------------------------------------------------------------------------------------
+describe(`${CHECK_ID}: a missing or renamed lane file is reported, never a failure (NG10)`, () => {
+  const present = () => true;
+  const absent = () => false;
+
+  test('laneResolves reports the lane file presence rather than deciding an outcome', () => {
+    expect(laneResolves(SUITE_PARITY_REFERENCE, { fileExists: present })).toBe(true);
+    expect(laneResolves(SUITE_PARITY_REFERENCE, { fileExists: absent })).toBe(false);
   });
 
-  test('referenceSummary names the lane, the criterion, and the additive counts', () => {
-    const summary = referenceSummary();
+  test('the observation states a dangling lane pointer instead of failing on it', () => {
+    const summary = referenceSummary(SUITE_PARITY_REFERENCE, { fileExists: absent });
+    expect(summary).toContain('does NOT currently');
+    expect(summary).toContain(SUITE_PARITY_REFERENCE.lanePath);
+  });
+
+  test('referenceSummary names the lane, the criterion, and the additive roots when the lane resolves', () => {
+    const summary = referenceSummary(SUITE_PARITY_REFERENCE, { fileExists: present });
     expect(summary).toContain('BY REFERENCE');
     expect(summary).toContain(SUITE_PARITY_REFERENCE.laneName);
     expect(summary).toContain('DISABLE_STARTUP_TASKS');

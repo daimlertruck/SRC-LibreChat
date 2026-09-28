@@ -124,8 +124,6 @@ import {
   SESSION_GATED_PATHS,
   SESSION_ATTACHED_PATHS,
   PAYLOAD_FINDINGS,
-  LOGIN_LIMITED_PATHS,
-  LOGIN_LIMIT_BUDGET,
   SEED_PLACEHOLDERS,
   assertPayloadCoverage,
   payloadFor,
@@ -144,7 +142,6 @@ import {
   awaitBootWindowClosed,
   cookieHeaderFrom,
   decideSessionAttachment,
-  describeLoginBudgetPressure,
   mintSessionFixture,
   msUntilBootWindowClosed,
   parseSetCookieJar,
@@ -245,9 +242,8 @@ if (pathExerciseCtx) {
       // from a path list (Req 3.21). A provider the harness configures is exercised in full with no
       // second edit here.
       const providers = await resolveProviderConfiguration();
-      // One session, minted once and reused: the login mint is a ninth request through the single
-      // loginLimiter key (F3 in the recorded payloads), so re-minting per exercise would make the
-      // budget pressure worse. It throws loudly rather than leaving an anonymous client behind.
+      // One session, minted once and reused across every session-gated exercise — one session is all
+      // the decision rule needs. It throws loudly rather than leaving an anonymous client behind.
       const fixture = await mintSessionFixture({
         ingress: ctx.ingress,
         seededAccount: ctx.seededAccount,
@@ -274,17 +270,12 @@ if (pathExerciseCtx) {
         );
       }
 
-      // Recorded findings that narrow what the run means without changing a verdict: the shared
-      // login-limiter arithmetic, the payload findings (F1/F2), a provider whose recorded status went
-      // stale, an `/oauth/<p>` path with no recorded gate, and any exercise whose observed status is not
-      // the one the payload recorded — the third payload field exists so a status change has to be
-      // justified where it is recorded rather than absorbed as a passing diff.
-      const budget = describeLoginBudgetPressure({
-        limitedPaths: LOGIN_LIMITED_PATHS,
-        budget: LOGIN_LIMIT_BUDGET,
-      });
+      // Recorded findings that narrow what the run means without changing a verdict: the payload
+      // findings (F1/F2), a provider whose recorded status went stale, an `/oauth/<p>` path with no
+      // recorded gate, and any exercise whose observed status is not the one the payload recorded —
+      // the third payload field exists so a status change has to be justified where it is recorded
+      // rather than absorbed as a passing diff.
       const notes = [
-        ...(budget.exceeds ? [budget.reason] : []),
         ...PAYLOAD_FINDINGS.map((finding) => `${finding.routedPath}: ${finding.finding}`),
         ...findStaleProviderPayloads(providers, PATH_PAYLOADS).map((stale) => stale.detail),
         ...providers.unknown.map((unknown) => unknown.reason),
@@ -936,7 +927,7 @@ describe('Path_Payload fixture', () => {
     expect(payloadFor('/api/auth/refresh').request.body).toBeUndefined();
   });
 
-  test('the session table names the requireJwtAuth mounts, and no expected status is a rate-limit', () => {
+  test('the session table names the requireJwtAuth mounts', () => {
     for (const entry of PATH_PAYLOADS) {
       expect(Object.values(SESSION_ATTACHMENT)).toContain(entry.session);
     }
@@ -956,13 +947,6 @@ describe('Path_Payload fixture', () => {
     // refresh cookie and returns early with a 200 that queried nothing when the cookie is absent.
     expect(SESSION_ATTACHED_PATHS).toContain('/api/auth/refresh');
     expect(SESSION_GATED_PATHS).not.toContain('/api/auth/refresh');
-    // Every login-limited path is one this check exercises, and none records 429 as its expected
-    // answer — a 429 would mean the shared loginLimiter, not the handler, produced the status.
-    for (const path of LOGIN_LIMITED_PATHS) {
-      expect(payloadFor(path)).not.toBeNull();
-      expect(payloadFor(path).expectedStatus).not.toBe(429);
-    }
-    expect(LOGIN_LIMIT_BUDGET.max).toBe(7);
   });
 
   test('the findings are recorded on the entries, not left in prose', () => {
@@ -1540,32 +1524,6 @@ describe('Session_Fixture', () => {
       expect(attached.request.headers.cookie).toBe(FIXTURE.cookieHeader);
     }
     expect(SESSION_ATTACHED_PATHS.length).toBeGreaterThan(SESSION_GATED_PATHS.length);
-  });
-
-  test('the mint is the ninth request through one login rate-limit key, and says so', () => {
-    // F3 in the recorded payloads: ONE express-rate-limit instance keyed by client IP guards the six
-    // provider paths plus the two logins, and the fixture's login is a ninth request through the same
-    // key against a default budget of seven per five minutes. Reported rather than worked around — the
-    // arithmetic is what keeps a 429 from being read as the handler's answer, and it is why the fixture
-    // is minted ONCE and reused.
-    const pressure = describeLoginBudgetPressure({
-      limitedPaths: LOGIN_LIMITED_PATHS,
-      budget: LOGIN_LIMIT_BUDGET,
-    });
-    expect(pressure.exercises).toBe(8);
-    expect(pressure.mintRequests).toBe(1);
-    expect(pressure.total).toBe(9);
-    expect(pressure.budget).toBe(7);
-    expect(pressure.exceeds).toBe(true);
-    expect(pressure.reason).toMatch(/429/);
-    // With a budget that accommodates them, nothing is reported — the decider is arithmetic over the
-    // recorded numbers, not a hard-coded verdict.
-    expect(
-      describeLoginBudgetPressure({
-        limitedPaths: LOGIN_LIMITED_PATHS,
-        budget: { max: 20, windowMinutes: 5 },
-      }).exceeds,
-    ).toBe(false);
   });
 
   test('the fixture module mints, decodes and re-signs nothing — NG6 asserted against its source', async () => {

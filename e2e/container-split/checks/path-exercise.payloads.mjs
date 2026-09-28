@@ -76,18 +76,6 @@
 //       Auth_Surface (`/api/admin/login` plus `/api/admin/login/*`, `/api/admin/oauth` plus
 //       `/api/admin/oauth/*`). That is what "chosen to reach the handler" means here, and it is why
 //       `request.path` is recorded per entry instead of being assumed equal to the routed path.
-//
-//   F3. ONE SHARED LOGIN RATE LIMITER BOUNDS THE WHOLE EXERCISE SET. api/server/middleware/
-//       limiters/loginLimiter.js is a single express-rate-limit instance keyed by client IP,
-//       LOGIN_MAX=7 per LOGIN_WINDOW=5 minutes by default and unset in the harness env. It guards
-//       the six `/oauth/<provider>` paths (the `/oauth` router applies it to all of them),
-//       `/api/auth/login` and `/api/admin/login/local` — eight exercises — and the Session_Fixture
-//       login mint is a ninth request through the same key. Past the seventh the handler never
-//       runs and the answer is 429, so the recorded statuses for the LOGIN_LIMITED paths below hold
-//       only while the budget does. LOGIN_LIMITED_PATHS and LOGIN_LIMIT_BUDGET export the numbers
-//       so a consumer can assert the count rather than discover a 429 as a mystery outcome. The
-//       remaining limiters (register, password-reset request/submit, verify, verify-resend) are
-//       separate instances taking one request each and cannot bind.
 // ---------------------------------------------------------------------------------------------
 
 // What each exercise must carry beyond its payload. Recorded per path here so ONE table says what
@@ -195,8 +183,7 @@ export const PATH_PAYLOADS = Object.freeze([
       'The request sets NO `Origin` and NO `Sec-Fetch-Site` header on purpose. ' +
       '`middleware.requireSameOrigin` (packages/api/src/middleware/origin.ts) treats a request ' +
       'carrying neither as a non-browser request and admits it; supplying a foreign `Origin` ' +
-      "would make its 403 the observed answer instead of the login handler's. Counts against " +
-      'LOGIN_LIMIT_BUDGET (F3).',
+      "would make its 403 the observed answer instead of the login handler's.",
   }),
   Object.freeze({
     routedPath: '/api/auth/logout',
@@ -314,8 +301,7 @@ export const PATH_PAYLOADS = Object.freeze([
         'Exercise_Log_Window carries no information about the grant in either direction, and the ' +
         'verdict is `undecided`. Task 11.6 decides that from the resolved provider configuration, ' +
         'never from this list; a provider the harness DOES configure is exercised in full and this ' +
-        'expected status no longer holds for it. Counts against LOGIN_LIMIT_BUDGET (F3): the ' +
-        '`/oauth` router applies `loginLimiter` to every provider path.',
+        'expected status no longer holds for it.',
     }),
   ),
 
@@ -520,7 +506,7 @@ export const PATH_PAYLOADS = Object.freeze([
       'Deep reach: the capability resolution reads `users`, `roles` and `systemgrants` (and ' +
       '`groups` for principal expansion), all in the Container_1_Grant, so this is one of the ' +
       'stronger clean-window observations in the set. Sends no `Origin` header for the same reason ' +
-      'as `/api/auth/login`, and counts against LOGIN_LIMIT_BUDGET (F3).',
+      'as `/api/auth/login`.',
     finding:
       'F2 — `/api/admin/login` is not a mount. api/server/routes/admin/auth.js registers ' +
       "`POST /login/local`; `app.use('/api/admin', routes.adminAuth)` therefore leaves " +
@@ -597,25 +583,6 @@ export const PATH_PAYLOADS = Object.freeze([
       '`createSpaFallback`, so an SPA load is evidence of attribution and nothing else.',
   }),
 ]);
-
-// The routed paths whose exercises share the ONE `loginLimiter` instance (F3), and its default
-// budget. Exported as numbers so a consumer asserts the count rather than meeting a 429 as a
-// mystery outcome: the Session_Fixture login mint is an additional request through the same key, so
-// the set below plus that mint is what must fit inside LOGIN_LIMIT_BUDGET.
-export const LOGIN_LIMITED_PATHS = Object.freeze([
-  '/api/auth/login',
-  '/api/admin/login',
-  '/oauth/google',
-  '/oauth/github',
-  '/oauth/discord',
-  '/oauth/facebook',
-  '/oauth/openid',
-  '/oauth/apple',
-]);
-
-// LOGIN_MAX's default in api/server/middleware/limiters/loginLimiter.js, per LOGIN_WINDOW=5
-// minutes, keyed by client IP. Unset in the harness env, so the default is what applies.
-export const LOGIN_LIMIT_BUDGET = Object.freeze({ max: 7, windowMinutes: 5 });
 
 // The routed paths whose mounts sit behind `requireJwtAuth`. Derived from PATH_PAYLOADS' `session`
 // field so there is one table rather than two, which is what task 11.5 asked for ("Record the

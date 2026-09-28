@@ -31,6 +31,9 @@ import {
   DEFAULT_HARNESS_IMAGE,
   classifyImagePresence,
   resolveImage,
+  parseImageIdentity,
+  reuseNoticeFor,
+  rebuildCommandFor,
   buildComposeEnv,
   COMPOSE_FILE_PATH,
   COMPOSE_INTERPOLATION_KEYS,
@@ -119,26 +122,52 @@ describe('stage 1 — image resolution', () => {
     expect(classifyImagePresence({ status: 1 }).present).toBe(false);
   });
 
-  test('a present image is used as-is, with no build', async () => {
-    const exec = makeFakeExec((command, args) =>
-      joined(args).startsWith('image inspect') ? { status: 0, stdout: '', stderr: '' } : undefined,
-    );
-    const result = await resolveImage({ exec, harnessImage: 'x:local' });
-    expect(result).toEqual({ tag: 'x:local', built: false });
-    // Only the inspect ran — no build.
-    expect(exec.calls).toHaveLength(1);
-    expect(joined(exec.calls[0].args)).toContain('image inspect');
-  });
+  // A `docker image inspect --format IMAGE_IDENTITY_FORMAT` line: the local id and the RFC3339 created
+  // time, tab-separated, as the runner reads them off the format template.
+  const IDENTITY_LINE = 'sha256:abc123\t2024-02-03T04:05:06.789Z\n';
 
-  test('an absent image is built from the Dockerfile node target', async () => {
+  test('a present image is reused as-is, with no build, and carries its identity', async () => {
     const exec = makeFakeExec((command, args) => {
       const a = joined(args);
+      // The presence probe (no --format) exits 0; the identity read (--format) returns the id/created.
+      if (a.startsWith('image inspect') && a.includes('--format')) {
+        return { status: 0, stdout: IDENTITY_LINE, stderr: '' };
+      }
+      if (a.startsWith('image inspect')) return { status: 0, stdout: '', stderr: '' };
+      return undefined;
+    });
+    const result = await resolveImage({ exec, harnessImage: 'x:local' });
+    expect(result).toEqual({
+      reference: 'x:local',
+      id: 'sha256:abc123',
+      createdAt: '2024-02-03T04:05:06.789Z',
+      // provenance is 'reused' because this run invoked no build — decided by the code path, not the id.
+      provenance: 'reused',
+    });
+    // No build ran — only the presence probe and the identity read.
+    expect(exec.calls.every((c) => !joined(c.args).startsWith('build'))).toBe(true);
+  });
+
+  test('an absent image is built from the Dockerfile node target and carries provenance built', async () => {
+    const exec = makeFakeExec((command, args) => {
+      const a = joined(args);
+      if (a.startsWith('image inspect') && a.includes('--format')) {
+        // After the build, the now-present image inspects to its identity.
+        return { status: 0, stdout: IDENTITY_LINE, stderr: '' };
+      }
       if (a.startsWith('image inspect')) return { status: 1, stdout: '', stderr: 'No such image' };
       if (a.startsWith('build')) return { status: 0, stdout: '', stderr: '' };
       return undefined;
     });
     const result = await resolveImage({ exec, harnessImage: 'x:local' });
-    expect(result).toEqual({ tag: 'x:local', built: true });
+    expect(result).toEqual({
+      reference: 'x:local',
+      id: 'sha256:abc123',
+      createdAt: '2024-02-03T04:05:06.789Z',
+      // This run invoked the build, so provenance is 'built' — even though the identity read could have
+      // returned an existing id/old time for a fully cached build.
+      provenance: 'built',
+    });
     const buildCall = exec.calls.find((c) => joined(c.args).startsWith('build'));
     expect(buildCall.args).toEqual([
       'build',
@@ -170,6 +199,40 @@ describe('stage 1 — image resolution', () => {
     // The message names the tag and the command to run.
     expect(error.message).toContain('x:local');
     expect(error.message).toContain('docker build -f Dockerfile --target node');
+  });
+
+  test('parseImageIdentity reads id and normalizes the created time to ISO 8601 UTC', () => {
+    // A non-UTC offset is normalized to Z; the id is passed through verbatim.
+    expect(parseImageIdentity('sha256:deadbeef\t2024-06-01T12:00:00+02:00\n')).toEqual({
+      id: 'sha256:deadbeef',
+      createdAt: '2024-06-01T10:00:00.000Z',
+    });
+  });
+
+  test('parseImageIdentity yields nulls for a blank or partial inspect line rather than throwing', () => {
+    expect(parseImageIdentity('')).toEqual({ id: null, createdAt: null });
+    expect(parseImageIdentity('   ')).toEqual({ id: null, createdAt: null });
+    // An id with no created time: id present, createdAt null.
+    expect(parseImageIdentity('sha256:only-id')).toEqual({ id: 'sha256:only-id', createdAt: null });
+    // An unparseable time is null, not NaN and not a throw.
+    expect(parseImageIdentity('sha256:x\tnot-a-date')).toEqual({
+      id: 'sha256:x',
+      createdAt: null,
+    });
+  });
+
+  test('reuseNoticeFor prints exactly one notice on reuse, naming the rebuild command for the tag', () => {
+    const notice = reuseNoticeFor({ reference: 'x:local', provenance: 'reused' });
+    expect(notice).not.toBeNull();
+    expect(notice).toContain('may not match the current code');
+    expect(notice).toContain(rebuildCommandFor('x:local'));
+    expect(notice).toContain('docker build -f Dockerfile --target node -t x:local .');
+  });
+
+  test('reuseNoticeFor prints NO notice on a built image (or a null record)', () => {
+    expect(reuseNoticeFor({ reference: 'x:local', provenance: 'built' })).toBeNull();
+    expect(reuseNoticeFor(null)).toBeNull();
+    expect(reuseNoticeFor(undefined)).toBeNull();
   });
 });
 
@@ -858,7 +921,7 @@ describe('runHarness — the ordered sequence over a fake exec', () => {
 
   test('a clean run returns the context primitives and runs the stages in order', async () => {
     const exec = successExec();
-    const { contextPrimitives, imageTag, layerA, abortedBeforeBringup } = await runHarness({
+    const { contextPrimitives, image, layerA, abortedBeforeBringup } = await runHarness({
       exec,
       profile: 'split',
       secrets: SECRETS,
@@ -867,7 +930,9 @@ describe('runHarness — the ordered sequence over a fake exec', () => {
       now: () => 999,
       stdout: { write() {} },
     });
-    expect(imageTag).toBe('x:local');
+    // A present image is reused; runHarness now returns the identity record, not a bare tag.
+    expect(image.reference).toBe('x:local');
+    expect(image.provenance).toBe('reused');
     expect(contextPrimitives.readyAtMs).toBe(12345);
     expect(contextPrimitives.profile).toBe('split');
     expect(layerA.status).toBe(0);

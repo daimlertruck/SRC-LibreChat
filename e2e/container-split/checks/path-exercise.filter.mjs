@@ -35,7 +35,7 @@
 import { HARNESS_UPSTREAM_HEADER } from '../run.mjs';
 import { FAILING_PATH_OUTCOMES, PATH_OUTCOME, tallyPathOutcomes } from '../path-outcomes.mjs';
 
-import { toIngressRequest } from './path-exercise.payloads.mjs';
+import { SESSION_ATTACHMENT, toIngressRequest } from './path-exercise.payloads.mjs';
 import { attachSessionFixture } from './path-exercise.session.mjs';
 
 // NOTE on module direction: path-exercise.providers.mjs imports AUTH_SURFACE_ROUTED_PATHS FROM this
@@ -68,8 +68,9 @@ export const AUTH_SURFACE_UPSTREAM = 'auth-surface';
 // The paths are transcribed from the allowlist without re-derivation (NG4): moving a path between the
 // two routed sets is a Container_1_Grant recompute (Req 2.11), not an edit here. A path added to the
 // allowlist that this list omits would go un-exercised — so this list is kept in lockstep with the
-// allowlist, and the allowlist-digest guard (run.mjs: assertAllowlistDigest) fails the run if the
-// allowlist drifts, which is the tripwire that flags a needed update here.
+// allowlist. There is no digest tripwire: a moved path surfaces against the current allowlist and
+// grant — misattributed it fails ROUTE-ALLOW-27/ROUTE-DEFAULT-28, and routed to the Auth_Surface with
+// needs outside the grant PATH-EXERCISE-25 reports it `understated`.
 export const AUTH_SURFACE_ROUTED_PATHS = Object.freeze([
   // Local authentication.
   { surface: 'local login', path: '/api/auth/login', method: 'POST' },
@@ -389,6 +390,10 @@ export async function observeExercise({ ingress, observation, entry, request, wi
 //      reached the container under test, so it decided nothing (and 3.13 requires attribution).
 //   3. fixture failure — a session-gated path with no `Session_Fixture`. The gate refused the request
 //      ahead of the handler, so nothing was queried (Req 3.22, Property 6).
+//   3b. fixture failure — a path NOT recorded as session-gated, exercised anonymously, that answers 401
+//      over a clean window. The gate now refuses it, so the harness's session table has fallen behind
+//      the application; the same clean-401 that 3.13 would pass, withheld and named (Req 3.23,
+//      Property 6). 403 is excluded — it is the application's own configuration refusal, not the gate.
 //   4. `undecided` — an `Unconfigured_Provider` path over a clean window. No strategy is registered, so
 //      the request reaches no collection and the clean window carries no information (Req 3.19, 3.20).
 //   5. `uncorroborated` — a 5xx over a clean window (Req 3.12).
@@ -402,6 +407,14 @@ export function classifyExercise({
   observation: obs,
   undecidedReason = null,
   fixtureFailure = null,
+  // Whether the caller treats this path as session-gated under criterion 3.16 — i.e. its recorded
+  // attachment is GATED and it belongs on SESSION_GATED_PATHS. It DEFAULTS TO TRUE on purpose: the
+  // 3.23 case below is the only reader, and defaulting to `true` keeps that case from firing unless a
+  // caller has positively established the path is NOT gated. So an observation classified with no
+  // `sessionGated` argument decides exactly as it did before 3.23 (a clean 401 on such a path is the
+  // route being served — a `pass`), and only `exerciseRoutedPath`, which knows the recorded
+  // attachment, passes `sessionGated: false` to arm the 3.23 detection.
+  sessionGated = true,
 }) {
   if (obs === null || typeof obs !== 'object') {
     throw new TypeError(
@@ -498,6 +511,48 @@ export function classifyExercise({
           'clean window, which is precisely the three observations criterion 3.13 would hand a pass ' +
           'to — and it is withheld, because the gate refused the request, the handler queried ' +
           'nothing, and the exercise decided nothing about the grant.',
+      },
+    };
+  }
+
+  // 3b. The 3.23 fixture failure. A path the recorded session table does NOT mark session-gated,
+  //     exercised with no `Session_Fixture`, that answers 401 over a CLEAN window. That is the same
+  //     three observations criterion 3.13 would hand a `pass` (attributed, non-5xx, clean) — but the
+  //     401 is the gate refusing an anonymous request, so the handler queried nothing and the exercise
+  //     decided nothing about the grant (Req 3.23, Property 6). The likely cause is named: the path now
+  //     sits behind the authentication middleware and the harness's session table has not caught up.
+  //
+  //     It sits AFTER the Authorization_Error case (a refusal in the window is `understated` first,
+  //     even at 401 — guaranteed here because `windowClean` implies none was found), AFTER the
+  //     attribution case, and AFTER 3.22's `fixtureFailure` — a listed-but-unattached gated path is
+  //     3.22's, so this only fires when `fixtureFailure` is null AND the caller established the path is
+  //     not gated (`sessionGated === false`). 403 is deliberately excluded: among the exercised paths a
+  //     403 is the application's own configuration refusal (registration/password reset disabled), not
+  //     the auth gate. Only a 401 over a clean window arms it.
+  if (
+    fixtureFailure === null &&
+    sessionGated === false &&
+    obs.httpStatus === 401 &&
+    obs.windowClean === true
+  ) {
+    return {
+      outcome: null,
+      failure: {
+        kind: EXERCISE_FAILURE.FIXTURE,
+        path: obs.path,
+        reason:
+          `FIXTURE FAILURE: ${obs.path} (${obs.surface}) is NOT recorded as session-gated, was ` +
+          'exercised without a Session_Fixture, and returned 401 over a clean Exercise_Log_Window. ' +
+          `The likely cause: the application now requires authentication on ${obs.path} — the path ` +
+          'now sits behind the authentication middleware and the Harness\u2019s session table has ' +
+          'not caught up, so the anonymous request was refused at the gate ahead of the handler and ' +
+          'the handler queried no collection. That is the three observations criterion 3.13 grants a ' +
+          'pass on (attributed, non-5xx, clean window) reached by an exercise that decided NOTHING ' +
+          'about the Container_1_Grant, so the pass is WITHHELD (Req 3.23, Property 6). The cause is ' +
+          '"likely" because a 401 alone cannot prove the gate answered — read the Auth_Surface log ' +
+          'for this exercise. Record the Session_Fixture attachment for this path in ' +
+          'path-exercise.payloads.mjs (mark it session-gated) so it is exercised with a session, or, ' +
+          'if 401 is genuinely this anonymous path\u2019s expected answer, record it as such.',
       },
     };
   }
@@ -616,6 +671,12 @@ export async function exerciseRoutedPath({
       observation: obs,
       undecidedReason,
       fixtureFailure: attached.fixtureFailure,
+      // "Session-gated under 3.16" is exactly the recorded GATED attachment (SESSION_GATED_PATHS
+      // filters on it), so a path whose attachment is NONE (or the REFRESH_COOKIE early-return mount)
+      // is NOT gated — which is what arms the 3.23 clean-401 detection. A GATED path unattached is
+      // already 3.22's `fixtureFailure`, handled ahead of 3.23; a GATED path that WAS attached and
+      // still 401s is left to the existing outcomes.
+      sessionGated: attached.attachment === SESSION_ATTACHMENT.GATED,
     });
   } catch (error) {
     if (error?.isWindowNotScanned !== true) {

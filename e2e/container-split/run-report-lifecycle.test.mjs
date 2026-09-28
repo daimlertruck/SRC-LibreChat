@@ -56,6 +56,7 @@ import ContainerSplitReporter, {
   sidecarPathFor,
 } from './reporter.mjs';
 import { formatUndecided } from './undecided.mjs';
+import { IMAGE_RECORD_ENV, readImageRecord } from './image-record.mjs';
 import {
   PATH_OUTCOME,
   PATH_OUTCOMES_PATH,
@@ -91,6 +92,14 @@ const bringupFailure = () =>
     'Bring-up failed because a container did not stay up: harness-auth-surface (exited (1)).',
     { service: 'auth-surface', detail: 'a log tail' },
   );
+
+// A tested-image identity record, the shape resolveImage produces (task 17.5).
+const imageRecord = Object.freeze({
+  reference: 'ghcr.io/example/librechat:harness',
+  id: 'sha256:abc123',
+  createdAt: '2024-02-03T04:05:06.789Z',
+  provenance: 'reused',
+});
 
 describe('removeStaleRunReport — the previous run\u2019s report is gone before stage 1', () => {
   test('it names the path reporter.mjs writes, not a second spelling of it', () => {
@@ -293,6 +302,87 @@ describe('buildEarlyRunReport — a setup-failure run reports honestly', () => {
   });
 });
 
+describe('the tested-image block in the early-exit report (Req 5.12)', () => {
+  test('a setup failure AFTER image resolution carries the image block', () => {
+    // A bad MONGO_URI or a bring-up timeout still tested a resolved image, so the block is present —
+    // "including on a run that later ends in the setup failure" (Req 5.12).
+    const { json, text } = buildEarlyRunReport({
+      setupFailure: bringupFailure(),
+      layerA: layerAPassed,
+      image: imageRecord,
+    });
+    expect(json.image).toEqual(imageRecord);
+    expect(text).toContain(imageRecord.reference);
+    expect(text).toContain(imageRecord.id);
+    expect(text).toContain(imageRecord.createdAt);
+    expect(text).toContain('reused');
+  });
+
+  test('a failure BEFORE image resolution omits the block cleanly (image is null)', () => {
+    // No image was resolved, so there is nothing tested to name — the block is null, not a fabricated
+    // record, and the text prints no Image line.
+    const { json, text } = buildEarlyRunReport({
+      setupFailure: bringupFailure(),
+      layerA: null,
+    });
+    expect(json.image).toBeNull();
+    expect(text).not.toContain('Image:');
+  });
+
+  test('writeEarlyRunReport threads the image block onto the artifact it writes', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'harness-report-'));
+    const reportPath = path.join(dir, 'run-report.json');
+    await writeEarlyRunReport({
+      setupFailure: bringupFailure(),
+      layerA: layerAPassed,
+      image: imageRecord,
+      reportPath,
+      stdout: { write() {} },
+    });
+    const onDisk = JSON.parse(await readFile(reportPath, 'utf8'));
+    expect(onDisk.image).toEqual(imageRecord);
+  });
+});
+
+describe('serializeRun — the top-level image block (Req 5.12)', () => {
+  const oneRecord = () => buildRecords({ 'RUN-REPORT-32': { status: CHECK_STATUS.PASS } });
+
+  test('an image record becomes the top-level image block in JSON and renders in text', () => {
+    const { json, text } = serializeRun(oneRecord(), {
+      profile: 'split',
+      startedAt: '2024-01-01T00:00:10.000Z',
+      image: imageRecord,
+    });
+    // Top-level, beside profile and startedAt.
+    expect(json.image).toEqual({
+      reference: imageRecord.reference,
+      id: imageRecord.id,
+      createdAt: imageRecord.createdAt,
+      provenance: imageRecord.provenance,
+    });
+    // All four fields rendered in the human text.
+    expect(text).toContain(imageRecord.reference);
+    expect(text).toContain(imageRecord.id);
+    expect(text).toContain(imageRecord.createdAt);
+    expect(text).toContain('reused');
+  });
+
+  test('no image record makes the image key null (chosen over omission for a uniform shape)', () => {
+    const { json, text } = serializeRun(oneRecord(), { profile: 'split' });
+    // The key is present and null, per the documented choice — not absent.
+    expect(json).toHaveProperty('image', null);
+    expect(text).not.toContain('Image:');
+  });
+
+  test('the image block reads only the four reported fields, not a richer object', () => {
+    const { json } = serializeRun(oneRecord(), {
+      profile: 'split',
+      image: { ...imageRecord, secretWorkingField: 'must not leak' },
+    });
+    expect(Object.keys(json.image).sort()).toEqual(['createdAt', 'id', 'provenance', 'reference']);
+  });
+});
+
 describe('writeEarlyRunReport — the artifact a run that ended early still leaves', () => {
   test('it writes the JSON a stage-11 reporter would have written', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'harness-report-'));
@@ -484,6 +574,112 @@ describe('the Layer A hand-off to the stage-11 reporter', () => {
   test('with no hand-off the reporter claims no knowledge of Layer A rather than inventing a cause', () => {
     expect(readLayerASummary({})).toBeNull();
     expect(readLayerASummary({ [LAYER_A_RESULT_ENV]: 'not json' })).toBeNull();
+  });
+
+  test('runLayerBChecks carries the tested-image record in the environment (Req 5.12)', async () => {
+    const calls = [];
+    const exec = async (command, args, opts) => {
+      calls.push({ command, args, opts });
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    await runLayerBChecks({
+      exec,
+      contextFile: '/tmp/harness-context.json',
+      profile: 'split',
+      layerA: layerAPassed,
+      image: imageRecord,
+    });
+    // The record crosses through the same channel Layer A's verdict does, so the stage-11 reporter can
+    // write the top-level `image` block.
+    expect(readImageRecord({ [IMAGE_RECORD_ENV]: calls[0].opts.env[IMAGE_RECORD_ENV] })).toEqual(
+      imageRecord,
+    );
+  });
+
+  test('runLayerBChecks sets no image env var when no image was resolved', async () => {
+    const calls = [];
+    const exec = async (command, args, opts) => {
+      calls.push({ command, args, opts });
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    await runLayerBChecks({
+      exec,
+      contextFile: '/tmp/harness-context.json',
+      profile: 'split',
+      layerA: layerAPassed,
+      image: null,
+    });
+    expect(calls[0].opts.env[IMAGE_RECORD_ENV]).toBeUndefined();
+  });
+
+  test('the stage-11 reporter writes the top-level image block from the handed-over record', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'harness-reporter-'));
+    const reportPath = path.join(dir, 'run-report.json');
+    const reporter = new ContainerSplitReporter(
+      {},
+      {
+        reportPath,
+        profile: 'split',
+        layerA: { status: 0, selfSkipped: false },
+        image: imageRecord,
+      },
+    );
+    await reporter.onRunComplete(
+      {},
+      {
+        testResults: [
+          {
+            testResults: [
+              { status: 'passed', fullName: 'topology [TOPO-YAML-15] librechat.yaml is identical' },
+            ],
+          },
+        ],
+      },
+    );
+    const onDisk = JSON.parse(await readFile(reportPath, 'utf8'));
+    expect(onDisk.image).toEqual(imageRecord);
+  });
+
+  test('the stage-11 reporter writes a null image block when no record was handed over', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'harness-reporter-'));
+    const reportPath = path.join(dir, 'run-report.json');
+    // The contract under test is the reporter's documented fallback,
+    // `options.image ?? readImageRecord(process.env)`: with NO `image` option AND no record in the
+    // environment, the reporter claims none. `readImageRecord` reads IMAGE_RECORD_ENV, so this test
+    // must delete that key first — a LIVE harness run exports it into the Layer B Jest process before
+    // spawning it (run.mjs), and this in-process unit test would otherwise inherit a real record and
+    // read it back. Save-and-restore around the construction so no sibling test sees a changed env.
+    const priorImageRecord = process.env[IMAGE_RECORD_ENV];
+    delete process.env[IMAGE_RECORD_ENV];
+    try {
+      const reporter = new ContainerSplitReporter(
+        {},
+        { reportPath, profile: 'split', layerA: { status: 0, selfSkipped: false } },
+      );
+      await reporter.onRunComplete(
+        {},
+        {
+          testResults: [
+            {
+              testResults: [
+                {
+                  status: 'passed',
+                  fullName: 'topology [TOPO-YAML-15] librechat.yaml is identical',
+                },
+              ],
+            },
+          ],
+        },
+      );
+      const onDisk = JSON.parse(await readFile(reportPath, 'utf8'));
+      expect(onDisk.image).toBeNull();
+    } finally {
+      if (priorImageRecord === undefined) {
+        delete process.env[IMAGE_RECORD_ENV];
+      } else {
+        process.env[IMAGE_RECORD_ENV] = priorImageRecord;
+      }
+    }
   });
 
   test('the stage-11 reporter records Layer A\u2019s real outcome for the twelve backend-lane ids', async () => {
@@ -989,6 +1185,12 @@ describe('the catalog\u2019s requirement lists', () => {
       '3.20',
       '3.21',
       '3.22',
+      // 3.23 (task 17.4): a path not recorded as session-gated that answers a clean 401 is a fixture
+      // failure — the application now gates it and this check's session table has fallen behind.
+      '3.23',
+      // 2.11 moved here from the retired allowlist-digest guard (task 17.1): a moved path now
+      // surfaces through this check's `understated` outcome rather than a pre-bring-up tripwire.
+      '2.11',
     ]);
     // 3.18 is the seed-outside-the-window criterion, and this check does not assert the timing.
     expect(record.requirements).not.toContain('3.18');

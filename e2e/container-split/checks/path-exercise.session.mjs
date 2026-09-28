@@ -232,8 +232,7 @@ export async function mintSessionFixture({
         'over a request that queried nothing, which is the vacuous pass Req 3.16/3.22 exist to ' +
         'remove. Read the Auth_Surface log for this request: a 401/422 means the seeded document does ' +
         'not match what the login path reads (email, bcrypt password hash, provider, emailVerified), ' +
-        'a 429 means the shared loginLimiter budget was already spent by the exercises, and a 5xx is a ' +
-        'finding about the application or the harness configuration.',
+        'and a 5xx is a finding about the application or the harness configuration.',
       { status: result.status },
     );
   }
@@ -279,40 +278,6 @@ export async function mintSessionFixture({
     waitedForBootWindowMs: waitedMs,
     // Identity only, for a report; the password stays out of the fixture object.
     account: Object.freeze({ id: seededAccount.id ?? null, email: seededAccount.email }),
-  });
-}
-
-// The one thing the mint adds to a hazard the recorded payloads already document (F3 in
-// path-exercise.payloads.mjs): `api/server/middleware/limiters/loginLimiter.js` is a single
-// express-rate-limit instance keyed by client IP, LOGIN_MAX=7 per five minutes by default and unset in
-// the harness env. It guards the six `/oauth/<provider>` paths, `/api/auth/login` and
-// `/api/admin/login/local` — eight exercises — and this mint is a NINTH request through the same key.
-// Past the seventh the handler never runs and the answer is 429, so a 429 anywhere in that set is the
-// limiter rather than the application's own answer.
-//
-// This reports the arithmetic instead of working around it: raising the limit is an env decision and
-// re-minting per exercise would make it worse, so what a consumer needs is for the pressure to be
-// legible rather than discovered as a mystery outcome. Task 11.1's rule decides what to do with it —
-// one mint reused across every session-gated exercise, an env lever, or a reported finding.
-export function describeLoginBudgetPressure({ limitedPaths, budget, mintRequests = 1 }) {
-  const exercises = limitedPaths.length;
-  const total = exercises + mintRequests;
-  const exceeds = total > budget.max;
-  return Object.freeze({
-    exercises,
-    mintRequests,
-    total,
-    budget: budget.max,
-    windowMinutes: budget.windowMinutes,
-    exceeds,
-    reason: exceeds
-      ? `${total} requests (${exercises} rate-limited exercises + ${mintRequests} Session_Fixture ` +
-        `login) share one loginLimiter key against a budget of ${budget.max} per ` +
-        `${budget.windowMinutes} minutes, so at least ${total - budget.max} of them answer 429 — the ` +
-        "limiter's answer, not the handler's. Mint the fixture ONCE and reuse it across every " +
-        'session-gated exercise, and treat a 429 on a login-limited path as a recorded budget ' +
-        'consequence rather than as a grant or configuration finding.'
-      : null,
   });
 }
 

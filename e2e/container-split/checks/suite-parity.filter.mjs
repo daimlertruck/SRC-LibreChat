@@ -1,12 +1,30 @@
-// suite-parity.filter.mjs — the pure decision logic and constants behind this check's Layer B spec (task 14.6).
+// suite-parity.filter.mjs — the committed reference and its well-formedness check behind PARITY-SUITE-31
+// (task 14.6, task 17.6).
 //
-// The exported deciders and constants this check's spec relies on live here, in a non-spec sibling
-// module, so the spec file (suite-parity.spec.mjs) can import them and export NOTHING itself. jest.config.mjs's
-// testMatch collects only `*.spec.mjs` / `*.test.mjs`, so a `.filter.mjs` is never collected as a
-// test — the same shape boot-nowrite.filter.mjs establishes. This is a move, not a rewrite: the logic
-// is identical to what previously lived in the spec, and the spec exercises it via the import.
+// PARITY-SUITE-31 is `layer: 'recorded'` in the Check Catalog: it is decided OUTSIDE the harness and
+// recorded BY REFERENCE. Requirement 4.4 asks that, run with `DISABLE_STARTUP_TASKS` absent, the
+// existing automated test suite finish with the SAME count of passing and failing tests it produces
+// against the pre-split image, having modified ZERO existing test files and ZERO existing assertions.
+// The backend CI lane already produces that count on every pull request; re-running the suite inside a
+// topology run would double the cost to re-derive a result the lane already owns (design.md). So the
+// harness records the reference and asserts NOTHING about a local execution — the run report carries a
+// `skip` with skipReason `decided-by-reference`, never a `pass`, because a pass would claim an
+// observation the run did not make (task 17.6).
 //
-// NG1/NG2 hold: this decides over the harness's own artifacts and touches no application code and
+// This module holds the committed reference and a PURE well-formedness check over it. The
+// well-formedness is INTERNAL validation — the reference must name the lane, the criterion and the
+// additive roots so the recorded fact is legible — but it is NOT the check's outcome. The outcome is a
+// decided-by-reference skip the reporter derives (reporter.mjs), carrying `referenceSummary()` as its
+// observation. Nothing here fails on a missing or renamed workflow file: a lane whose path no longer
+// resolves is stated in the skip's observation, not turned into a failure (NG10 — no check may depend
+// on project code or config staying unchanged).
+//
+// The exported constants and pure helpers live here, in a non-spec sibling module, so the spec file
+// (suite-parity.spec.mjs) can import them and export NOTHING itself. jest.config.mjs's testMatch
+// collects only `*.spec.mjs` / `*.test.mjs`, so a `.filter.mjs` is never collected as a test — the
+// same shape boot-nowrite.filter.mjs establishes.
+//
+// NG1/NG2 hold: this decides over the harness's own reference and touches no application code and
 // neither container-split script.
 
 import { existsSync } from 'node:fs';
@@ -20,14 +38,19 @@ import path from 'node:path';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..');
 
-// The check id this spec decides, named once and prefixed onto the check title so reporter.mjs maps
-// the Jest result onto the PARITY-SUITE-31 record.
+// The check id this record owns, named once and read by the reporter's derivation.
 export const CHECK_ID = 'PARITY-SUITE-31';
 
 // ---------------------------------------------------------------------------------------------
 // The committed reference. This is the whole substance of PARITY-SUITE-31: the pointer to the lane
 // that decides the existing suite's pass/fail counts, the criterion it runs under, and the invariant
 // Req 4.4 turns on. Frozen so a reader cannot mutate it and a change to it is a deliberate edit.
+//
+// The pass/fail counts and the "zero modified test files / zero modified assertions" fact are NOT
+// asserted here as pass conditions (task 17.6). They are carried as REFERENCE TEXT — the count is the
+// lane's to produce, and the additivity is decided by review of the diff, not by a number this module
+// could keep honest. A transcribed count would rot the moment the suite grows a test; the additive
+// roots are the reference a reviewer confirms are new directories rather than edits to existing suites.
 // ---------------------------------------------------------------------------------------------
 export const SUITE_PARITY_REFERENCE = Object.freeze({
   // The requirement this record owns.
@@ -35,9 +58,9 @@ export const SUITE_PARITY_REFERENCE = Object.freeze({
 
   // The lane whose run IS the existing suite's pass/fail counts. The harness does NOT re-run the
   // suite (that would double the cost to re-derive a result this lane already produces on every pull
-  // request — design.md); it records this pointer. `lanePath` is repo-root-relative so the check can
-  // confirm the cited workflow actually exists; `laneName` and `jobs` are what a reader looks for in
-  // that lane's output.
+  // request — design.md); it records this pointer. `laneName`, `lanePath` and `jobs` are what a reader
+  // looks for in that lane's output. `lanePath` is repo-root-relative; a lane that was renamed or
+  // removed is STATED in the skip's observation, not turned into a check failure (NG10).
   laneName: 'Backend Unit Tests',
   lanePath: '.github/workflows/backend-review.yml',
   jobs: Object.freeze([
@@ -54,30 +77,23 @@ export const SUITE_PARITY_REFERENCE = Object.freeze({
   // condition under which the referenced counts hold rather than leaving it implied.
   criterion: 'DISABLE_STARTUP_TASKS absent (the backend lane never sets the gate)',
 
-  // The load-bearing observation: the harness modified ZERO existing test files and ZERO existing
-  // assertions, so the existing suite's pass/fail counts are unchanged by construction. Every harness
-  // artifact lives under a NEW path; no application source and neither container-split script changed
-  // (NG1/NG2). This is WHY the counts match, and committing it here is what makes an edit that touched
-  // an existing test have to revisit this record rather than pass silently.
-  modifiedExistingTestFiles: 0,
-  modifiedExistingAssertions: 0,
-
   // The new roots the harness added, all additive — the concrete form of "zero existing modified".
-  // A reader confirms these are new directories, not edits to existing suites.
+  // A reviewer confirms these are new directories, not edits to existing suites. This is reference
+  // text (decided by review), not a pass condition this module asserts.
   additiveRoots: Object.freeze(['e2e/container-split/', 'api/test/container-split/']),
 });
 
 // ---------------------------------------------------------------------------------------------
-// Pure decider over the recorded reference — the whole of what this check decides. Returns
-// `{ ok, reason? }`; a false carries the observation the check reports (a malformed reference or a
-// cited lane that does not resolve is a `fail`, because the recorded reference no longer means what it
-// claims). Injectable `repoRoot` and `fileExists` so the decider is unit-exercisable without touching
-// the real filesystem.
+// Pure well-formedness check over the recorded reference. Returns `{ ok, reason? }`. This is INTERNAL
+// validation that the reference names what a reader needs (the requirement it owns, the
+// DISABLE_STARTUP_TASKS-absent criterion, a lane path, the additive roots) — NOT the check's outcome,
+// which is a decided-by-reference skip regardless. It deliberately does NOT fail on a missing or
+// renamed workflow file: whether the cited lane path resolves is REPORTED (see `laneResolves`) so the
+// skip's observation can state a dangling pointer, but it never turns into a failure (NG10). The
+// modified-file / modified-assertion counts are NOT checked here — that fact is reference text decided
+// by review (task 17.6).
 // ---------------------------------------------------------------------------------------------
-export function decideSuiteParityReference(
-  reference = SUITE_PARITY_REFERENCE,
-  { repoRoot = REPO_ROOT, fileExists = existsSync } = {},
-) {
+export function decideSuiteParityReference(reference = SUITE_PARITY_REFERENCE) {
   if (reference === null || typeof reference !== 'object') {
     return { ok: false, reason: `${CHECK_ID}: the suite-parity reference is not an object.` };
   }
@@ -90,23 +106,6 @@ export function decideSuiteParityReference(
         `${CHECK_ID}: the reference names requirement ${JSON.stringify(reference.requirement)}, ` +
         'but PARITY-SUITE-31 records Requirement 4.4. The recorded requirement must match the ' +
         'check the catalog carries.',
-    };
-  }
-
-  // The no-modification invariant is the half Req 4.4 turns on: the counts match BECAUSE the harness
-  // touched no existing test. A non-zero count here means the harness edited an existing test file or
-  // assertion, so the recorded "same pass/fail counts" no longer holds by construction and the
-  // reference must be re-established (by re-running the pre-split suite for a fresh baseline), not
-  // silently kept.
-  if (reference.modifiedExistingTestFiles !== 0 || reference.modifiedExistingAssertions !== 0) {
-    return {
-      ok: false,
-      reason:
-        `${CHECK_ID}: the reference records ${reference.modifiedExistingTestFiles} modified ` +
-        `existing test file(s) and ${reference.modifiedExistingAssertions} modified existing ` +
-        "assertion(s). Req 4.4 requires ZERO of each — the existing suite's pass/fail counts are " +
-        'unchanged only because the harness is additive. A non-zero count means the counts can no ' +
-        'longer be carried by reference and the pre-split baseline must be re-established.',
     };
   }
 
@@ -124,29 +123,18 @@ export function decideSuiteParityReference(
     };
   }
 
-  // The cited lane must actually exist, so the reference resolves rather than pointing at a workflow
-  // that was renamed or removed out from under it. A dangling pointer is the failure mode a recorded
-  // reference is most prone to; confirming the file exists is what keeps the record honest.
+  // A lane path must be recorded so the reference points at SOMETHING — but whether that file exists
+  // is not decided here (NG10). An empty path is malformedness, not a missing file: there is nothing
+  // for the observation to name.
   if (typeof reference.lanePath !== 'string' || reference.lanePath.trim() === '') {
     return {
       ok: false,
-      reason: `${CHECK_ID}: the reference records no lane path; there is nothing to resolve.`,
-    };
-  }
-  const laneAbsolute = path.join(repoRoot, reference.lanePath);
-  if (!fileExists(laneAbsolute)) {
-    return {
-      ok: false,
-      reason:
-        `${CHECK_ID}: the cited backend lane ${JSON.stringify(reference.lanePath)} does not exist ` +
-        `at ${laneAbsolute}. The suite-parity reference points at the lane that decides the existing ` +
-        "suite's counts; a lane that was renamed or removed makes the reference dangle. Update the " +
-        'recorded lanePath to the lane that now runs the existing backend suite.',
+      reason: `${CHECK_ID}: the reference records no lane path; there is nothing to point at.`,
     };
   }
 
   // The additive roots must be recorded and non-empty — they are the concrete form of "zero existing
-  // modified", the roots a reader confirms are new rather than edits.
+  // modified", the roots a reviewer confirms are new rather than edits.
   if (!Array.isArray(reference.additiveRoots) || reference.additiveRoots.length === 0) {
     return {
       ok: false,
@@ -159,17 +147,42 @@ export function decideSuiteParityReference(
   return { ok: true };
 }
 
-// A one-line human summary of the recorded reference, written to stderr when the file loads so the
-// run's console carries the reference a reader scans. The check record proper stays a clean `pass`
-// (the serializer forbids a pass from carrying an observation), so this is where the recorded facts
-// surface for a human reading the run output.
-export function referenceSummary(reference = SUITE_PARITY_REFERENCE) {
+// Whether the cited lane workflow currently resolves on disk. This is REPORTED, never asserted: a lane
+// that was renamed or removed is a fact the skip's observation states, not a failure (NG10). Injectable
+// `repoRoot` and `fileExists` so it is unit-exercisable without touching the real filesystem.
+export function laneResolves(
+  reference = SUITE_PARITY_REFERENCE,
+  { repoRoot = REPO_ROOT, fileExists = existsSync } = {},
+) {
+  if (
+    reference === null ||
+    typeof reference !== 'object' ||
+    typeof reference.lanePath !== 'string'
+  ) {
+    return false;
+  }
+  return fileExists(path.join(repoRoot, reference.lanePath));
+}
+
+// A human summary of the recorded reference — the observation the decided-by-reference skip carries.
+// It names the lane, its workflow path, the jobs, the DISABLE_STARTUP_TASKS-absent criterion and the
+// additive roots, and states whether the cited lane path currently resolves (NG10: a missing lane path
+// is stated here, not turned into a failure). It carries NO transcribed pass/fail count and asserts
+// nothing about a local execution — the counts are the lane's to produce, and "zero modified existing
+// tests" is reference text decided by review.
+export function referenceSummary(reference = SUITE_PARITY_REFERENCE, options = {}) {
+  const resolves = laneResolves(reference, options);
+  const laneClause = resolves
+    ? `the "${reference.laneName}" lane (${reference.lanePath})`
+    : `the "${reference.laneName}" lane, whose recorded path ${reference.lanePath} does NOT currently ` +
+      'resolve in-tree (renamed or removed); update the recorded lanePath to the lane that now runs ' +
+      'the existing backend suite';
   return (
-    `${CHECK_ID} (recorded, Req ${reference.requirement}): existing-suite pass/fail counts carried ` +
-    `BY REFERENCE to the "${reference.laneName}" lane (${reference.lanePath}), run with ` +
-    `${reference.criterion}. The harness is additive — ${reference.modifiedExistingTestFiles} ` +
-    `existing test files and ${reference.modifiedExistingAssertions} existing assertions modified ` +
-    `(new roots: ${reference.additiveRoots.join(', ')}) — so the counts are unchanged by ` +
-    'construction. This check records the reference and asserts nothing itself.'
+    `${CHECK_ID} (recorded, Req ${reference.requirement}): decided by reference, no local execution ` +
+    `this run. The existing backend suite's pass/fail counts are carried BY REFERENCE to ${laneClause}, ` +
+    `jobs [${reference.jobs.join(', ')}], run with ${reference.criterion}. The harness is additive — ` +
+    `new roots ${reference.additiveRoots.join(', ')}, zero existing test files and zero existing ` +
+    'assertions modified (decided by review of the diff, not asserted here) — so the counts are ' +
+    'unchanged by construction. This check records the reference and asserts nothing itself.'
   );
 }

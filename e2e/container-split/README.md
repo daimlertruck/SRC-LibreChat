@@ -538,9 +538,10 @@ do, and only one of them is the recompute case:
   path that failed. Recompute the Container_1_Grant from that path's actual collection needs — the
   failure names the matched log line and the collection in it — and provision again. The same applies
   when a path moves between the two routed sets: the grant is computed from the collection needs of the
-  paths routed to the Auth_Surface, so recompute it from the new allowlist, apply it, and only then
-  update the recorded digest (`EXPECTED_ALLOWLIST_DIGEST` in `run.mjs`, and the `COMPOSE-UNCHANGED-12`
-  digests if a compose file legitimately changed).
+  paths routed to the Auth_Surface, so recompute it from the new allowlist and apply it. There is no
+  allowlist digest to update — a moved path is caught by the checks themselves against the current
+  allowlist and grant (update the `COMPOSE-UNCHANGED-12` digests only if a compose file legitimately
+  changed).
 - **`uncorroborated`** — a 5xx over a clean window. A real finding about the application or the harness
   configuration, and **not** a grant conclusion in either direction, so it carries no recompute
   guidance: nothing was refused. Read the Auth_Surface log for that exercise and the path's recorded

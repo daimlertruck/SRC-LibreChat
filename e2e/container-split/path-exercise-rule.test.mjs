@@ -236,3 +236,121 @@ describe('a session-gated path with no fixture is a fixture failure, never a pas
     );
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// Req 3.23 — a path the recorded session table does NOT mark session-gated, exercised anonymously,
+// that answers 401 over a clean window. That is the same three observations criterion 3.13 would pass
+// (attributed, non-5xx, clean) reached by a request the gate refused before the handler ran, so the
+// pass is WITHHELD and the likely cause named: the application now requires authentication on the
+// path and the harness's session table has fallen behind. This is 3.22's sibling for a path the
+// harness did not know was gated, and its guard is the `sessionGated: false` argument the caller
+// passes when the recorded attachment is not GATED.
+//
+// A non-gated path with a recorded payload. `/api/config` is `session: NONE`, so `exerciseRoutedPath`
+// classifies it with `sessionGated: false`.
+const NON_GATED_PATH = '/api/config';
+
+// The non-gated path answering a clean 401. `sessionGated` mirrors what `exerciseRoutedPath` passes
+// for a NONE-attachment path; `withAuthError` swaps a clean window for one carrying a refusal, to show
+// the Authorization_Error case (3.4) still wins.
+function nonGatedPathCleanUnauthorized({ sessionGated = false, authorizationError = null } = {}) {
+  return classifyExercise({
+    observation: {
+      path: NON_GATED_PATH,
+      surface: 'config',
+      attributedTo: AUTH_SURFACE_UPSTREAM,
+      httpStatus: 401,
+      windowScanned: true,
+      windowClean: authorizationError === null,
+      authorizationError,
+      transportError: null,
+      scanError: null,
+    },
+    sessionGated,
+  });
+}
+
+// A non-gated path answering a clean 403 — the application's own configuration refusal, deliberately
+// NOT a 3.23 fixture failure.
+function nonGatedPathCleanForbidden() {
+  return classifyExercise({
+    observation: {
+      path: NON_GATED_PATH,
+      surface: 'config',
+      attributedTo: AUTH_SURFACE_UPSTREAM,
+      httpStatus: 403,
+      windowScanned: true,
+      windowClean: true,
+      authorizationError: null,
+      transportError: null,
+      scanError: null,
+    },
+    sessionGated: false,
+  });
+}
+
+describe('the 3.23 non-gated path is a real non-gated path in the payload table', () => {
+  // Keeps the tests below honest: a path that became session-gated would make its 401 an ordinary
+  // gated refusal (3.22's) rather than the not-recorded-as-gated one 3.23 catches.
+  it('the non-gated path has a recorded payload and is not on SESSION_GATED_PATHS', () => {
+    expect(payloadFor(NON_GATED_PATH)).not.toBeNull();
+    expect(SESSION_GATED_PATHS).not.toContain(NON_GATED_PATH);
+  });
+});
+
+describe('a not-recorded-as-gated path answering a clean 401 is a fixture failure (Req 3.23)', () => {
+  it('reports a FIXTURE FAILURE naming the path and "requires authentication", withholding the pass', () => {
+    const { outcome, failure } = nonGatedPathCleanUnauthorized();
+    expect(outcome).toBeNull();
+    expect(failure.kind).toBe(EXERCISE_FAILURE.FIXTURE);
+    expect(failure.path).toBe(NON_GATED_PATH);
+    expect(failure.reason).toContain(NON_GATED_PATH);
+    expect(failure.reason).toMatch(/requires authentication/i);
+    // No recompute guidance: the gate refused it, the handler ran nothing.
+    expect(carriesRecomputeGuidance(failure.reason)).toBe(false);
+  });
+
+  it('surfaces in the fold as a failure and never as a per-path outcome — turning the run red', () => {
+    const report = summarizePathExercise([
+      cleanPassOnAnotherPath('/api/banner', 'banner'),
+      nonGatedPathCleanUnauthorized(),
+    ]);
+    expect(report.pathOutcomes.find((o) => o.path === NON_GATED_PATH)).toBeUndefined();
+    expect(report.failures.find((f) => f.path === NON_GATED_PATH).kind).toBe(
+      EXERCISE_FAILURE.FIXTURE,
+    );
+    expect(report.verdict).toBe('fail');
+  });
+
+  it('an Authorization_Error in the window still classifies `understated` first (case 1 wins over 3.23)', () => {
+    const { outcome, failure } = nonGatedPathCleanUnauthorized({
+      authorizationError:
+        'not authorized on LibreChat to execute command { find: { find: "keys" } }',
+    });
+    // The refusal is the one positive observation, and it outranks the 3.23 clean-401 case.
+    expect(failure).toBeNull();
+    expect(outcome.outcome).toBe(PATH_OUTCOME.UNDERSTATED);
+    expect(outcome.reason).toMatch(/Recompute the Container_1_Grant/);
+  });
+
+  it('a listed session-gated path exercised unattached stays 3.22, not reclassified as 3.23', () => {
+    // The caller passes 3.22's `fixtureFailure`; 3.23 must not fire (no double-report). The reason is
+    // the one `decideSessionAttachment` produced (3.22), naming `requireJwtAuth`, not the 3.23 cause.
+    const { outcome, failure } = gatedPathWithNoFixture();
+    expect(outcome).toBeNull();
+    expect(failure.kind).toBe(EXERCISE_FAILURE.FIXTURE);
+    expect(failure.path).toBe(GATED_PATH);
+    expect(failure.reason).toContain('3.22');
+    expect(failure.reason).toMatch(/requireJwtAuth/);
+    // Not the 3.23 wording: this path IS recorded as gated, so it is 3.22's, decided before 3.23.
+    expect(failure.reason).not.toMatch(/is NOT recorded as session-gated/);
+  });
+
+  it('a clean 403 on a non-gated path is NOT a fixture failure — it is the application\u2019s own refusal', () => {
+    // 403 is the application's configuration refusal (registration/password reset disabled), not the
+    // auth gate. On a non-gated path over a clean window it stays a `pass`, unchanged by 3.23.
+    const { outcome, failure } = nonGatedPathCleanForbidden();
+    expect(failure).toBeNull();
+    expect(outcome.outcome).toBe(PATH_OUTCOME.PASS);
+  });
+});
