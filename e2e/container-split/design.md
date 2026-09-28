@@ -64,12 +64,21 @@ the grant's shape is checked in seconds while the expensive topology run stays a
 |---|---|
 | NG1 | No application code, route mount, or HTTP path change. The harness composes and configures (Req 1.12) |
 | NG2 | No edit to `provision.mongo.js` or `migrate.mongo.js`. The harness runs them |
-| NG3 | No change to `deploy-compose.yml` or `utils/docker/test-compose.yml`, byte-for-byte (Req 1.1, 4.1) |
+| NG3 | No change to `deploy-compose.yml` or `utils/docker/test-compose.yml`, byte-for-byte (Req 1.1, 4.1) — a property of this change set, decided by review rather than enforced by pinning |
 | NG4 | No re-derivation of the split. The ownership matrix and routed path tables belong to `auth-api-container-split` |
 | NG6 | No Auth_Gate emulation. No bearer validation, no cookie exemption, no crypto at the edge |
 | NG7 | No DocumentDB claim. That is the `DOCUMENTDB_URI`-gated suites' job |
 | NG8 | No PBT. See Testing Strategy — the input domains here are small fixed enumerations, and exhausting them beats sampling them |
 | NG9 | No VCS dependency. No check may invoke `git` or read `.git`; the collapse claim is structural and a working-tree read produces false positives against it |
+| NG10 | No check depends on the project's code or configuration staying the same. Checks decide against what is on disk at run start; a difference from a recorded snapshot is at most a warning (Req 5.11) |
+| NG11 | No image-to-code match check. The tested image is reported honestly — reference, local image ID, creation time, built or reused — and a reused image carries one rebuild notice (Req 5.12, 5.13) |
+
+**NG10's reach (Req 5.11 scope note).** Harness files — the Caddyfiles, the exercised-path list, the
+Path_Payloads, the env templates and the Harness_Compose_File — are kept in step by whoever edits the
+harness and are not checked for change at run time. Application code and project configuration may be
+checked for change, warning-only, and `COMPOSE-UNCHANGED-12` is the one instance. `GRANT-SHAPE-01` is
+not a snapshot: Req 3.5 itself fixes the expected grant, so a change in the grant `provision.mongo.js`
+produces is the finding the check exists to report, and it still fails on it by design.
 
 ## Architecture
 
@@ -201,11 +210,29 @@ intents rather than an opaque pass or fail — and `observation` is what satisfi
 The records are emitted as a JSON summary alongside the human-readable reporter output, so a CI lane
 can attach it as an artifact when one is added.
 
+**The tested image, at the top of the report.** Alongside `profile` and `startedAt`, the JSON summary
+carries one top-level `image` block, and the terminal summary prints the same four values (Req 5.12):
+
+```
+image: {
+  reference: string,               // repository:tag, the resolved ${HARNESS_IMAGE}
+  id: string,                      // local image ID both containers were started from
+  createdAt: string,               // image metadata creation time, ISO 8601 UTC
+  provenance: 'built' | 'reused'   // built = this run invoked a build; reused = it invoked none
+}
+```
+
+The block is written on every run that got past image resolution, the early-exit report of a setup
+failure included. A locally built image has no repository digest, so the local image ID is what is
+reported. `provenance` is decided by whether the run invoked a build, not by the ID or the timestamp,
+because a fully cached build can report an existing ID and an old creation time.
+
 The record set is derived from the catalog, not accumulated from whatever the spec files registered:
 the reporter starts from every catalog id the run's profile selects and fills in results, so an id that
 produced nothing lands as `skip` with a reason rather than disappearing. That is what makes `skip`
 readable as *unexecuted* rather than as a pass (Requirement 5.10), and what makes exit 0 conditional on
-a `pass` for every selected id (Requirement 5.9).
+every selected id carrying a record, with no `fail` and every `skip` carrying an enumerated reason
+(Requirement 5.9).
 
 ## Correctness Properties
 
@@ -300,7 +327,7 @@ needs both; either half alone is satisfiable by a wrong system.
   `createCollection` granted nowhere — and nothing had run the application under that narrowed grant
   before this harness. Sufficiency was assumed, not observed.
 
-**Validates: Requirements 3.4, 3.5, 3.6, 3.7, 3.8, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.19, 3.20, 3.21**
+**Validates: Requirements 2.11, 3.4, 3.5, 3.6, 3.7, 3.8, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.19, 3.20, 3.21**
 
 ### Property 3: Both containers boot clean under their own grant (parent P6)
 
@@ -337,8 +364,24 @@ produced before the split landed, with zero existing test file and zero existing
   between two commands, which is an assumption about the operator, not a property of the collapse.
   What 4.2 claims is that the collapse is EXPRESSIBLE as an env-and-config overlay, and that is
   settled by reading the compose file and the Caddyfiles.
-- **Decided by:** `PARITY-COLLAPSE-29` (4.2) and `PARITY-SUITE-31` (4.4), with `COMPOSE-UNCHANGED-12`
-  guarding 4.1 statically. Three checks, not four.
+- **Decided by:** `PARITY-COLLAPSE-29` (4.2), and by review and the existing backend CI lane for 4.4.
+  4.4 compares against the suite's counts from before the split landed, which no run can observe, so
+  `PARITY-SUITE-31` asserts nothing itself: it records the reference to that lane as a `skip` with the
+  enumerated reason `decided-by-reference`, never a `pass`, and that skip does not block exit 0
+  (Req 4.4 rationale). `COMPOSE-UNCHANGED-12` sits beside them as a warning-only static check. It
+  hashes `deploy-compose.yml` and `utils/docker/test-compose.yml` against digests committed in the
+  harness source, each digest committed beside that file's review targets:
+  `e2e/container-split/compose.harness.yml` (service images and settings; it pins the same
+  `mongo:8.0.20` and `getmeili/meilisearch:v1.35.1` as `deploy-compose.yml`) and
+  `e2e/container-split/env/*.env.example` (environment variables). On a mismatch it prints exactly one
+  warning per file naming the file, its review targets, and
+  `api/test/container-split/compose-unchanged.spec.js` as where to record the new digest once reviewed,
+  reports `pass`, and leaves the run's exit status unchanged (Req 1.14). Example: `deploy-compose.yml
+  changed since the committed digest. Review e2e/container-split/compose.harness.yml and
+  e2e/container-split/env/*.env.example against it, then record the new digest in
+  api/test/container-split/compose-unchanged.spec.js.` Criteria 1.1 and 4.1 are properties of the change set, decided by review, not
+  enforced by pinning: upstream #16005 renamed the image registry org in both files, and a pinned digest
+  stopped the whole run on an edit unrelated to the split (NG10). Three checks, not four.
 - **Stated as non-regression, not byte-identity.** The property claims *no detected regression in
   intended behavior with the split configuration absent*. It does not claim byte-identical responses
   against a pre-split image. Criteria 4.3 and 4.5 asked for that stronger claim and were struck; the
@@ -362,7 +405,7 @@ every* path absent from the allowlist, the container that served it is the API_C
   check rather than overclaiming.
 - **Decided by:** `ROUTE-ALLOW-27`, `ROUTE-DEFAULT-28`.
 
-**Validates: Requirements 3.10, 3.11**
+**Validates: Requirements 2.11, 3.10, 3.11**
 
 #### Family 2 — the harness's own invariants
 
@@ -389,9 +432,11 @@ obtained from an absent observation is a false pass, and three concrete mechanis
   `Session_Fixture` — because a request refused at the gate ahead of the handler issues no MongoDB
   query, and the resulting clean `Exercise_Log_Window` would read identically under a grant of zero
   collections. A clean window over a request that queried nothing is the vacuous pass of the
-  bounded-below half, and it is the one that was actually being reported.
+  bounded-below half, and it is the one that was actually being reported. A 401 over a clean window on
+  a path the harness does not know to be session-gated is the same shape, and is reported as a fixture
+  failure rather than a pass (Req 3.23).
 
-**Validates: Requirements 3.6, 3.7, 3.9, 3.14, 3.16, 3.22**
+**Validates: Requirements 3.6, 3.7, 3.9, 3.14, 3.16, 3.22, 3.23**
 
 ### Property 7: Routing evidence is attribution, never status
 
@@ -714,13 +759,15 @@ carries the script's stderr into the setup failure (2.9). In all four cases no r
 admitted, which the compose `depends_on: service_completed_successfully` enforces structurally as
 well as the runner enforcing it in code.
 
-**Recompute, not re-run.** Requirement 2.11 asks the harness to surface the script's recompute
-guidance. The Auth_Surface_Allowlist lives in one file, and the runner fails with a dedicated setup
-error when the allowlist's digest differs from the digest recorded alongside the expected grant table:
-*the allowlist changed; the Container_1_Grant must be recomputed from the moved path's collection
-needs before this run means anything — re-running the script unchanged re-asserts the same twelve
-collections and proves nothing about the moved path.* Re-running provisioning is not the fix, and the
-error says so.
+**Recompute, not re-run.** Requirement 2.11 asks the harness to surface, when a routing change moves a
+path between the two routed sets, that the Container_1_Grant must be recomputed from the moved path's
+collection needs. No pre-bring-up guard does this. A moved path surfaces through the checks run against
+the current Auth_Surface_Allowlist and the current grant: attributed to the wrong container, it fails
+`ROUTE-ALLOW-27` or `ROUTE-DEFAULT-28`; routed to the Auth_Surface with collection needs outside the
+grant, it records an Authorization_Error and `PATH-EXERCISE-25` reports it `understated`, carrying the
+recompute guidance — *re-running the script unchanged re-asserts the same twelve collections and proves
+nothing about the moved path.* An earlier revision pinned a digest of the allowlist and failed setup on
+a mismatch; that failed the run on any edit, moved path or not, which NG10 forbids, so it is removed.
 
 ## Boot-Write Observation
 
@@ -808,6 +855,16 @@ status the exercise returned.** The status classifies the exercise; it never dec
 | Auth_Surface | any, on an `Unconfigured_Provider` path | clean by construction | `undecided` | Grant sufficiency left undecided, naming the unconfigured provider. Distinct from a pass, does not fail the check, and the path's routing is still decided by `ROUTE-ALLOW-27` (Req 3.19, 3.20) |
 | Auth_Surface | any | not scanned | — | Not an outcome. A window that was not scanned is a setup failure, not a verdict (Property 9) |
 | Auth_Surface | the gate's unauthenticated refusal, on a session-gated path | clean | — | Not an outcome either. The `Session_Fixture` was not attached, so Requirement 3.16 was not met and the exercise queried nothing; reported as a fixture failure carrying the path and the unattached `Session_Fixture`, rather than borrowing the `pass` that Req 3.13's non-5xx wording would otherwise hand it (Req 3.22, Property 6) |
+| Auth_Surface | 401, on a path the recorded session table does **not** mark session-gated, exercised without a `Session_Fixture` | clean | — | Not an outcome. Reported as a fixture failure carrying the path and naming the likely cause: the application now requires authentication on that path. Req 3.13's `pass` is withheld (Req 3.23, Property 6) |
+
+**The 401 row, and its precedence.** An Authorization_Error in the window still classifies `understated`
+first (Req 3.4), and a listed-but-unattached path stays the fixture failure of the row above (Req 3.22),
+so no exercise is reported twice. 403 is deliberately excluded: among the exercised paths it is the
+application's own configuration refusal — registration or password reset disabled. No current recorded
+expected status for an anonymous path is 401, so the row fires on nothing today; whoever records one
+must know it will fire. The row is what catches drift in the copied session-gated table without keeping
+that table in step with the application: if the application puts a path behind its authentication
+middleware and the table does not know it, the run's own 401 is the signal (Req 5.11).
 
 **Why the ordering matters, not just what it is.** The implementation applied three gates in sequence —
 attribution, then a non-5xx status assertion, then the window scan — and returned at gate 2. On eight of
@@ -853,6 +910,10 @@ throw is a 5xx that says nothing about the grant. The two paths that made this c
   is the expected status, a non-5xx and therefore a `pass` under the rule above. A grant gap was
   investigated and ruled out for this path independently: the registration chain reads `bans` and writes
   `users`, and both are in the Container_1_Grant's read-write set.
+
+The harness sets the login rate-limiter's ceiling in its own env (`LOGIN_MAX=1000000`, `LOGIN_WINDOW=5`
+in `env/common.env.example`) so the limiter cannot bind and every exercise answers on its own merits; no
+check depends on the limiter's default.
 
 Per-path expected statuses are recorded alongside the payloads, in this document's companion fixture
 rather than in the requirements: the requirements phase deliberately left expected statuses out, because
@@ -949,7 +1010,11 @@ things about that are deliberate:
   its `undecided` status is not available to it. The fixture derives the undecided set from the harness's
   own resolved provider configuration rather than from a hard-coded path list, so configuring a provider
   moves its path into full exercise without a second edit, and a configured provider whose path still
-  reports `undecided` is a fixture bug.
+  reports `undecided` is a fixture bug. The per-provider credential gates that configuration is read
+  against are transcribed from `configureSocialLogins` in `api/server/socialLogins.js`, and no change
+  detection is added for that table: a drift makes the affected path fail or be mis-labelled
+  `undecided`, and `undecided` never satisfies the check's "at least one pass" clause and never
+  overrides an Authorization_Error, so drift cannot produce a vacuous pass.
 
 ## Check Catalog
 
@@ -979,7 +1044,7 @@ run simply makes no claim about it, and exit 0 is gated on the ids the profile *
 | `PROVISION-PW-09` | Script refuses equal passwords, non-zero exit | 2.8 | setup precondition | A | both |
 | `PROVISION-IDEMPOTENT-10` | A deliberately widened role is narrowed by a second run; the shape is unchanged otherwise | 2.2, 2.7 | P5 | A | both |
 | `PROVISION-AUTHSOURCE-11` | Each credential authenticates with `authSource=admin` and fails without it | 2.5, 2.6 | setup precondition | A | both |
-| `COMPOSE-UNCHANGED-12` | `deploy-compose.yml` and `utils/docker/test-compose.yml` match their recorded digests | 1.1, 4.1 | P12 | static | both |
+| `COMPOSE-UNCHANGED-12` | `deploy-compose.yml` and `utils/docker/test-compose.yml` hashed against digests committed in the harness source; each file's review targets sit beside its digest — `e2e/container-split/compose.harness.yml` (service images and settings; pins the same `mongo:8.0.20` and `getmeili/meilisearch:v1.35.1` as `deploy-compose.yml`) and `e2e/container-split/env/*.env.example` (environment variables). **Warning-only:** on a mismatch, exactly one warning per file naming it, its review targets, and `api/test/container-split/compose-unchanged.spec.js` as where to record the new digest once reviewed; status `pass`, run exit status unaffected. 1.1 and 4.1 are decided by review of the change set, not by this pin | 1.14 | P12 | static | both |
 | `TOPO-IMAGE-13` | Both services resolve to the same image digest via `docker compose ps --format json` | 1.2 | — | B | split — digest equality has no second operand with one container |
 | `TOPO-ENV-14` | Resolved env diff falls only in the three buckets of `env-matrix.md`; every `identical` row is identical by presence and value | 1.3–1.5, 1.7, 1.8 | — | B | split — nothing to diff a single environment against |
 | `TOPO-YAML-15` | `librechat.yaml` byte-identical in both containers; `secureImageLinks: true` | 1.6 | — | B | split — byte-identity across both containers is the claim |
@@ -991,13 +1056,13 @@ run simply makes no claim about it, and exit 0 is gated on the ids the profile *
 | `BOOT-CLEAN-21` | No authorization error in the Auth_Surface boot log window, caught-and-logged included | 3.2, 2.10 | P6 | B | both |
 | `BOOT-API-22` | API_Container answers `/livez`, `/readyz` with 200 within 60s, no authorization error | 3.3 | P6 | B | split — the collapsed profile runs no API_Container |
 | `BOOT-NOWRITE-23` | Zero write commands attributed to `librechat_auth_surface@admin` in the boot window; the `Seeded_Account` insert completed before the window's left edge | 3.9, 3.18 | P1 | B | both |
-| `PATH-EXERCISE-25` | Every path routed to the Auth_Surface is exercised with its `Path_Payload` and its `Exercise_Log_Window` scanned whatever status returned; per-path outcome is `pass`, `understated`, `uncorroborated` or `undecided`. **Payload only:** local login, LDAP, registration, password reset request and submit, email verification and resend, admin login, admin oauth, `/api/config`, `/api/banner`, SPA load. **Payload plus `Session_Fixture`:** 2FA enroll/verify/disable/backup-codes and every other session-gated path. **Routing-only, grant sufficiency `undecided`:** `/oauth/{google,github,discord,facebook,openid,apple}` as `Unconfigured_Provider` paths, whose routing `ROUTE-ALLOW-27` still decides | 3.4, 3.12–3.17, 3.19–3.22 | P5 | B | both |
+| `PATH-EXERCISE-25` | Every path routed to the Auth_Surface is exercised with its `Path_Payload` and its `Exercise_Log_Window` scanned whatever status returned; per-path outcome is `pass`, `understated`, `uncorroborated` or `undecided`. **Payload only:** local login, LDAP, registration, password reset request and submit, email verification and resend, admin login, admin oauth, `/api/config`, `/api/banner`, SPA load. **Payload plus `Session_Fixture`:** 2FA enroll/verify/disable/backup-codes and every other session-gated path. **Routing-only, grant sufficiency `undecided`:** `/oauth/{google,github,discord,facebook,openid,apple}` as `Unconfigured_Provider` paths, whose routing `ROUTE-ALLOW-27` still decides. A 401 over a clean window on a path not marked session-gated is a fixture failure naming the likely cause | 2.11, 3.4, 3.12–3.17, 3.19–3.23 | P5 | B | both |
 | `PATH-GROUPSYNC-26` | With Entra group sync enabled, membership sync completed — asserted on the resulting `groups` documents, never on the response. **Decided only against a real identity provider:** the harness deliberately stands none up, so absent a real tenant the check records `skip` with the enumerated reason `external-provider-required` — never `pass` | 3.4 | P5 | B | both |
-| `ROUTE-ALLOW-27` | Each allowlisted full path attributed to the Auth_Surface: `/api/auth/*`, `/oauth/*`, `/api/admin/login/*`, `/api/admin/oauth/*`, `/api/admin/verify`, `/api/user/verify`, `/api/config`, `/api/banner`, `/health` | 3.10 | routed path partition (P2's load-balancer half) | B | split — one unconditional upstream makes it vacuously true |
-| `ROUTE-DEFAULT-28` | Each non-allowlisted path attributed to the API_Container, covering the whole `/api/admin` data family — `config`, `langfuse`, `grants`, `groups`, `roles`, `skills`, `users`, `audit-log` | 3.11 | routed path partition (P11's load-balancer half) | B | split — false on a correctly collapsed topology |
+| `ROUTE-ALLOW-27` | Each allowlisted full path attributed to the Auth_Surface: `/api/auth/*`, `/oauth/*`, `/api/admin/login/*`, `/api/admin/oauth/*`, `/api/admin/verify`, `/api/user/verify`, `/api/config`, `/api/banner`, `/health` | 2.11, 3.10 | routed path partition (P2's load-balancer half) | B | split — one unconditional upstream makes it vacuously true |
+| `ROUTE-DEFAULT-28` | Each non-allowlisted path attributed to the API_Container, covering the whole `/api/admin` data family — `config`, `langfuse`, `grants`, `groups`, `roles`, `skills`, `users`, `audit-log` | 2.11, 3.11 | routed path partition (P11's load-balancer half) | B | split — false on a correctly collapsed topology |
 | `PARITY-COLLAPSE-29` | The `collapsed` profile reuses the `auth-surface` service and the shared `${HARNESS_IMAGE}` reference with no third container and no `build:`; `Caddyfile.collapsed` is one unconditional upstream with no allowlist — the collapse is expressible as an env-and-config overlay (NG9: structural, no VCS read) | 4.2 | P12 | B | both |
-| `PARITY-SUITE-31` | The existing backend suite's pass/fail counts with `DISABLE_STARTUP_TASKS` absent, recorded by reference to the lane that decides it | 4.4 | P12 | recorded | both |
-| `RUN-REPORT-32` | One invocation carried image resolution through teardown; every catalog id has a record, unexecuted ids recorded as `skip`; exit 0 only when every selected id passed, non-zero otherwise with check id, requirement criteria, property and deciding observation per failure; setup, check and teardown failures distinct; teardown released every container and network | 5.1–5.5, 5.7–5.10 | — | both | both |
+| `PARITY-SUITE-31` | Records the reference to the backend CI lane that decides 4.4 — lane name, workflow path, jobs, the `DISABLE_STARTUP_TASKS`-absent condition and the harness's additive roots — as a `skip` with the enumerated reason `decided-by-reference`, which does not block exit 0. **Asserts nothing itself and never reports `pass`:** 4.4 compares against the suite's counts from before the split landed, which no run can observe, so it is decided by review and the existing backend lane (Req 4.4 rationale). A cited workflow path that is absent or renamed is stated in the skip's observation, never failed on (NG10) | 4.4 | P12 | recorded | both |
+| `RUN-REPORT-32` | One invocation carried image resolution through teardown; every catalog id has a record, unexecuted ids recorded as `skip`; exit 0 only when every selected id has a record, none `fail`, no setup or teardown failure, every `skip` carries an enumerated reason (`decided-by-reference`, `optional-dependency-absent`, `external-provider-required`) and at least one check executed, non-zero otherwise with check id, requirement criteria, property and deciding observation per failure; setup, check and teardown failures distinct; teardown released every container and network; the report and terminal carry the `image` block — reference, local image ID, creation time in ISO 8601 UTC, `built`/`reused` — on every run including a setup failure, and a reused image prints exactly one rebuild notice before the first check and fails nothing; no check fails on a difference from a recorded snapshot | 5.1–5.5, 5.7–5.13 | — | both | both |
 
 `PATH-EXERCISE-25`'s three tiers are a statement about reach, not about which paths matter. A payload
 reaches the handler, a session reaches the collections the handler queries, and an `Unconfigured_Provider`
@@ -1020,10 +1085,17 @@ the partition was decided (Property 6), so the collapsed run accounts for neithe
 recording a pass it did not earn. Everything either check decides, it decides at full strength on the
 split run.
 
-`PARITY-SUITE-31` is decided outside the harness. Re-running the backend suite inside a topology run
-would double the cost to re-derive a result the backend lane already produces, so the harness records
-the reference and the observation and asserts nothing itself. Recording it is what keeps Requirement
-4.4 visible in the run summary instead of unowned.
+`PARITY-SUITE-31` is decided outside the harness, and it reports `skip`, not `pass`. Criterion 4.4
+compares against the suite's counts from before the split landed, and no run can observe that history,
+so like 1.1 and 4.1 it is decided by review and by the existing backend lane that runs the suite (Req 4.4
+rationale). Re-running the backend suite inside a topology run would double the cost and still not
+observe the pre-split counts. The check therefore records the reference — lane name, workflow path,
+jobs, the `DISABLE_STARTUP_TASKS`-absent condition and the harness's additive roots — as a `skip` with
+the enumerated reason `decided-by-reference`, which does not block exit 0, and asserts nothing itself;
+a `pass` would claim an observation the run did not make. It does not fail when the cited workflow file
+is absent or renamed, because that would make the run depend on the repository staying unchanged
+(NG10); a missing lane path is stated in the skip's observation instead. Recording it is what keeps
+Requirement 4.4 visible in the run summary instead of unowned.
 
 **There is no check 24, and the gap is intended.** `BOOT-NOWRITE-RO-24` — a second bring-up of the
 Auth_Surface under the read-only observer credential, asserting `/readyz` 200 with zero authorization
@@ -1108,18 +1180,23 @@ gap cannot reopen.
 One invocation, no operator-supplied variable, no manual step. `run.mjs` performs these stages in this
 order, and a stage that cannot complete is a setup failure that ends the run non-zero:
 
-1. **Resolve the image.** Locate `${HARNESS_IMAGE}`; build it if absent. If it can be neither found
-   nor built, fail with a named, actionable error saying which tag was missing and what to run. Never
-   proceed past this stage silently — a run against a stale or absent image is the one failure mode
-   that produces confident nonsense.
+1. **Resolve the image.** Reuse `${HARNESS_IMAGE}` when the tag exists locally; build it with
+   `docker build -f Dockerfile --target node -t <tag> .` only when it is absent. If it can be neither
+   found nor built, fail with a named, actionable error saying which tag was missing and what to run.
+   Then record the image's reference, local image ID, creation time (image metadata, ISO 8601 UTC) and
+   `built` or `reused` into the run report's `image` block and the terminal summary — early-exit
+   setup-failure report included (Req 5.12). On `reused`, print exactly one notice before the first
+   check: the image may not match the current code, followed by the exact rebuild command for the
+   reported tag (Req 5.13). There is no comparison between image and code and no git (NG9, NG11), and
+   reuse fails nothing. The image is the only input that can be stale: the provisioning script, both
+   Caddyfiles, the env files and `librechat.harness.yaml` are mounted from the working tree, so every
+   other check decides against what is on disk at run start (Req 5.11).
 2. **Generate per-run secrets** with `crypto.randomBytes`, and assert the two grant passwords distinct
    before anything consumes them (Req 2.8, 5.6).
 3. **Write the resolved env files** under `env/` from the generated values and the non-secret values
    `env-matrix.md` records.
 4. **Validate before bring-up.** Parse both `MONGO_URI` values and fail setup if either omits
-   `authSource` or names anything but `admin` (Req 2.6); compare the Auth_Surface_Allowlist digest
-   against the digest recorded alongside the expected grant table and fail with the recompute error if
-   they differ (Req 2.11).
+   `authSource` or names anything but `admin` (Req 2.6).
 5. **Bring up the Auth_Enabled_MongoDB** and wait for its *authenticated* readiness — the
    authenticated `ping` healthcheck — within the 60-second budget, reporting a readiness timeout and
    running no script if it is not reached (Req 2.3).
@@ -1136,13 +1213,14 @@ order, and a stage that cannot complete is a setup failure that ends the run non
    `docker compose --profile split up --wait --wait-timeout 300`, naming the unhealthy service and its
    log tail on timeout (Req 1.11, 1.13).
 10. **Publish the harness context** the checks read — resolved addresses, the observer URI, the
-    recorded start timestamp, the image digest — as a file the Jest projects load, so a check never
+    recorded start timestamp, the resolved image — as a file the Jest projects load, so a check never
     reconstructs setup state and a check can never run against a context that was never written.
 11. **Execute the checks**: the Layer A suites, then the Layer B topology checks — boot-window checks
     first, then **obtain the `Session_Fixture`** for the `Seeded_Account` through the ingress client, then
     the path exercises and routing checks. The session is minted here rather than at stage 10 because
     login writes indexes and the runner issues no ingress request until the boot window has closed.
-12. **Emit the per-check report**, one record per catalog id (Req 5.3, 5.4, 5.10).
+12. **Emit the per-check report**, one record per catalog id, under the `image` block stage 1 recorded
+    (Req 5.3, 5.4, 5.10, 5.12).
 13. **Tear down and verify nothing remained** (Req 5.1).
 
 Stage 10 is what makes stage 11 falsifiable: the checks' inputs arrive from a file that stage 9 must
@@ -1192,7 +1270,8 @@ own error handling. Exit 0 requires all three of:
 - every catalog id the run's profile selects carries a record — no id is missing from the summary;
 - no record is a `fail`, and no setup or teardown failure was recorded;
 - every `skip` record names a reason drawn from a closed, enumerated set: a check decided elsewhere by
-  reference (`PARITY-SUITE-31`), an absent optional dependency (`mongosh` for Layer A), or a check
+  reference (`decided-by-reference`, `PARITY-SUITE-31`), an absent optional dependency (`mongosh`
+  for Layer A), or a check
   decidable only against a third-party service the harness deliberately does not stand up
   (`external-provider-required`, `PATH-GROUPSYNC-26`). A `skip` from any other cause — a stage that
   failed, a spec file that would not load, a context that was never published — is a setup failure and
@@ -1298,18 +1377,33 @@ than as a third service definition that could drift.
 
 **How parity is observed — three checks, not four.**
 
-- `COMPOSE-UNCHANGED-12` (4.1) is static and costs nothing: `deploy-compose.yml` and
-  `utils/docker/test-compose.yml` match their recorded digests, so NG3 holds by measurement rather
-  than by intent.
+- `COMPOSE-UNCHANGED-12` (1.14) is static, costs nothing and is warning-only: it hashes
+  `deploy-compose.yml` and `utils/docker/test-compose.yml` against digests committed in the harness
+  source, each committed beside that file's review targets — `e2e/container-split/compose.harness.yml`
+  (service images and settings; it pins the same `mongo:8.0.20` and `getmeili/meilisearch:v1.35.1` as
+  `deploy-compose.yml`) and `e2e/container-split/env/*.env.example` (environment variables). On a
+  mismatch it prints exactly one warning per file naming it, its review targets, and
+  `api/test/container-split/compose-unchanged.spec.js` as where to record the new digest once reviewed,
+  and reports `pass`, with the exit status unaffected. NG3 — criteria 1.1 and 4.1 — is a property of this change set, decided by
+  review; pinning it failed the run on the #16005 registry-org rename, an edit unrelated to the split.
 - `PARITY-COLLAPSE-29` (4.2) decides that the collapse is **config-only**, by reading the committed
   artifacts: the `collapsed` profile reuses the `auth-surface` service definition rather than adding a
   third one, the same `${HARNESS_IMAGE}` reference serves both profiles, `Caddyfile.collapsed` carries
   one unconditional upstream with no allowlist, and no build step exists in the collapse path — the
   application services declare `image:`, never `build:`. Zero source change, zero rebuild, one service
   definition — that is the whole claim.
-- `PARITY-SUITE-31` (4.4) carries non-regression: the project's existing automated suite, unmodified,
-  produces the same passing and failing counts with the split variables absent, recorded by reference
-  to the lane that runs it rather than re-derived inside a topology run.
+- `PARITY-SUITE-31` (4.4) carries non-regression by reference, and reports `skip`, not `pass`. The
+  claim — the project's existing automated suite, unmodified, produces the same passing and failing
+  counts with the split variables absent as it did before the split landed — compares against history
+  no run can observe, so it is decided by review and by the existing backend lane (Req 4.4 rationale).
+  The check records that lane's name, workflow path and jobs, the `DISABLE_STARTUP_TASKS`-absent
+  condition and the harness's additive roots as a `skip` with the enumerated reason
+  `decided-by-reference`, which does not block exit 0. A lane path no longer on disk is stated in the
+  skip's observation, never failed on (NG10).
+
+A green run therefore reads **28 pass / 2 skip** on the split profile and **22 pass / 2 skip** on the
+collapsed profile. The two skips are `PARITY-SUITE-31` (`decided-by-reference`) and `PATH-GROUPSYNC-26`
+(`external-provider-required`).
 
 **Why there is no fourth check.** An earlier revision had `PARITY-BEHAVIOR-30` replay the exercise
 list against a committed `fixtures/pre-split-baseline.json` and compare status and normalized body
@@ -1361,7 +1455,7 @@ one, and `BOOT-CLEAN-21`'s log window already reads that difference on the split
 | `mongosh` absent (Layer A) | Not on PATH | Layer A suites skip, with the reason on stderr so the default reporter cannot swallow it, and the reporter records a `skip` per affected catalog id | Install it. A skip is never reported as a pass, and never as a defect |
 | Harness image absent | `${HARNESS_IMAGE}` cannot be found and cannot be built | Setup failure naming the missing tag and the build command, before any compose invocation (Req 5.7) | Build or pull the tag. The run never proceeds on an unresolved image, because a run against the wrong image reports confidently about nothing |
 | Compose interpolation value unresolved | The runner failed to produce one of the nine values, or compose reports an unset `${...}` | Setup failure naming the value, from the runner's preflight rather than from a container that will not start (Req 5.8) | The value is the harness's to supply, not the operator's. The compose references carry no defaults deliberately, so the omission is loud |
-| Run executed no check | Bring-up or check execution never happened, so the result set is empty or partial | Every catalog id for the selected profile is recorded as `skip` with the reason, the outcome is classified as a setup failure, and the exit status is non-zero — exit 0 is unreachable without a `pass` for every selected id (Req 5.9, 5.10) | This is the defect the amended criteria exist to prevent. A silent success line with nothing brought up is what shipped once |
+| Run executed no check | Bring-up or check execution never happened, so the result set is empty or partial | Every catalog id for the selected profile is recorded as `skip` with the reason, the outcome is classified as a setup failure, and the exit status is non-zero — exit 0 is unreachable unless every selected id has a record, none `fail`, no setup or teardown failure, every `skip` carries an enumerated reason (`decided-by-reference`, `optional-dependency-absent`, `external-provider-required`) and at least one check executed (Req 5.9, 5.10) | This is the defect the amended criteria exist to prevent. A silent success line with nothing brought up is what shipped once |
 | Catalog id produced no result | A spec file failed to load, or a check was unreachable | The reporter derives a `skip` record for the id from the catalog, so it appears in the report rather than vanishing from it (Req 5.10) | A missing id is how "no failures" gets misread as "all passed". Deriving from the catalog makes the report complete by construction |
 
 ## Testing Strategy
@@ -1396,7 +1490,7 @@ suite. The next subsection records why, and what that means for reading Property
 
 | Control | Defect introduced | Must fail | Status | Why it is the control that matters |
 |---|---|---|---|---|
-| **NC1 — prefix misroute** | Add `/api/admin*` to the Auth_Surface_Allowlist so `GET /api/admin/roles` resolves to the Auth_Surface | `ROUTE-DEFAULT-28` | **Validated live — control PASSED.** Injected `/api/admin` + `/api/admin/*` into the `@auth_surface` matcher of a scratch copy of `Caddyfile.split`, bound into the `proxy` service through a scratch compose override (committed `Caddyfile.split` untouched; its digest still `f35cb2…c7273`), and brought the split profile up. `ROUTE-DEFAULT-28` went **red**: `/api/admin/config` was attributed to `auth-surface` (expected `api-container`). The deciding observation was `X-Harness-Upstream: auth-surface` on the response plus the proxy access-log line, with the HTTP status (401) explicitly *not used to decide* and "intended container (api-container) logged the request: no" corroborating the misroute — exactly the header-attribution mechanism the control targets. `ROUTE-ALLOW-27` stayed green. Scratch Caddyfile, override and topology deleted after; tree clean | The highest-value control in the set. That request returns a non-error status the route mounts — so every status-based check passes. If `ROUTE-DEFAULT-28` also passes, the harness cannot see the split's quietest routing failure and the routing checks are decoration |
+| **NC1 — prefix misroute** | Add `/api/admin*` to the Auth_Surface_Allowlist so `GET /api/admin/roles` resolves to the Auth_Surface | `ROUTE-DEFAULT-28` | **Validated live — control PASSED.** Injected `/api/admin` + `/api/admin/*` into the `@auth_surface` matcher of a scratch copy of `Caddyfile.split`, bound into the `proxy` service through a scratch compose override (committed `Caddyfile.split` untouched), and brought the split profile up. `ROUTE-DEFAULT-28` went **red**: `/api/admin/config` was attributed to `auth-surface` (expected `api-container`). The deciding observation was `X-Harness-Upstream: auth-surface` on the response plus the proxy access-log line, with the HTTP status (401) explicitly *not used to decide* and "intended container (api-container) logged the request: no" corroborating the misroute — exactly the header-attribution mechanism the control targets. `ROUTE-ALLOW-27` stayed green. Scratch Caddyfile, override and topology deleted after; tree clean | The highest-value control in the set. That request returns a non-error status the route mounts — so every status-based check passes. If `ROUTE-DEFAULT-28` also passes, the harness cannot see the split's quietest routing failure and the routing checks are decoration |
 | **NC2 — ungated startup tasks** | Unset `DISABLE_STARTUP_TASKS` on the Auth_Surface while leaving it on the Container_1_Grant | `BOOT-CLEAN-21` **and** `BOOT-NOWRITE-23` | **Validated live — FINDING: neither named check executed, because the defect is fatal at startup.** Injected the empty `DISABLE_STARTUP_TASKS` into the resolved (gitignored) `env/auth-surface.env` and brought the split profile up. The startup task attempted `insert: "roles"` — a write to a read-only collection under the Container_1_Grant — and `mongod` refused it: the Auth_Surface logged `error: Failed to start server: not authorized on LibreChat to execute command { insert: "roles", … }` and **exited (1)** at ~11.6 s. Compose aborted the bring-up as a `bringup-container-failed` **setup failure**, so `BOOT-CLEAN-21` and `BOOT-NOWRITE-23` never ran against the container (they would record `skip`, not `fail`, in the early report). The authorization error that `BOOT-CLEAN-21` is built to match — naming the collection `roles` — is present verbatim in the captured Auth_Surface log tail, so the *defect's observable signature* is confirmed; what is unconfirmed is that either named check would *itself* go red, because the injected defect is severe enough to kill the container one stage before the boot-window checks read it. A less-fatal ungating (a swallowed refusal that still reached `/readyz`) would be needed to exercise the two checks as check-level failures; that variant was not injected. Topology torn down; tree clean | Two independent mechanisms — log matching and profiling — must both catch the same defect. If only one fires, the other is misconfigured, and the boot window, the profile sizing, and the log matcher all sit in that blind spot |
 | **NC3 — wrong credential** | Hand the Auth_Surface the Container_2_Grant `MONGO_URI` | `GRANT-DENY-READ-03`, `GRANT-DENY-WRITE-04` (Layer A analogue: run the refusal suites under the API credential) | **Validated (Layer A analogue) — control PASSED.** Drove the Layer A fixture (`startProvisionedFixture`, real `provision.mongo.js` through real `mongosh` on `mongodb-memory-server`) and ran the refusal-suite logic under `uriFor('api')` — the full-access Container_2_Grant — instead of the Container_1_Grant. Every `GRANT-DENY-READ-03` read outside the twelve (`conversations`, `messages`, `files`, `tokens`, `keys`) succeeded and returned the root-seeded document, and every `GRANT-DENY-WRITE-04` write to the four read-only collections (`roles`, `configs`, `systemgrants`, `banners`) succeeded — so both checks go **red** under the full-access credential, confirming their green results under the Container_1_Grant observe a genuine refusal rather than an empty collection or a swallowed error. No Docker; scratch runner deleted | Proves the refusal checks are observing a *refusal* rather than an empty collection or a swallowed error. Under a full-access credential every refusal check must go red; any that stays green was passing for the wrong reason |
 | **NC4 — widened grant** | Add a thirteenth collection — `conversations` — to `AUTH_READ_WRITE` in a scratch copy of the script and provision from it | `GRANT-SHAPE-01` | **Validated — control PASSED.** Copied `provision.mongo.js` to a scratch path (the committed script untouched, NG2), added `conversations` as a thirteenth `AUTH_READ_WRITE` collection in the copy, provisioned a `mongodb-memory-server` from it, and read the `librechatAuthSurface` role back through `GRANT-SHAPE-01`'s own decider (`normalizeRole` + `diffGrant`). The decider reported the grant widened: **13 collections, not 12**, with `unexpected: ["conversations"]` carrying the full read+write vocabulary — so `GRANT-SHAPE-01`'s exhaustiveness assertion goes red. No Docker; scratch script copy and runner deleted | Proves the grant-shape check decides the boundary rather than merely confirming the twelve it expects are present. A check that asserts presence without asserting exhaustiveness passes a widened grant, which is the failure mode that would matter most in production |
@@ -1449,7 +1543,8 @@ recorded above.
 Layer A's own suites are the regression surface for the grant; they are
 where a narrowing or widening of `READ_ACTIONS`, `WRITE_ACTIONS`, or either collection list shows up
 within seconds, wherever `mongosh` is on PATH. Layer B is the regression surface for the topology.
-`COMPOSE-UNCHANGED-12` guards NG3 statically and costs nothing. Nothing in either layer mocks a
+`COMPOSE-UNCHANGED-12` reports drift in the two Single_Container_Setup files as a warning and never
+fails; NG3 itself is held by review. Nothing in either layer mocks a
 MongoDB authorization error: `mongod` runs with access control on, every credential is a real
 collection-scoped role provisioned by the real script, and the refusals are the server's — the same
 discipline `api/test/migration/harness.js` sets out, and the reason its results are worth anything.

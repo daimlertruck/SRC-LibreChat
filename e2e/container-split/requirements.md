@@ -137,6 +137,27 @@ These are constraints on what the Harness may build, not requirements to build a
 11. WHEN the Harness_Compose_File is brought up, THE Harness SHALL start the Auth_Surface, the API_Container, the Front_Proxy, the Auth_Enabled_MongoDB, and any supporting service the two containers require, and SHALL consider bring-up complete only when each started service reaches a serving state within 300 seconds, observed through that service's health or readiness endpoint.
 12. THE Harness SHALL retain the existing route mount registrations and HTTP path layout unchanged, making zero addition, removal, reordering, or renaming of a route mount or a request path.
 13. IF any service the Harness_Compose_File starts does not reach a serving state within the 300-second bring-up window, THEN THE Harness SHALL report a setup failure identifying the service that did not reach a serving state and SHALL admit no request-level check against either container.
+14. IF, during a Harness run, the content digest of a Single_Container_Setup file differs from the digest committed for that file in the Harness source (a value the Harness never rewrites during a run), THEN THE Harness SHALL print exactly one warning for that file in that run's output, naming the file by its repository-relative path and stating that its content changed since the committed digest, naming the Harness files that mirror that Single_Container_Setup file and must be reviewed against it — the Harness_Compose_File for its service images and settings, and the Harness environment templates for its environment variables — and naming the Harness source file in which the recorded digest is updated once that review is done, SHALL report the digest check for that file as passed (not failed and not skipped), SHALL NOT change the result of any other check, and SHALL end the run with the same exit status it would have had if the digests matched.
+
+#### Rationale
+
+Amendment note on criterion 1.1: the criterion is unchanged in wording and number. That both
+Single_Container_Setup files are left unmodified is a property of this change set, decided by review of
+the change, not a property the Harness decides at run time. The Harness therefore does not enforce 1.1
+by pinning the files' content: upstream edits to those files are routine and unrelated to the split —
+an upstream merge (#16005) renamed the image registry org in both `deploy-compose.yml` and
+`utils/docker/test-compose.yml`, and a pinned digest stopped the whole run on it. Pinning would make
+every run depend on the project's configuration never changing, which criterion 5.11 rules out.
+
+Criterion 1.14 was appended for the same reason. The difference between a Single_Container_Setup file
+and the digest committed for it in the Harness source is still worth seeing, so the Harness prints it as a warning naming
+the file; it is not a finding about the split, so it fails neither the run nor any check. The baseline
+is the digest committed in the Harness source, so it is the same from run to run, and the check reports
+`pass` with the warning, not `fail` and not `skip`. The Harness_Compose_File copies parts of the
+Single_Container_Setup files — for example the `mongo` and `meilisearch` image versions that
+`deploy-compose.yml` pins — so a change there may mean the Harness no longer matches the deployment it
+stands in for; the warning names what to review and where to record the reviewed digest, so the warning
+disappears only after someone has checked.
 
 ### Requirement 2: Auth-Enabled MongoDB With The Two Provisioned Grants
 
@@ -154,7 +175,19 @@ These are constraints on what the Harness may build, not requirements to build a
 8. IF the auth-surface password and the API password passed to the Provisioning_Script are equal, THEN THE Harness SHALL report a setup failure identifying the shared-password rejection and SHALL admit no request-level check against either container.
 9. IF the Provisioning_Script exits without emitting its success completion signal, THEN THE Harness SHALL report a setup failure carrying the script's failure indication and SHALL admit no request-level check against either container.
 10. WHEN the Provisioning_Script has emitted its success completion signal, THE Harness SHALL boot each container against its own provisioned credential and SHALL admit request-level checks only after confirming zero authorization errors across that container's startup logs.
-11. WHERE the Harness is asked to reflect a routing change that moves a path between the two routed path sets, THE Harness SHALL surface that the Container_1_Grant must be recomputed from the moved path's collection needs before the changed routing is exercised, consistent with the Provisioning_Script's recompute guidance.
+11. WHEN a routing change moves a path between the two routed path sets, THE Harness SHALL surface that the Container_1_Grant must be recomputed from the moved path's collection needs through the checks the Test_Runner runs against the current Auth_Surface_Allowlist and the current Container_1_Grant (a routing misattribution under criteria 3.10 and 3.11, or an ownership-matrix understatement in the criterion 3.4 path exercise, carrying the Provisioning_Script's recompute guidance), and SHALL NOT fail a run because the Auth_Surface_Allowlist differs from a recorded digest of its content.
+
+#### Rationale
+
+Amendment note on criterion 2.11: the criterion keeps its number and was reworded. The earlier wording
+was implemented by a pinned digest of the Auth_Surface_Allowlist, so any edit to the allowlist failed
+the run whether or not the edit moved a path or left the Container_1_Grant short. That digest is
+removed entirely. A moved path already surfaces through the checks run against the current allowlist
+and the current grant: attributed to the wrong container it fails the routing checks of 3.10 and 3.11,
+and routed to the Auth_Surface with collection needs outside the grant it records an
+Authorization_Error in the path exercise of 3.4, which carries the recompute guidance. The reworded
+criterion names those checks as the surfacing mechanism and, consistent with criterion 5.11, forbids
+failing a run on the allowlist's difference from a recorded digest.
 
 ### Requirement 3: Route-Split And Grant-Split Validation
 
@@ -184,6 +217,7 @@ These are constraints on what the Harness may build, not requirements to build a
 20. WHERE an exercised routed path belongs to an Unconfigured_Provider, THE Test_Runner SHALL report that path's grant sufficiency under a status distinct from the status it reports for a passing exercise, naming the unconfigured provider as the reason the grant-sufficiency question is undecided for that path, so that the narrowed scope is readable in the run report.
 21. WHERE the Harness configures a social login provider, THE Test_Runner SHALL exercise that provider's routed path as a full grant-sufficiency exercise under criteria 3.4, 3.12, and 3.13, so that the Unconfigured_Provider narrowing holds only while the provider is absent from the Harness configuration.
 22. IF a session-gated routed path is exercised with no Session_Fixture attached, THEN THE Test_Runner SHALL report that exercise as a fixture failure carrying the exercised path and the unattached Session_Fixture, and SHALL withhold from that exercise the passing grant-sufficiency status of criterion 3.13, because the exercise queried no collection and therefore decided nothing about the Container_1_Grant. (Design Property 6 — no check passes vacuously.)
+23. IF a routed path that the Test_Runner does not treat as session-gated under criterion 3.16 is exercised without a Session_Fixture, returns HTTP 401, and records no Authorization_Error in its Exercise_Log_Window, THEN THE Test_Runner SHALL report that exercise as a fixture failure carrying the exercised path and naming as the likely cause that the application now requires authentication on that path, and SHALL withhold from that exercise the passing grant-sufficiency status of criterion 3.13. (Design Property 6 — no check passes vacuously.)
 
 #### Rationale
 
@@ -235,6 +269,19 @@ Criterion 3.22 closes it on the reporting side rather than on the preparation si
 Test_Runner to attach the session, and 3.22 fixes what the run report says when the obligation was not
 met, so an unmet fixture surfaces as a fixture failure instead of as grant sufficiency. Criterion 3.13
 is unchanged and still decides a properly attached exercise on the same three observations.
+
+Criterion 3.23 was appended because 3.22 only catches a path the Harness already knows to be
+session-gated. If the application puts a path behind its authentication middleware and the Harness's
+list of session-gated paths does not know it, the anonymous request is refused at the gate with a 401
+over a clean Exercise_Log_Window — the same three observations 3.13 passes — so the exercise would pass
+without having tested the grant. The observed 401 is the signal the run itself provides, so no list of
+session-gated paths needs to be kept in step with the application for the vacuous pass to be caught,
+in line with criterion 5.11. A 403 is deliberately not included: among the exercised paths it is the
+application's own configuration refusal, for example registration or password reset disabled.
+Criterion 3.23 leaves a listed-but-unattached path to 3.22 and a window with an Authorization_Error to
+3.4, so no exercise is reported twice. The cause is named as "likely" because a 401 alone cannot prove
+the gate answered. Whoever records 401 as an anonymous path's expected status must know this criterion
+will fire on that path; no current exercised path does.
 
 Criterion 3.9 and the refusal criteria 3.5 through 3.8 are unchanged. Nothing here asks the Harness to
 decide anything about Auth_Gate admission, which NG6 places outside the Harness: the Session_Fixture
@@ -299,6 +346,22 @@ Criterion 4.4 carries what 4.3 was reaching for, and four things about it are lo
 Criterion numbers 4.3 and 4.5 are left absent rather than closed up, because downstream artifacts
 cite criteria by number and renumbering 4.4 would silently invalidate those references.
 
+Amendment note on criterion 4.1: the criterion is unchanged in wording and number. As with 1.1, leaving
+both Single_Container_Setup files byte-for-byte unchanged is a property of this change set, decided by
+review, and the Harness does not enforce it by pinning the files' content, because a pin fails on
+routine upstream edits unrelated to the split (criterion 5.11). A difference from the digest committed
+for either file in the Harness source is reported as the warning of criterion 1.14.
+
+Amendment note on criterion 4.4: the criterion is unchanged in wording and number. It compares against
+history — "the same count of passing and failing tests the suite produced before the split landed" —
+and no Harness run can observe that history. Like 1.1 and 4.1, it is a property of this change set,
+decided by review and by the project's existing backend CI lane that runs the suite. The Harness records
+it by reference and reports `PARITY-SUITE-31` as a `skip` with the enumerated reason
+`decided-by-reference`. It never reports that check as `pass`, because a pass would claim an observation
+the run did not make, and never as a failure caused by a renamed or moved workflow file, because that
+would make the run depend on the repository staying unchanged (criterion 5.11). A `decided-by-reference`
+skip does not block exit 0.
+
 ### Requirement 5: Local And CI Runnability
 
 **User Story:** As an engineer, I want to run the harness with a single documented command locally and hook it into CI, so that the split's verification checks run repeatably rather than by hand.
@@ -315,6 +378,9 @@ cite criteria by number and renumbering 4.4 would silently invalidate those refe
 8. THE Harness SHALL supply every compose interpolation value the topology needs — the topology's image reference, the MongoDB root credential, the MongoDB grant credentials, the database name, and the search master key — from its own configuration, and SHALL resolve each of those values without the operator exporting it.
 9. IF the Harness cannot bring the topology up, or cannot execute the checks, THEN THE Harness SHALL report a setup failure identifying what could not be brought up or executed and SHALL exit with a non-zero status code, so that a run that executed no check exits non-zero.
 10. THE Test_Runner SHALL report a check that was not executed under a status distinct from the status it reports for a check that passed, so that an unexecuted check is readable as unexecuted rather than as a pass.
+11. THE Harness SHALL decide every check against the project files and Harness files (files the Harness ships, such as the Harness_Compose_File and the Auth_Surface_Allowlist) as they are on disk when the run starts, and against the image the run resolves under criterion 5.12, and SHALL NOT fail the run or any check because such a file differs from a recorded copy or recorded digest of its content, reporting that difference at most as a warning, as criterion 1.14 does for the Single_Container_Setup files.
+12. WHEN the Harness has resolved the image for a run, THE Harness SHALL report, in the run report and on the terminal, the image's reference (repository and tag), the local image ID that the Auth_Surface and the API_Container were started from, the image's creation time as recorded in the image's metadata in ISO 8601 UTC, and whether the run built the image (the configured tag was absent and the run invoked a build) or reused it (the tag was present and the run invoked no build), including on a run that later ends in the setup failure of criterion 5.9.
+13. WHEN a run reuses an existing image, THE Harness SHALL print on the terminal exactly one notice, before the first check executes, stating that the image may not match the current code and naming a command that rebuilds the image under the reported tag, SHALL print that notice on every run that reuses an image and on no run that builds one, SHALL perform no comparison between the image and the current code, and SHALL NOT fail the run or any check because the image was reused.
 
 #### Rationale
 
@@ -333,3 +399,33 @@ it adds a caller rather than a second code path.
 
 The new criteria are appended rather than interleaved, and no existing criterion number changed, for
 the same reason 4.3 and 4.5 were left vacant: downstream artifacts cite criteria by number.
+
+Criterion 5.11 was appended so the Harness validates only the current code. The project's code and
+configuration change regularly, and a check pinned to a recorded snapshot of a file fails on routine
+edits unrelated to the split — upstream #16005 renamed the image registry org in both
+Single_Container_Setup files and a pinned digest stopped the whole run — while testing the file's
+history rather than the code present at run time. Each check therefore decides against what is on disk
+and in the image when the run starts; criteria 1.14 and 2.11 are the two places this replaces a pin.
+
+Scope note on criterion 5.11: the criterion is unchanged in wording and number. Three points fix its
+reach:
+
+- Harness files — the Caddyfiles, the list of exercised paths, the Path_Payloads, the env templates and
+  the Harness_Compose_File — are edited together by whoever changes the Harness, and are not checked for
+  change at run time.
+- Application code and project configuration MAY be checked for change, and such a check only ever
+  warns. Criterion 1.14 is the one instance.
+- Criterion 3.5's check of the Container_1_Grant is not a snapshot in 5.11's sense. Criterion 3.5 itself
+  fixes the expected value — exactly the twelve collections in their modes — so a change to the grant
+  the Provisioning_Script produces is the finding 3.5 exists to report, and that check still fails on it
+  by design.
+
+Criteria 5.12 and 5.13 were appended as the achievable form of "test what is there". The Harness may reuse an
+existing image, and a check that the image matches the current code is not available to it: a real
+match check would need git, which the design's NG9 forbids, and is meaningless for an uncommitted
+tree. The Harness therefore reports honestly what it tested — the image's tag, local image ID and creation
+time, and whether this run built or reused it — and, when it reused one, prints a single notice that
+the image may not match the current code together with the rebuild command, then tests the image that
+is there. A locally built image has an image ID but no repository digest, so the local image ID is what
+is reported. "Built" and "reused" are defined by whether the run invoked a build, because a fully cached
+build can report an existing ID and an old creation time.
