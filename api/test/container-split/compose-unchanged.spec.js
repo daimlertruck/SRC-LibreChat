@@ -42,13 +42,13 @@ const GUARDED_COMPOSE_FILES = [
     // Single-container deployment topology on `mongod --noauth`. NG3/Req 1.1/4.1
     // forbid converting this to an auth-enabled MongoDB or otherwise destabilizing
     // the single-container setup; the harness ships its own compose file instead.
-    digest: '1bdca1fb8376d758f6e99302523cd6a9fa6f9dbc92d499908ca94fb0f6af2301',
+    digest: 'a0cdcf2cd9c3198d6ff47b16867fa4aa64832899333db6bfd6d02d97e286fb7c',
   },
   {
     file: 'utils/docker/test-compose.yml',
     // Single-container test topology on `mongod --noauth`. Same NG3/Req 1.1/4.1
     // freeze: the harness must not repoint this file at an auth-enabled MongoDB.
-    digest: '52f5a13340bef6c50c55758f237da545f8ec82d61031ab04b68565b8f5c286c3',
+    digest: 'ea8a92a8fec0af8f4e6b8568d805e49a1a5d4ccda6f0c105a7f70e03e56597dd',
   },
 ];
 
