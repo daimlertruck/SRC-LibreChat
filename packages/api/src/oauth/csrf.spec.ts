@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import {
   shouldUseSecureCookie,
@@ -8,6 +7,7 @@ import {
   TOKEN_PROVIDER_COOKIE,
   OPENID_USER_ID_COOKIE,
 } from './csrf';
+import { generateTokenKey, hashTokenKey, parseTokenKey } from '~/auth/custody/key';
 
 describe('shouldUseSecureCookie', () => {
   const originalEnv = process.env;
@@ -225,17 +225,19 @@ describe('setOpenIDMarkerCookies', () => {
     expect(jwt.verify(signedUserId, 'marker-secret')).toMatchObject({ id: 'user-123' });
   });
 
-  /** Preserves the marker's binding to the durable refresh-token session: a marker signed for one
-   *  session must not stand in for another once the refresh token has rotated. */
-  it('binds the signed user marker to the refresh token it was issued with', () => {
+  /** Preserves the marker's binding to the token key: a marker signed for one session must not
+   *  stand in for another, and the claim is `hashTokenKey` of the same key — byte-for-byte equal
+   *  to the custody record's lookup key — with no IdP-token-derived material. */
+  it('binds the signed user marker to the token key it was issued with', () => {
     const res = { cookie: jest.fn() } as unknown as import('express').Response;
     const expires = new Date(Date.now() + 604800000);
+    const tokenKey = generateTokenKey();
 
     setOpenIDMarkerCookies(res, {
       userId: 'user-123',
       expires,
       refreshExpiryMs: 604800000,
-      refreshToken: 'the-refresh-token',
+      tokenKey,
     });
 
     const signedUserId = (res.cookie as jest.Mock).mock.calls.find(
@@ -243,11 +245,11 @@ describe('setOpenIDMarkerCookies', () => {
     )?.[1];
     expect(jwt.verify(signedUserId, 'marker-secret')).toMatchObject({
       id: 'user-123',
-      refreshTokenHash: crypto.createHash('sha256').update('the-refresh-token').digest('base64url'),
+      tokenKeyHash: hashTokenKey(parseTokenKey(tokenKey) as Buffer),
     });
   });
 
-  it('omits the binding when no refresh token is supplied', () => {
+  it('omits the binding when no token key is supplied', () => {
     const res = { cookie: jest.fn() } as unknown as import('express').Response;
     const expires = new Date(Date.now() + 604800000);
 
@@ -256,7 +258,24 @@ describe('setOpenIDMarkerCookies', () => {
     const signedUserId = (res.cookie as jest.Mock).mock.calls.find(
       ([name]) => name === OPENID_USER_ID_COOKIE,
     )?.[1];
-    expect(jwt.verify(signedUserId, 'marker-secret')).not.toHaveProperty('refreshTokenHash');
+    expect(jwt.verify(signedUserId, 'marker-secret')).not.toHaveProperty('tokenKeyHash');
+  });
+
+  it('omits the binding when the token key is malformed', () => {
+    const res = { cookie: jest.fn() } as unknown as import('express').Response;
+    const expires = new Date(Date.now() + 604800000);
+
+    setOpenIDMarkerCookies(res, {
+      userId: 'user-123',
+      expires,
+      refreshExpiryMs: 604800000,
+      tokenKey: 'not-a-valid-token-key',
+    });
+
+    const signedUserId = (res.cookie as jest.Mock).mock.calls.find(
+      ([name]) => name === OPENID_USER_ID_COOKIE,
+    )?.[1];
+    expect(jwt.verify(signedUserId, 'marker-secret')).not.toHaveProperty('tokenKeyHash');
   });
 
   it('updates token_provider even when the signed user marker is not applicable', () => {

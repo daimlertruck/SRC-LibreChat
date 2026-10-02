@@ -82,9 +82,11 @@ jest.mock('~/server/services/PluginService', () => ({
   deleteUserPluginAuth: jest.fn().mockResolvedValue(undefined),
 }));
 
+const mockDeleteAllForUser = jest.fn().mockResolvedValue(undefined);
 jest.mock('~/server/services/AuthService', () => ({
   verifyEmail: jest.fn(),
   resendVerificationEmail: jest.fn(),
+  getTokenCustodyService: () => ({ deleteAllForUser: mockDeleteAllForUser }),
 }));
 
 jest.mock('sharp', () =>
@@ -486,6 +488,10 @@ describe('deleteUserController', () => {
 
     expect(mockRes.status).toHaveBeenCalledWith(200);
     expect(mockRes.send).toHaveBeenCalledWith({ message: 'User deleted' });
+    expect(mockDeleteAllForUser).toHaveBeenCalledWith({
+      userId: userId.toString(),
+      tenantId: undefined,
+    });
     expect(beginAgentTriggerUserDeletion).toHaveBeenCalledWith(userId.toString(), expect.any(Date));
     expect(mockPrepareAgentTriggerUserPurge).toHaveBeenCalledWith(
       userId.toString(),

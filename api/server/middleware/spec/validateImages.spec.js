@@ -1,11 +1,15 @@
 const jwt = require('jsonwebtoken');
-const { createHash } = require('node:crypto');
 const createValidateImageRequest = require('~/server/middleware/validateImageRequest');
 
-// Mock only isEnabled, keep getBasePath real so it reads process.env.DOMAIN_CLIENT
+// Mock only isEnabled, keep getBasePath, generateTokenKey and hashTokenKey real so the OpenID-reuse
+// binding check runs against real key material.
 jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
   isEnabled: jest.fn(),
+}));
+jest.mock('@librechat/data-schemas', () => ({
+  ...jest.requireActual('@librechat/data-schemas'),
+  getTenantId: jest.fn(() => undefined),
 }));
 jest.mock('~/models', () => ({
   findSession: jest.fn(),
@@ -16,11 +20,14 @@ jest.mock('~/models', () => ({
   hasCapabilityForPrincipals: jest.fn(),
   hasPermission: jest.fn(),
 }));
+jest.mock('~/server/services/AuthService', () => ({
+  getTokenCustodyService: jest.fn(),
+}));
 jest.mock('~/server/services/Config', () => ({
   getAppConfig: jest.fn(),
 }));
 
-const { isEnabled } = require('@librechat/api');
+const { isEnabled, generateTokenKey, hashTokenKey, TOKEN_KEY_COOKIE } = require('@librechat/api');
 const {
   findSession,
   getAgent,
@@ -30,7 +37,42 @@ const {
   hasCapabilityForPrincipals,
   hasPermission,
 } = require('~/models');
+const { getTokenCustodyService } = require('~/server/services/AuthService');
 const { getAppConfig } = require('~/server/services/Config');
+
+/**
+ * A fake custody service whose `custodyExists` mirrors the store's existence-and-`userId` check.
+ * The OpenID-reuse image path reaches it through `verifyCustodyBinding`; nothing else on the service
+ * is exercised by image authorization, so the other methods throw if touched.
+ */
+function makeCustodyService(custodyExists) {
+  const unreachable = (name) => () => {
+    throw new Error(`${name} must not be called by image authorization`);
+  };
+  return {
+    custodyExists: jest.fn(custodyExists),
+    createCustody: unreachable('createCustody'),
+    openCustody: unreachable('openCustody'),
+    rotateCustody: unreachable('rotateCustody'),
+    reloadAfterInvalidGrant: unreachable('reloadAfterInvalidGrant'),
+    deleteCustody: unreachable('deleteCustody'),
+    deleteAllForUser: unreachable('deleteAllForUser'),
+  };
+}
+
+/**
+ * Builds the token key cookie value and the `openid_user_id` marker JWT for a live OpenID session.
+ * The marker carries `{ id, tokenKeyHash }` signed with `JWT_REFRESH_SECRET`, exactly as
+ * `setOpenIDMarkerCookies` produces.
+ */
+function makeOpenIdCookies(userId, { tokenKey = generateTokenKey() } = {}) {
+  const tokenKeyHash = hashTokenKey(require('@librechat/api').parseTokenKey(tokenKey));
+  const marker = jwt.sign(
+    { id: userId, tokenKeyHash, exp: Math.floor(Date.now() / 1000) + 3600 },
+    process.env.JWT_REFRESH_SECRET,
+  );
+  return { tokenKey, tokenKeyHash, marker };
+}
 
 describe('validateImageRequest middleware', () => {
   let req, res, next, validateImageRequest;
@@ -62,6 +104,8 @@ describe('validateImageRequest middleware', () => {
     getUserPrincipals.mockResolvedValue([{ principalType: 'user', principalId: validObjectId }]);
     hasCapabilityForPrincipals.mockResolvedValue(false);
     hasPermission.mockResolvedValue(false);
+    // Default: a live custody record exists for any presented hash/user pair.
+    getTokenCustodyService.mockReturnValue(makeCustodyService(async () => true));
   });
 
   afterEach(() => {
@@ -365,88 +409,175 @@ describe('validateImageRequest middleware', () => {
       // Enable OpenID token reuse
       isEnabled.mockReturnValue(true);
       process.env.OPENID_REUSE_TOKENS = 'true';
-      req.session = { openidTokens: { refreshToken: 'dummy-token' } };
     });
 
-    test('should return 403 if no OpenID user ID cookie when token_provider is openid', async () => {
-      req.headers.cookie = 'refreshToken=dummy-token; token_provider=openid';
+    test('should return 403 if no token key cookie when token_provider is openid', async () => {
+      const { marker } = makeOpenIdCookies(validObjectId);
+      req.headers.cookie = `token_provider=openid; openid_user_id=${marker}`;
       await validateImageRequest(req, res, next);
       expect(res.status).toHaveBeenCalledWith(403);
       expect(res.send).toHaveBeenCalledWith('Access Denied');
     });
 
-    test('should validate JWT-signed user ID for OpenID flow', async () => {
-      const signedUserId = jwt.sign(
-        { id: validObjectId, exp: Math.floor(Date.now() / 1000) + 3600 },
-        process.env.JWT_REFRESH_SECRET,
-      );
-      req.headers.cookie = `refreshToken=dummy-token; token_provider=openid; openid_user_id=${signedUserId}`;
-      req.originalUrl = `/images/${validObjectId}/example.jpg`;
+    test('should return 403 if no marker cookie when token_provider is openid', async () => {
+      const { tokenKey } = makeOpenIdCookies(validObjectId);
+      req.headers.cookie = `token_provider=openid; ${TOKEN_KEY_COOKIE}=${tokenKey}`;
       await validateImageRequest(req, res, next);
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.send).toHaveBeenCalledWith('Access Denied');
+    });
+
+    test('establishes the user id from a matching key/marker pair through the custody binding', async () => {
+      const custody = makeCustodyService(async () => true);
+      getTokenCustodyService.mockReturnValue(custody);
+      const { tokenKey, tokenKeyHash, marker } = makeOpenIdCookies(validObjectId);
+      req.headers.cookie = `token_provider=openid; ${TOKEN_KEY_COOKIE}=${tokenKey}; openid_user_id=${marker}`;
+      req.originalUrl = `/images/${validObjectId}/example.jpg`;
+
+      await validateImageRequest(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      // Exactly one indexed existence-and-userId read; no session lookup on this path.
+      expect(custody.custodyExists).toHaveBeenCalledTimes(1);
+      expect(custody.custodyExists).toHaveBeenCalledWith({
+        tokenKeyHash,
+        expectedUserId: validObjectId,
+        tenantId: undefined,
+      });
+      expect(findSession).not.toHaveBeenCalled();
+    });
+
+    test('authorizes without a refreshToken cookie when the key/marker pair matches', async () => {
+      const { tokenKey, marker } = makeOpenIdCookies(validObjectId);
+      req.headers.cookie = `token_provider=openid; ${TOKEN_KEY_COOKIE}=${tokenKey}; openid_user_id=${marker}`;
+      req.originalUrl = `/images/${validObjectId}/example.jpg`;
+
+      await validateImageRequest(req, res, next);
+
       expect(next).toHaveBeenCalled();
     });
 
-    test('should validate a refresh-bound user ID after the OpenID session expires', async () => {
-      const refreshToken = 'dummy-token';
-      const signedUserId = jwt.sign(
+    test('rejects when the custody record does not exist (revoked or logged out)', async () => {
+      const custody = makeCustodyService(async () => false);
+      getTokenCustodyService.mockReturnValue(custody);
+      const { tokenKey, marker } = makeOpenIdCookies(validObjectId);
+      req.headers.cookie = `token_provider=openid; ${TOKEN_KEY_COOKIE}=${tokenKey}; openid_user_id=${marker}`;
+      req.originalUrl = `/images/${validObjectId}/example.jpg`;
+
+      await validateImageRequest(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(custody.custodyExists).toHaveBeenCalledTimes(1);
+    });
+
+    test('rejects a marker whose tokenKeyHash claim does not match the key', async () => {
+      const custody = makeCustodyService(async () => true);
+      getTokenCustodyService.mockReturnValue(custody);
+      // Marker minted for one key, presented alongside a different key.
+      const { marker } = makeOpenIdCookies(validObjectId);
+      const otherKey = generateTokenKey();
+      req.headers.cookie = `token_provider=openid; ${TOKEN_KEY_COOKIE}=${otherKey}; openid_user_id=${marker}`;
+      req.originalUrl = `/images/${validObjectId}/example.jpg`;
+
+      await validateImageRequest(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      // The claim mismatch fails closed before any store read.
+      expect(custody.custodyExists).not.toHaveBeenCalled();
+    });
+
+    test('rejects a previous-format marker carrying only refreshTokenHash', async () => {
+      const custody = makeCustodyService(async () => true);
+      getTokenCustodyService.mockReturnValue(custody);
+      const { tokenKey } = makeOpenIdCookies(validObjectId);
+      const legacyMarker = jwt.sign(
         {
           id: validObjectId,
-          refreshTokenHash: createHash('sha256').update(refreshToken).digest('base64url'),
+          refreshTokenHash: 'some-refresh-hash',
           exp: Math.floor(Date.now() / 1000) + 3600,
         },
         process.env.JWT_REFRESH_SECRET,
       );
-      req.session = undefined;
-      req.headers.cookie = `refreshToken=${refreshToken}; token_provider=openid; openid_user_id=${signedUserId}`;
+      req.headers.cookie = `token_provider=openid; ${TOKEN_KEY_COOKIE}=${tokenKey}; openid_user_id=${legacyMarker}`;
       req.originalUrl = `/images/${validObjectId}/example.jpg`;
 
       await validateImageRequest(req, res, next);
 
-      expect(next).toHaveBeenCalled();
-      expect(findSession).toHaveBeenCalledWith({
-        userId: validObjectId,
-        refreshToken,
-      });
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(custody.custodyExists).not.toHaveBeenCalled();
     });
 
-    test('should return 403 for invalid JWT-signed user ID', async () => {
-      req.headers.cookie =
-        'refreshToken=dummy-token; token_provider=openid; openid_user_id=invalid-jwt';
+    test('a refreshToken cookie hashing to the claim establishes no user id without a valid key cookie', async () => {
+      const custody = makeCustodyService(async () => true);
+      getTokenCustodyService.mockReturnValue(custody);
+      const { tokenKeyHash } = makeOpenIdCookies(validObjectId);
+      // Marker binds to the real tokenKeyHash, but the browser presents no token key cookie —
+      // only a refreshToken cookie whose value equals the hash. Without the key, no binding.
+      const marker = jwt.sign(
+        { id: validObjectId, tokenKeyHash, exp: Math.floor(Date.now() / 1000) + 3600 },
+        process.env.JWT_REFRESH_SECRET,
+      );
+      req.headers.cookie = `token_provider=openid; refreshToken=${tokenKeyHash}; openid_user_id=${marker}`;
+      req.originalUrl = `/images/${validObjectId}/example.jpg`;
+
+      await validateImageRequest(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(custody.custodyExists).not.toHaveBeenCalled();
+    });
+
+    test('should return 403 for an invalid marker JWT', async () => {
+      const { tokenKey } = makeOpenIdCookies(validObjectId);
+      req.headers.cookie = `token_provider=openid; ${TOKEN_KEY_COOKIE}=${tokenKey}; openid_user_id=invalid-jwt`;
       await validateImageRequest(req, res, next);
       expect(res.status).toHaveBeenCalledWith(403);
       expect(res.send).toHaveBeenCalledWith('Access Denied');
     });
 
-    test('should return 403 for expired JWT-signed user ID', async () => {
-      const expiredSignedUserId = jwt.sign(
-        { id: validObjectId, exp: Math.floor(Date.now() / 1000) - 3600 },
+    test('should return 403 for an expired marker JWT', async () => {
+      const { tokenKey, tokenKeyHash } = makeOpenIdCookies(validObjectId);
+      const expiredMarker = jwt.sign(
+        { id: validObjectId, tokenKeyHash, exp: Math.floor(Date.now() / 1000) - 3600 },
         process.env.JWT_REFRESH_SECRET,
       );
-      req.headers.cookie = `refreshToken=dummy-token; token_provider=openid; openid_user_id=${expiredSignedUserId}`;
+      req.headers.cookie = `token_provider=openid; ${TOKEN_KEY_COOKIE}=${tokenKey}; openid_user_id=${expiredMarker}`;
       await validateImageRequest(req, res, next);
       expect(res.status).toHaveBeenCalledWith(403);
       expect(res.send).toHaveBeenCalledWith('Access Denied');
     });
 
-    test('should validate image path against JWT-signed user ID', async () => {
-      const signedUserId = jwt.sign(
-        { id: validObjectId, exp: Math.floor(Date.now() / 1000) + 3600 },
-        process.env.JWT_REFRESH_SECRET,
-      );
+    test('should validate image path against the marker user ID', async () => {
+      const { tokenKey, marker } = makeOpenIdCookies(validObjectId);
       const differentObjectId = '65cfb246f7ecadb8b1e8036c';
-      req.headers.cookie = `refreshToken=dummy-token; token_provider=openid; openid_user_id=${signedUserId}`;
+      req.headers.cookie = `token_provider=openid; ${TOKEN_KEY_COOKIE}=${tokenKey}; openid_user_id=${marker}`;
       req.originalUrl = `/images/${differentObjectId}/example.jpg`;
       await validateImageRequest(req, res, next);
       expect(res.status).toHaveBeenCalledWith(403);
       expect(res.send).toHaveBeenCalledWith('Access Denied');
     });
 
+    test('scopes the custody lookup to the ambient tenant', async () => {
+      const { getTenantId } = require('@librechat/data-schemas');
+      getTenantId.mockReturnValueOnce('tenant-a');
+      const custody = makeCustodyService(async () => true);
+      getTokenCustodyService.mockReturnValue(custody);
+      const { tokenKey, tokenKeyHash, marker } = makeOpenIdCookies(validObjectId);
+      req.headers.cookie = `token_provider=openid; ${TOKEN_KEY_COOKIE}=${tokenKey}; openid_user_id=${marker}`;
+      req.originalUrl = `/images/${validObjectId}/example.jpg`;
+
+      await validateImageRequest(req, res, next);
+
+      expect(custody.custodyExists).toHaveBeenCalledWith({
+        tokenKeyHash,
+        expectedUserId: validObjectId,
+        tenantId: 'tenant-a',
+      });
+    });
+
     test('should allow agent avatars in OpenID flow', async () => {
-      const signedUserId = jwt.sign(
-        { id: validObjectId, exp: Math.floor(Date.now() / 1000) + 3600 },
-        process.env.JWT_REFRESH_SECRET,
-      );
-      req.headers.cookie = `refreshToken=dummy-token; token_provider=openid; openid_user_id=${signedUserId}`;
+      const { tokenKey, marker } = makeOpenIdCookies(validObjectId);
+      req.headers.cookie = `token_provider=openid; ${TOKEN_KEY_COOKIE}=${tokenKey}; openid_user_id=${marker}`;
       req.originalUrl = '/images/65cfb246f7ecadb8b1e8036c/agent-agent_abc123-avatar-12345.png';
       getAgent.mockResolvedValue({ _id: '65cfb246f7ecadb8b1e8036c' });
       hasPermission.mockResolvedValue(true);
@@ -695,12 +826,9 @@ describe('validateImageRequest middleware', () => {
     test('should handle OpenID flow with base path', async () => {
       process.env.DOMAIN_CLIENT = 'http://localhost:3080/librechat';
       process.env.OPENID_REUSE_TOKENS = 'true';
-      const validToken = jwt.sign(
-        { id: validObjectId, exp: Math.floor(Date.now() / 1000) + 3600 },
-        process.env.JWT_REFRESH_SECRET,
-      );
-      req.headers.cookie = `refreshToken=${validToken}; token_provider=openid; openid_user_id=${validToken}`;
-      req.session = { openidTokens: { refreshToken: validToken } };
+      isEnabled.mockReturnValue(true);
+      const { tokenKey, marker } = makeOpenIdCookies(validObjectId);
+      req.headers.cookie = `token_provider=openid; ${TOKEN_KEY_COOKIE}=${tokenKey}; openid_user_id=${marker}`;
       req.originalUrl = `/librechat/images/${validObjectId}/test.jpg`;
 
       await validateImageRequest(req, res, next);

@@ -189,7 +189,7 @@ describe('OpenIDRefreshFlight Methods', () => {
       methods.completeOpenIDRefreshFlight({
         key: 'flight-key',
         ownerId: 'owner-2',
-        encryptedResult: 'encrypted-wrong',
+        sealedResult: 'encrypted-wrong',
         expiresAt: new Date(Date.now() + 60000),
       }),
     ).resolves.toBeNull();
@@ -197,12 +197,12 @@ describe('OpenIDRefreshFlight Methods', () => {
     const completed = await methods.completeOpenIDRefreshFlight({
       key: 'flight-key',
       ownerId: 'owner-1',
-      encryptedResult: 'encrypted-result',
+      sealedResult: 'encrypted-result',
       expiresAt: new Date(Date.now() + 60000),
     });
 
     expect(completed?.status).toBe('completed');
-    expect(completed?.encryptedResult).toBe('encrypted-result');
+    expect(completed?.sealedResult).toBe('encrypted-result');
   });
 
   it('finds completed unexpired flights and ignores expired ones', async () => {
@@ -215,13 +215,13 @@ describe('OpenIDRefreshFlight Methods', () => {
     await methods.completeOpenIDRefreshFlight({
       key: 'flight-key',
       ownerId: 'owner-1',
-      encryptedResult: 'encrypted-result',
+      sealedResult: 'encrypted-result',
       expiresAt: new Date(Date.now() + 60000),
     });
 
     await expect(methods.findOpenIDRefreshFlight({ key: 'flight-key' })).resolves.toMatchObject({
       status: 'completed',
-      encryptedResult: 'encrypted-result',
+      sealedResult: 'encrypted-result',
     });
 
     const OpenIDRefreshFlight = mongoose.models.OpenIDRefreshFlight;
@@ -261,7 +261,7 @@ describe('OpenIDRefreshFlight Methods', () => {
       methods.completeOpenIDRefreshFlight({
         key: 'flight-key',
         ownerId: 'owner-1',
-        encryptedResult: 'late-result',
+        sealedResult: 'late-result',
         expiresAt: revocationExpiry,
       }),
     ).resolves.toBeNull();
@@ -286,7 +286,7 @@ describe('OpenIDRefreshFlight Methods', () => {
     await methods.completeOpenIDRefreshFlight({
       key: 'completed-flight',
       ownerId: 'owner-1',
-      encryptedResult: 'encrypted-successor',
+      sealedResult: 'encrypted-successor',
       expiresAt,
     });
 
@@ -296,7 +296,7 @@ describe('OpenIDRefreshFlight Methods', () => {
     });
 
     expect(revoked?.status).toBe('revoked');
-    expect(revoked?.encryptedResult).toBe('encrypted-successor');
+    expect(revoked?.sealedResult).toBe('encrypted-successor');
   });
 
   it('serializes response delivery without changing the completed publication state', async () => {
@@ -310,7 +310,7 @@ describe('OpenIDRefreshFlight Methods', () => {
     await methods.completeOpenIDRefreshFlight({
       key: 'delivery-flight',
       ownerId: 'owner-1',
-      encryptedResult: 'encrypted-result',
+      sealedResult: 'encrypted-result',
       expiresAt,
     });
 
@@ -336,7 +336,7 @@ describe('OpenIDRefreshFlight Methods', () => {
       ownerId: 'owner-1',
       deliveryId: 'delivery-1',
     });
-    expect(released).toMatchObject({ status: 'completed', encryptedResult: 'encrypted-result' });
+    expect(released).toMatchObject({ status: 'completed', sealedResult: 'encrypted-result' });
     expect(released?.deliveryId).toBeUndefined();
   });
 
@@ -379,7 +379,7 @@ describe('OpenIDRefreshFlight Methods', () => {
     await methods.completeOpenIDRefreshFlight({
       key: 'logout-delivery-flight',
       ownerId: 'owner-1',
-      encryptedResult: 'encrypted-result',
+      sealedResult: 'encrypted-result',
       expiresAt,
     });
     await methods.claimOpenIDRefreshFlightDelivery({
@@ -420,7 +420,7 @@ describe('OpenIDRefreshFlight Methods', () => {
     expect(released?.status).toBe('revoked');
     await expect(logout).resolves.toMatchObject({
       status: 'revoked',
-      encryptedResult: 'encrypted-result',
+      sealedResult: 'encrypted-result',
     });
   });
 
@@ -435,7 +435,7 @@ describe('OpenIDRefreshFlight Methods', () => {
     await methods.completeOpenIDRefreshFlight({
       key: 'abandoned-delivery-flight',
       ownerId: 'owner-1',
-      encryptedResult: 'encrypted-result',
+      sealedResult: 'encrypted-result',
       expiresAt,
     });
     await mongoose.models.OpenIDRefreshFlight.updateOne(

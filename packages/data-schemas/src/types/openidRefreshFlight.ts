@@ -6,7 +6,7 @@ export interface IOpenIDRefreshFlight extends Document {
   key: string;
   ownerId: string;
   status: OpenIDRefreshFlightStatus;
-  encryptedResult?: string;
+  sealedResult?: string;
   errorMessage?: string;
   deliveryId?: string;
   deliveryExpiresAt?: Date;
@@ -27,7 +27,7 @@ export interface OpenIDRefreshFlightCreateData {
 export interface OpenIDRefreshFlightCompleteData {
   key: string;
   ownerId: string;
-  encryptedResult: string;
+  sealedResult: string;
   expiresAt: Date;
 }
 

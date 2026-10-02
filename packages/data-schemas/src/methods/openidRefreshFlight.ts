@@ -113,7 +113,7 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
             updatedAt: now,
           },
           $unset: {
-            encryptedResult: '',
+            sealedResult: '',
             errorMessage: '',
             deliveryId: '',
             deliveryExpiresAt: '',
@@ -156,7 +156,7 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
         {
           $set: {
             status: 'completed',
-            encryptedResult: data.encryptedResult,
+            sealedResult: data.sealedResult,
             expiresAt: data.expiresAt,
             updatedAt: new Date(),
           },
@@ -222,7 +222,7 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
             updatedAt: new Date(),
           },
           $unset: {
-            encryptedResult: '',
+            sealedResult: '',
             deliveryId: '',
             deliveryExpiresAt: '',
             revocationRequestedAt: '',
@@ -333,7 +333,7 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
 
       const synthetic = await OpenIDRefreshFlight.findOneAndDelete({
         ...delivery,
-        encryptedResult: { $exists: false },
+        sealedResult: { $exists: false },
         revocationRequestedAt: { $exists: false },
       }).lean<IOpenIDRefreshFlight>();
       if (synthetic) return null;
@@ -341,7 +341,7 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
       const completed = await OpenIDRefreshFlight.findOneAndUpdate(
         {
           ...delivery,
-          encryptedResult: { $exists: true },
+          sealedResult: { $exists: true },
           revocationRequestedAt: { $exists: false },
         },
         {

@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import type { Request, Response, NextFunction } from 'express';
+import { hashTokenKey, parseTokenKey } from '~/auth/custody/key';
 import { isEnabled } from '~/utils/common';
 
 export const OAUTH_CSRF_COOKIE = 'oauth_csrf';
@@ -75,8 +76,12 @@ export interface OpenIDMarkerCookieOptions {
   expires: Date;
   refreshExpiryMs: number;
   reuseTokens?: boolean;
-  /** Binds the marker to the refresh token it was issued alongside. */
-  refreshToken?: string | null;
+  /**
+   * Binds the marker to the token key it was issued alongside. The base64url
+   * token key cookie value; its `hashTokenKey` becomes the marker's `tokenKeyHash`
+   * claim, byte-for-byte equal to the custody record's lookup key.
+   */
+  tokenKey?: string | null;
 }
 
 export function setOpenIDMarkerCookies(
@@ -86,7 +91,7 @@ export function setOpenIDMarkerCookies(
     expires,
     refreshExpiryMs,
     reuseTokens = isEnabled(process.env.OPENID_REUSE_TOKENS),
-    refreshToken,
+    tokenKey,
   }: OpenIDMarkerCookieOptions,
 ): void {
   const cookieOptions = {
@@ -112,13 +117,17 @@ export function setOpenIDMarkerCookies(
     throw new Error('refreshExpiryMs must be a positive duration for OpenID marker cookies');
   }
 
-  /** Bind the marker to the durable refresh-token session it was issued with, so a
-   *  marker lifted from one session cannot stand in for another's. */
-  const refreshTokenHash = refreshToken
-    ? crypto.createHash('sha256').update(refreshToken).digest('base64url')
-    : undefined;
+  /**
+   * Bind the marker to the token key it was issued with, so a marker lifted from
+   * one session cannot stand in for another's. The claim is `hashTokenKey` of the
+   * same token key — byte-for-byte equal to the custody record's lookup key — and
+   * carries no IdP-token-derived material. A parse failure leaves the claim off,
+   * so a verifying site with no `tokenKeyHash` claim fails closed.
+   */
+  const parsedKey = tokenKey ? parseTokenKey(tokenKey) : null;
+  const tokenKeyHash = parsedKey ? hashTokenKey(parsedKey) : undefined;
   const signedUserId = jwt.sign(
-    refreshTokenHash ? { id: userId, refreshTokenHash } : { id: userId },
+    tokenKeyHash ? { id: userId, tokenKeyHash } : { id: userId },
     secret,
     { expiresIn: refreshExpirySeconds },
   );

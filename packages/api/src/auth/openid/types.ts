@@ -4,7 +4,6 @@ import type {
   AuthIdentitySource,
   AuthIdentityTuple,
   OpenIDSessionIdentitySource,
-  RefreshTokenBridgeIdentity,
 } from '~/utils/identity';
 
 export type TokenPreference = 'access_token' | 'id_token';
@@ -57,7 +56,6 @@ export interface SessionOpenIDTokens {
   accessToken?: string;
   idToken?: string;
   refreshToken?: string;
-  browserRefreshToken?: string;
   expiresAt?: number;
   lastRefreshedAt?: number;
   appUserId?: string;
@@ -83,12 +81,14 @@ export interface OpenIDRequest {
   session?: OpenIDSession;
   sessionID?: string;
   user?: OpenIDUser;
+  /** Parsed request cookies; the custody loader reads the token key and marker cookies here. */
+  cookies?: Record<string, string>;
 }
 
 export interface OpenIDResponse {
   headersSent?: boolean;
   cookie?: (name: string, value: string, options?: { expires?: Date }) => void;
-  clearCookie?: (name: string) => void;
+  clearCookie?: (name: string, options?: { path?: string }) => void;
 }
 
 export interface OpenIDUser extends AuthIdentitySource {
@@ -137,25 +137,9 @@ export interface RefreshFlightRecord {
   deliveryId?: string;
   deliveryExpiresAt?: Date | string;
   revocationRequestedAt?: Date | string;
-  encryptedResult?: string;
+  sealedResult?: string;
   errorMessage?: string;
   expiresAt?: Date | string;
-}
-
-export interface RefreshTokenBridgeInput {
-  oldRefreshToken: string;
-  newRefreshToken: string;
-  userId: string;
-  tenantId?: string;
-  openidIssuer?: string;
-  ttl?: number;
-}
-
-export interface RefreshTokenBridgeDeleteInput {
-  refreshTokens: string[];
-  userId: string;
-  tenantId?: string;
-  version?: string;
 }
 
 export interface RefreshKeyInput {
@@ -171,5 +155,4 @@ export type {
   AuthIdentityTuple,
   OpenIDSessionIdentitySource,
   OIDCTokens,
-  RefreshTokenBridgeIdentity,
 };

@@ -1,5 +1,6 @@
 const { webcrypto, timingSafeEqual } = require('node:crypto');
-const { hashBackupCode, decryptV3, decryptV2 } = require('@librechat/data-schemas');
+const { hashBackupCode } = require('@librechat/data-schemas');
+const { readTotpSecret } = require('@librechat/api');
 const { updateUser } = require('~/models');
 
 // Base32 alphabet for TOTP secret encoding.
@@ -240,27 +241,16 @@ const verifyOTPOrBackupCode = async ({ user, token, backupCode, persistBackupUse
 
 /**
  * Retrieves and decrypts a stored TOTP secret.
- * - Uses decryptV3 if the secret has a "v3:" prefix.
- * - Falls back to decryptV2 for colon-delimited values.
- * - Assumes a 16-character secret is already plain.
+ *
+ * The prefix dispatch and the encryption-key resolution both live in
+ * `readTotpSecret` (`packages/api/src/auth/totp/secret.ts`) under the resolved
+ * `TOTP_KEY`; this file keeps only the call into it, with no prefix branching and
+ * no key resolution of its own. When `TOTP_KEY` is unset the resolved key is
+ * `CREDS_KEY`, so the result is byte-identical to the previous local implementation.
  * @param {string|null} storedSecret
  * @returns {Promise<string|null>}
  */
-const getTOTPSecret = async (storedSecret) => {
-  if (!storedSecret) {
-    return null;
-  }
-  if (storedSecret.startsWith('v3:')) {
-    return decryptV3(storedSecret);
-  }
-  if (storedSecret.includes(':')) {
-    return await decryptV2(storedSecret);
-  }
-  if (storedSecret.length === 16) {
-    return storedSecret;
-  }
-  return storedSecret;
-};
+const getTOTPSecret = async (storedSecret) => readTotpSecret(storedSecret);
 
 /**
  * Generates a temporary JWT token for 2FA verification that expires in 5 minutes.

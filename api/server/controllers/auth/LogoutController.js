@@ -1,8 +1,12 @@
-const cookies = require('cookie');
-const { isEnabled, math, clearCloudFrontCookies } = require('@librechat/api');
+const {
+  isEnabled,
+  math,
+  clearCloudFrontCookies,
+  loadOpenIDCustody,
+  clearTokenKeyCookie,
+} = require('@librechat/api');
 const { logger, DEFAULT_REFRESH_TOKEN_EXPIRY } = require('@librechat/data-schemas');
-const { logoutUser } = require('~/server/services/AuthService');
-const { deleteAllRefreshTokenBridges } = require('~/server/services/RefreshTokenBridge');
+const { logoutUser, getTokenCustodyService } = require('~/server/services/AuthService');
 const { revokeOpenIDRefreshTokenChain } = require('~/server/services/OpenIDRefreshRecovery');
 const { getOpenIdConfig } = require('~/strategies');
 
@@ -24,45 +28,64 @@ function parseMaxLogoutUrlLength(defaultValue = 2000) {
 }
 
 const logoutController = async (req, res) => {
-  const parsedCookies = req.headers.cookie ? cookies.parse(req.headers.cookie) : {};
   const isOpenIdUser = req.user?.openidId != null && req.user?.provider === 'openid';
+
+  /**
+   * The IdP refresh token and the id_token hint live only in the sealed custody record the
+   * request's token key cookie points at. A logout that cannot open a record (no key cookie, a
+   * wrong key, an expired record) carries no OpenID tokens and still clears the browser's cookies.
+   */
+  const custody = isOpenIdUser
+    ? await loadOpenIDCustody(req, {
+        custody: getTokenCustodyService(),
+        tenantId: req.user?.tenantId,
+      })
+    : null;
 
   let refreshToken;
   let idToken;
-  let sessionRefreshToken;
-  if (isOpenIdUser && req.session?.openidTokens) {
-    sessionRefreshToken = req.session.openidTokens.refreshToken;
-    idToken = req.session.openidTokens.idToken;
+  if (custody) {
+    refreshToken = custody.tokens?.refreshToken;
+    idToken = custody.tokens?.idToken;
   }
-  /** Both can name distinct durable sessions when an older browser request races rotation. */
-  refreshToken = parsedCookies.refreshToken || sessionRefreshToken;
-  idToken =
-    idToken ||
-    (isOpenIdUser ? req.session?.openidLogoutIdToken : undefined) ||
-    parsedCookies.openid_id_token;
-  const logoutTokens = isOpenIdUser
-    ? [...new Set([parsedCookies.refreshToken, sessionRefreshToken].filter(Boolean))]
-    : [refreshToken];
+  /** The single IdP refresh token opened from the record, if any, for the revocation chain. */
+  const logoutTokens = [refreshToken].filter(Boolean);
 
   try {
     if (isOpenIdUser) {
       const userId = req.user?.id ?? req.user?._id?.toString?.();
       const refreshIdentity = {
         appUserId: userId,
-        openidSubject: req.session?.openidTokens?.openidSubject ?? req.user?.openidId,
-        tenantId: req.session?.openidTokens?.tenantId ?? req.user?.tenantId,
-        openidIssuer: req.session?.openidTokens?.openidIssuer ?? req.user?.openidIssuer,
+        openidSubject: custody?.identity?.openidSubject ?? req.user?.openidId,
+        tenantId: custody?.identity?.tenantId ?? req.user?.tenantId,
+        openidIssuer: custody?.identity?.openidIssuer ?? req.user?.openidIssuer,
       };
-      const revokedRefreshTokens = await revokeOpenIDRefreshTokenChain({
-        req,
-        user: req.user,
-        identityContext: refreshIdentity,
-        refreshTokens: [...logoutTokens],
-        publicationKeys: [req.session?.openidTokens?.publicationFlightKey].filter(Boolean),
-        ttl: math(process.env.REFRESH_TOKEN_EXPIRY, DEFAULT_REFRESH_TOKEN_EXPIRY),
-      });
-      logoutTokens.push(...revokedRefreshTokens);
-      await deleteAllRefreshTokenBridges({
+      /**
+       * Open, then revoke, then delete. The chain runs with the token opened from the record; a
+       * failed, timed-out or unreachable IdP is caught below so the delete-and-clear still runs and
+       * logout is never blocked by the IdP. Deleting first would discard the only remaining copy of
+       * the token to revoke, leaving a live credential at the IdP that nothing could withdraw.
+       */
+      if (refreshToken) {
+        try {
+          const revokedRefreshTokens = await revokeOpenIDRefreshTokenChain({
+            req,
+            user: req.user,
+            identityContext: refreshIdentity,
+            refreshTokens: [...logoutTokens],
+            publicationKeys: [],
+            ttl: math(process.env.REFRESH_TOKEN_EXPIRY, DEFAULT_REFRESH_TOKEN_EXPIRY),
+          });
+          logoutTokens.push(...revokedRefreshTokens);
+        } catch (revokeErr) {
+          logger.warn('[logoutController] IdP revocation failed at logout', revokeErr?.message);
+        }
+      }
+      /**
+       * Deletes every custody record for this user in this tenant, including other browser
+       * sessions. A rejection here fails closed: no `logoutUser`, no cookies cleared, 500.
+       */
+      await getTokenCustodyService().deleteAllForUser({
         userId,
         tenantId: req.user?.tenantId,
       });
@@ -88,6 +111,8 @@ const logoutController = async (req, res) => {
     res.clearCookie('openid_id_token');
     res.clearCookie('openid_user_id');
     res.clearCookie('token_provider');
+    /** Also clear the token key cookie, so the browser drops the deleted record's key. */
+    clearTokenKeyCookie(res);
     clearCloudFrontCookies(res, {
       userId: req.user?.id ?? req.user?._id?.toString?.(),
       tenantId: req.user?.tenantId,

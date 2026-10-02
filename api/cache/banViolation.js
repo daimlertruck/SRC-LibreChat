@@ -2,6 +2,7 @@ const { logger } = require('@librechat/data-schemas');
 const { ViolationTypes } = require('librechat-data-provider');
 const { isEnabled, math, removePorts } = require('@librechat/api');
 const { deleteAllUserSessions } = require('~/models');
+const { getTokenCustodyService } = require('~/server/services/AuthService');
 const getLogStores = require('./getLogStores');
 
 const { BAN_VIOLATIONS, BAN_INTERVAL } = process.env ?? {};
@@ -46,6 +47,16 @@ const banViolation = async (req, res, errorMessage) => {
   }
 
   await deleteAllUserSessions({ userId: user_id });
+
+  /**
+   * Delete every custody record for the banned user, the custody counterpart to
+   * deleteAllUserSessions. The server never holds the token key, so deleting the record is the
+   * only way to revoke the sealed tokens from here.
+   */
+  await getTokenCustodyService().deleteAllForUser({
+    userId: user_id,
+    tenantId: req.user?.tenantId,
+  });
 
   /** Clear OpenID session tokens if present */
   if (req.session?.openidTokens) {

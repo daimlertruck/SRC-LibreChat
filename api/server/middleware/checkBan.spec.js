@@ -25,6 +25,11 @@ jest.mock('~/models', () => ({
   deleteAllUserSessions: jest.fn().mockResolvedValue(true),
 }));
 
+/** A ban also sweeps the user's custody records, the counterpart to the session sweep above. */
+jest.mock('~/server/services/AuthService', () => ({
+  getTokenCustodyService: () => ({ deleteAllForUser: jest.fn().mockResolvedValue(undefined) }),
+}));
+
 process.env.BAN_VIOLATIONS = 'true';
 process.env.BAN_INTERVAL = '20';
 delete process.env.USE_REDIS;

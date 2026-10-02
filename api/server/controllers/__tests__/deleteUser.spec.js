@@ -34,6 +34,7 @@ const mockCancelAndDrainSubagentThreads = jest.fn();
 const mockQuiesceUserSchedules = jest.fn();
 const mockDeleteSchedulesByUser = jest.fn();
 const mockRevokeUserCodeEnvironmentWorkers = jest.fn();
+const mockDeleteAllCustodyForUser = jest.fn();
 
 jest.mock('@librechat/data-schemas', () => ({
   logger: { error: jest.fn(), info: jest.fn() },
@@ -126,6 +127,9 @@ jest.mock('~/server/services/twoFactorService', () => ({
 jest.mock('~/server/services/AuthService', () => ({
   verifyEmail: jest.fn(),
   resendVerificationEmail: jest.fn(),
+  getTokenCustodyService: () => ({
+    deleteAllForUser: (...args) => mockDeleteAllCustodyForUser(...args),
+  }),
 }));
 
 jest.mock('~/config', () => ({
@@ -186,6 +190,7 @@ function createRes() {
 function stubDeletionMocks() {
   mockDeleteMessages.mockResolvedValue();
   mockDeleteAllUserSessions.mockResolvedValue();
+  mockDeleteAllCustodyForUser.mockResolvedValue();
   mockDeleteUserKey.mockResolvedValue();
   mockDeletePresets.mockResolvedValue();
   mockDeleteConvos.mockResolvedValue();
@@ -232,6 +237,10 @@ describe('deleteUserController - 2FA enforcement', () => {
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.send).toHaveBeenCalledWith({ message: 'User deleted' });
     expect(mockDeleteMessages).toHaveBeenCalled();
+    expect(mockDeleteAllCustodyForUser).toHaveBeenCalledWith({
+      userId: 'user1',
+      tenantId: undefined,
+    });
     expect(mockDeleteUserAgents).toHaveBeenCalledWith('user1');
     expect(mockDeleteUserPrompts).toHaveBeenCalledWith('user1');
     expect(mockDeleteUserSkills).toHaveBeenCalledWith('user1');

@@ -11,7 +11,6 @@ const { ErrorTypes, SystemRoles, errorsToString } = require('librechat-data-prov
 const {
   math,
   isEnabled,
-  storeOpenIdSession,
   checkEmailConfig,
   setCloudFrontCookies,
   getCloudFrontConfig,
@@ -19,12 +18,17 @@ const {
   CLOUDFRONT_SCOPE_COOKIE,
   isEmailDomainAllowed,
   shouldUseSecureCookie,
-  setRefreshTokenCookie,
   setOpenIDMarkerCookies,
   clearCloudFrontCookies,
   normalizeExpiresIn,
   createOpenIDSessionIdentity,
   resolveAppConfigForUser,
+  parseTokenKey,
+  hashTokenKey,
+  setTokenKeyCookie,
+  clearTokenKeyCookie,
+  createTokenCustodyService,
+  TOKEN_KEY_COOKIE,
 } = require('@librechat/api');
 const {
   findUser,
@@ -38,10 +42,15 @@ const {
   deleteTokens,
   deleteSession,
   createSession,
-  upsertSession,
   generateToken,
   deleteUserById,
   generateRefreshToken,
+  upsertTokenCustody,
+  findTokenCustody,
+  findTokenCustodyMeta,
+  updateTokenCustodyIfCurrent,
+  deleteTokenCustody,
+  deleteTokenCustodiesByUser,
 } = require('~/models');
 const { registerSchema } = require('~/strategies/validators');
 const { getAppConfig } = require('~/server/services/Config');
@@ -56,6 +65,37 @@ const AuthTokenTypes = Object.freeze({
   EMAIL_VERIFICATION: 'email_verification',
   PASSWORD_RESET: 'password_reset',
 });
+
+/**
+ * The process-wide token custody service, constructed lazily. The app wires its dependencies here:
+ * the custody store methods from `~/models`, the logger, and the resolved `REFRESH_TOKEN_EXPIRY`
+ * (in milliseconds) as `fallbackRefreshTtlMs`, so the service itself reads no environment variable.
+ * The fallback TTL is resolved once, at construction.
+ */
+let tokenCustodyService = null;
+
+/**
+ * Returns the process-wide custody service, constructing it on first use, so the refresh
+ * controller and the OpenID session/OBO paths share one instance.
+ * @returns {import('@librechat/api').TokenCustodyService}
+ */
+const getTokenCustodyService = () => {
+  if (tokenCustodyService == null) {
+    tokenCustodyService = createTokenCustodyService({
+      db: {
+        upsertTokenCustody,
+        findTokenCustody,
+        findTokenCustodyMeta,
+        updateTokenCustodyIfCurrent,
+        deleteTokenCustody,
+        deleteTokenCustodiesByUser,
+      },
+      logger,
+      fallbackRefreshTtlMs: math(process.env.REFRESH_TOKEN_EXPIRY, DEFAULT_REFRESH_TOKEN_EXPIRY),
+    });
+  }
+  return tokenCustodyService;
+};
 
 const latestAuthTokenOptions = Object.freeze({ sort: { createdAt: -1 } });
 const genericVerificationMessage = 'Please check your email to verify your email address.';
@@ -195,17 +235,33 @@ const getOpenIDAppAuthToken = (tokenset, sessionIdToken) =>
   getUnexpiredOpenIDSessionIdToken(sessionIdToken) ||
   tokenset?.access_token;
 
-const clearOpenIDAuthTokens = (req, res, userId, tenantId) => {
-  if (req.session?.openidTokens) {
-    delete req.session.openidTokens;
+/**
+ * Clears the browser's OpenID cookies and deletes the custody record the presented token key points
+ * at. A cookie that `parseTokenKey` rejects has no hash to delete by, so the delete is skipped. The
+ * token key cookie is cleared either way, so a browser that logged out cannot present a key again.
+ *
+ * Delete failures are logged and swallowed so a caller that does not await this function never sees
+ * an unhandled rejection; the record expires on its own regardless.
+ *
+ * @param {ServerRequest} req
+ * @param {ServerResponse} res
+ * @param {string} [userId]
+ * @param {string} [tenantId]
+ * @returns {Promise<void>}
+ */
+const clearOpenIDAuthTokens = async (req, res, userId, tenantId) => {
+  const cookieValue = req.cookies?.[TOKEN_KEY_COOKIE];
+  const key = parseTokenKey(cookieValue);
+  if (key) {
+    try {
+      await getTokenCustodyService().deleteCustody({ tokenKeyHash: hashTokenKey(key) });
+    } catch (error) {
+      logger.warn('[clearOpenIDAuthTokens] Failed to delete custody record', error?.message);
+    }
   }
-  for (const name of [
-    'refreshToken',
-    'openid_access_token',
-    'openid_id_token',
-    'openid_user_id',
-    'token_provider',
-  ]) {
+
+  clearTokenKeyCookie(res);
+  for (const name of ['openid_user_id', 'token_provider']) {
     res.clearCookie?.(name);
   }
   clearCloudFrontCookies(res, { userId, tenantId });
@@ -780,40 +836,28 @@ const getStringClaim = (claims, claim) => {
   return typeof value === 'string' && value ? value : undefined;
 };
 
-const applyOpenIDSessionIdentity = (sessionOpenidTokens, identity) => {
-  if (identity.appUserId) {
-    sessionOpenidTokens.appUserId = identity.appUserId;
-  }
-  if (identity.openidSubject) {
-    sessionOpenidTokens.openidSubject = identity.openidSubject;
-  }
-  if (identity.tenantId) {
-    sessionOpenidTokens.tenantId = identity.tenantId;
-  }
-  if (identity.openidIssuer) {
-    sessionOpenidTokens.openidIssuer = identity.openidIssuer;
-  }
-};
-
 /**
  * @function setOpenIDAuthTokens
  * Set OpenID Authentication Tokens
- * Stores tokens server-side in express-session to avoid large cookie sizes
- * that can exceed HTTP/2 header limits (especially for users with many group memberships).
+ *
+ * Seals the IdP token set into a custody record through the custody service, hands the browser the
+ * token key in the `openid_token_key` cookie, and signs the marker cookie with that key's hash. The
+ * server keeps neither the key nor a decryptable copy of the tokens, and a custody record does not
+ * need an Express session to exist.
  *
  * @param {import('openid-client').TokenEndpointResponse & import('openid-client').TokenEndpointResponseHelpers} tokenset
  * - The tokenset object containing access and refresh tokens
- * @param {Object} req - request object (for session access)
+ * @param {Object} req - request object
  * @param {Object} res - response object
  * @param {Object} [options] - Optional token/cookie context
  * @param {string} [options.userId] - Optional MongoDB user ID for image path validation
  * @param {string} [options.existingRefreshToken] - Optional existing refresh token to preserve
  * @param {string} [options.tenantId] - Optional tenant identifier for CloudFront cookie scoping
- * @param {string} [options.openidSubject] - Optional OpenID subject bound to the session tokens
- * @param {string} [options.openidIssuer] - Optional OpenID issuer bound to the session tokens
- * @returns {String} - id_token (preferred) or access_token as the app auth token
+ * @param {string} [options.openidSubject] - Optional OpenID subject bound to the custody identity
+ * @param {string} [options.openidIssuer] - Optional OpenID issuer bound to the custody identity
+ * @returns {Promise<String|undefined>} - id_token (preferred) or access_token as the app auth token
  */
-const setOpenIDAuthTokens = (
+const setOpenIDAuthTokens = async (
   tokenset,
   req,
   res,
@@ -833,7 +877,6 @@ const setOpenIDAuthTokens = (
       process.env.REFRESH_TOKEN_EXPIRY,
       DEFAULT_REFRESH_TOKEN_EXPIRY,
     );
-    const expirationDate = new Date(Date.now() + expiryInMilliseconds);
     if (!tokenset.access_token) {
       logger.error('[setOpenIDAuthTokens] No access token found in tokenset');
       return;
@@ -852,16 +895,12 @@ const setOpenIDAuthTokens = (
      * client_id as audience. The access_token may be opaque or intended for a different
      * audience (e.g., Microsoft Graph API), which fails JWKS validation.
      * Falls back to access_token for providers where id_token is not available.
+     *
+     * On the login path there is no prior custody context to carry a previous id_token forward, so
+     * the selection is over `tokenset` alone; the inline-refresh path supplies the carried id_token
+     * from the request's custody context.
      */
-    const sessionIdToken = req.session?.openidTokens?.idToken;
-    /**
-     * An inline refresh carries the previous id_token forward when the IdP omits one on
-     * rotation, so `tokenset.id_token` is not necessarily freshly issued. Skip it only when it
-     * is provably expired; an id_token whose expiry cannot be read stays preferred, since
-     * access_token may be opaque or scoped to another audience and fail JWKS validation.
-     */
-    const appAuthToken = getOpenIDAppAuthToken(tokenset, sessionIdToken);
-    const logoutIdToken = tokenset.id_token || sessionIdToken;
+    const appAuthToken = getOpenIDAppAuthToken(tokenset, undefined);
     const claims = getOpenIDTokenClaims(tokenset);
     const sessionIdentity = createOpenIDSessionIdentity({
       user: req?.user,
@@ -872,65 +911,61 @@ const setOpenIDAuthTokens = (
     });
 
     /**
-     * Always set refresh token cookie so it survives express session expiry.
-     * The session cookie maxAge (SESSION_EXPIRY, default 15 min) is typically shorter
-     * than the OIDC token lifetime (~1 hour). Without this cookie fallback, the refresh
-     * token stored only in the session is lost when the session expires, causing the user
-     * to be signed out on the next token refresh attempt.
-     * The refresh token is small (opaque string) so it doesn't hit the HTTP/2 header
-     * size limits that motivated session storage for the larger access_token/id_token.
+     * The custody identity the sealed blob is bound to, also used as the AEAD associated data.
+     * `userId` is the app user id the marker will claim; the optional fields mirror
+     * `createOpenIDSessionIdentity`.
      */
-    setRefreshTokenCookie(res, refreshToken, expirationDate);
-
-    /** Store tokens server-side in session to avoid large cookies */
-    if (req.session) {
-      const sessionOpenidTokens = {
-        accessToken: tokenset.access_token,
-        idToken: logoutIdToken,
-        refreshToken: refreshToken,
-        browserRefreshToken: refreshToken,
-        expiresAt: expirationDate.getTime(),
-        lastRefreshedAt: Date.now(),
-      };
-      applyOpenIDSessionIdentity(sessionOpenidTokens, sessionIdentity);
-      /**
-       * Capture the access-token's own expiry (unix seconds) when the IdP
-       * advertises one. Lets downstream consumers — notably the OBO inline-
-       * refresh path in `OpenIDSessionRefresh.js` — reuse opaque (non-JWT)
-       * access tokens without burning an IdP refresh on the first tool call.
-       * Without this, the very first OBO call after login or SPA refresh would
-       * always trigger a redundant inline refresh whenever the IdP issues
-       * opaque access tokens (e.g. Microsoft Graph audiences).
-       */
-      const accessTokenExpiresIn = normalizeExpiresIn(tokenset.expires_in);
-      if (accessTokenExpiresIn != null) {
-        sessionOpenidTokens.accessTokenExpiresAt =
-          Math.floor(Date.now() / 1000) + accessTokenExpiresIn;
-      }
-      req.session.openidTokens = sessionOpenidTokens;
-    } else {
-      logger.warn('[setOpenIDAuthTokens] No session available, falling back to cookies');
-      res.cookie('openid_access_token', tokenset.access_token, {
-        expires: expirationDate,
-        httpOnly: true,
-        secure: shouldUseSecureCookie(),
-        sameSite: 'strict',
-      });
-      if (tokenset.id_token) {
-        res.cookie('openid_id_token', tokenset.id_token, {
-          expires: expirationDate,
-          httpOnly: true,
-          secure: shouldUseSecureCookie(),
-          sameSite: 'strict',
-        });
-      }
+    const custodyUserId = sessionIdentity.appUserId ?? userId;
+    if (!custodyUserId) {
+      logger.error('[setOpenIDAuthTokens] No user id available for custody record');
+      return;
     }
+    const identity = {
+      userId: custodyUserId,
+      ...(sessionIdentity.tenantId != null && { tenantId: sessionIdentity.tenantId }),
+      ...(sessionIdentity.openidIssuer != null && { openidIssuer: sessionIdentity.openidIssuer }),
+      ...(sessionIdentity.openidSubject != null && {
+        openidSubject: sessionIdentity.openidSubject,
+      }),
+    };
 
-    setOpenIDMarkerCookies(res, {
-      userId,
-      expires: expirationDate,
-      refreshExpiryMs: expiryInMilliseconds,
+    /**
+     * Capture the access-token's own expiry (unix seconds) when the IdP advertises one, so a
+     * keyless reader can decide "does this even need a refresh" without paying an AEAD open. The
+     * IdP's code exchange does not carry a refresh-token expiry on this path, so the record's TTL
+     * falls back to the resolved `REFRESH_TOKEN_EXPIRY` inside the custody service.
+     */
+    const accessTokenExpiresIn = normalizeExpiresIn(tokenset.expires_in);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const tokens = {
+      accessToken: tokenset.access_token,
+      ...(tokenset.id_token != null && { idToken: tokenset.id_token }),
       refreshToken,
+      ...(accessTokenExpiresIn != null && {
+        accessTokenExpiresAt: nowSeconds + accessTokenExpiresIn,
+      }),
+      issuedAt: Date.now(),
+    };
+
+    /**
+     * Seal the token set and write exactly one custody record. On a rejection we set neither cookie,
+     * write no fallback and let the login fail — the caller's try/catch surfaces the error.
+     */
+    const { tokenKey, expiresAt } = await getTokenCustodyService().createCustody({
+      tokens,
+      identity,
+    });
+
+    /**
+     * Hand the browser the token key and the marker cookie signed with its hash. The cookie's
+     * `expires` is the record's `expiresAt`, passed through so the two cannot drift.
+     */
+    setTokenKeyCookie(res, tokenKey, expiresAt);
+    setOpenIDMarkerCookies(res, {
+      userId: custodyUserId,
+      expires: expiresAt,
+      refreshExpiryMs: expiryInMilliseconds,
+      tokenKey,
     });
 
     setCloudFrontAuthCookies(req, res, req.user, { userId, tenantId });
@@ -940,14 +975,6 @@ const setOpenIDAuthTokens = (
     logger.error('[setOpenIDAuthTokens] Error in setting authentication tokens:', error);
     throw error;
   }
-};
-
-/** Stores OpenID refresh-token state independently of the shorter Express session. */
-const storeOpenIDSession = async (userId, refreshToken, tenantId, previousRefreshToken) => {
-  return storeOpenIdSession(
-    { userId, refreshToken, tenantId, previousRefreshToken },
-    { upsertSession, deleteSession },
-  );
 };
 
 /**
@@ -1020,7 +1047,7 @@ module.exports = {
   clearOpenIDAuthTokens,
   getOpenIDAppAuthToken,
   setOpenIDAuthTokens,
-  storeOpenIDSession,
+  getTokenCustodyService,
   setCloudFrontAuthCookies,
   requestPasswordReset,
   resendVerificationEmail,

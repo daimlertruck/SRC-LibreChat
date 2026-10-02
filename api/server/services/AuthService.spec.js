@@ -21,31 +21,96 @@ jest.mock(
 jest.mock(
   '@librechat/api',
   () => {
+    const crypto = require('node:crypto');
     const shouldUseSecureCookie = jest.fn(() => false);
+    const TOKEN_KEY_COOKIE = 'openid_token_key';
+    /** base64url of 32 bytes is 43 chars; the parser accepts exactly that shape. */
+    const TOKEN_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+    const parseTokenKey = jest.fn((value) => {
+      if (typeof value !== 'string' || !TOKEN_KEY_PATTERN.test(value)) {
+        return null;
+      }
+      const buffer = Buffer.from(value, 'base64url');
+      return buffer.length === 32 ? buffer : null;
+    });
+    const hashTokenKey = jest.fn((key) =>
+      crypto.createHash('sha256').update(key).digest('base64url'),
+    );
+    const setTokenKeyCookie = jest.fn((res, tokenKey, expires) => {
+      res.cookie(TOKEN_KEY_COOKIE, tokenKey, {
+        expires,
+        httpOnly: true,
+        secure: shouldUseSecureCookie(),
+        sameSite: 'strict',
+        path: '/',
+      });
+    });
+    const clearTokenKeyCookie = jest.fn((res) => {
+      res.clearCookie?.(TOKEN_KEY_COOKIE, { path: '/' });
+    });
+    /**
+     * A stateful fake of the custody service: `createCustody` mints a real 32-byte key, derives its
+     * hash, and stores a record keyed by hash; `deleteCustody` removes it. The record's `expiresAt`
+     * mirrors the service rule (fallback branch: now + fallbackRefreshTtlMs) so the cookie's expiry
+     * is a real Date the tests can assert against.
+     */
+    /**
+     * The single instance the app constructs is memoized at the module level, so it survives
+     * `jest.clearAllMocks()`. Holding it on a stable reference (rather than reading
+     * `createTokenCustodyService.mock.results`, which `clearAllMocks` empties) lets every test reach
+     * the same `createCustody` / `deleteCustody` spies.
+     */
+    let custodyInstance = null;
+    const createTokenCustodyService = jest.fn(({ fallbackRefreshTtlMs }) => {
+      const records = new Map();
+      custodyInstance = {
+        records,
+        createCustody: jest.fn(async ({ tokens, identity }) => {
+          const key = crypto.randomBytes(32);
+          const tokenKey = key.toString('base64url');
+          const tokenKeyHash = crypto.createHash('sha256').update(key).digest('base64url');
+          const base =
+            tokens.refreshTokenExpiresAt != null
+              ? tokens.refreshTokenExpiresAt
+              : Date.now() + fallbackRefreshTtlMs;
+          const expiresAt = new Date(
+            tokens.accessTokenExpiresAt != null
+              ? Math.max(base, tokens.accessTokenExpiresAt)
+              : base,
+          );
+          records.set(tokenKeyHash, { tokens, identity, tokenKeyHash, expiresAt });
+          return { tokenKey, tokenKeyHash, expiresAt };
+        }),
+        deleteCustody: jest.fn(async ({ tokenKeyHash }) => {
+          records.delete(tokenKeyHash);
+        }),
+      };
+      return custodyInstance;
+    });
     return {
+      __getCustodyService: () => custodyInstance,
       isEnabled: jest.fn((val) => val === 'true' || val === true),
       checkEmailConfig: jest.fn(),
       isEmailDomainAllowed: jest.fn(),
       math: jest.fn((val, fallback) => (val ? Number(val) : fallback)),
-      storeOpenIdSession: jest.fn(),
       shouldUseSecureCookie,
-      setRefreshTokenCookie: jest.fn((res, refreshToken, expires) => {
-        res.cookie('refreshToken', refreshToken, {
-          expires,
-          httpOnly: true,
-          secure: shouldUseSecureCookie(),
-          sameSite: 'strict',
-        });
-      }),
-      setOpenIDMarkerCookies: jest.fn((res, { userId, expires }) => {
+      TOKEN_KEY_COOKIE,
+      parseTokenKey,
+      hashTokenKey,
+      setTokenKeyCookie,
+      clearTokenKeyCookie,
+      createTokenCustodyService,
+      setOpenIDMarkerCookies: jest.fn((res, { userId, expires, tokenKey }) => {
         res.cookie('token_provider', 'openid', {
           expires,
           httpOnly: true,
           secure: shouldUseSecureCookie(),
           sameSite: 'strict',
         });
-        if (userId) {
-          res.cookie('openid_user_id', `signed:${userId}`, {
+        if (userId && tokenKey) {
+          const key = parseTokenKey(tokenKey);
+          const tokenKeyHash = key ? hashTokenKey(key) : undefined;
+          res.cookie('openid_user_id', `signed:${userId}:${tokenKeyHash ?? ''}`, {
             expires,
             httpOnly: true,
             secure: shouldUseSecureCookie(),
@@ -112,6 +177,12 @@ jest.mock('~/models', () => ({
   generateToken: jest.fn(),
   deleteUserById: jest.fn(),
   generateRefreshToken: jest.fn(),
+  upsertTokenCustody: jest.fn(),
+  findTokenCustody: jest.fn(),
+  findTokenCustodyMeta: jest.fn(),
+  updateTokenCustodyIfCurrent: jest.fn(),
+  deleteTokenCustody: jest.fn(),
+  deleteTokenCustodiesByUser: jest.fn(),
 }));
 jest.mock('~/strategies/validators', () => ({
   registerSchema: {
@@ -133,13 +204,13 @@ jest.mock('~/server/utils', () => ({ sendEmail: jest.fn() }));
 let checkEmailConfig;
 let isEmailDomainAllowed;
 let resolveAppConfigForUser;
-let setRefreshTokenCookie;
 let setOpenIDMarkerCookies;
+let setTokenKeyCookie;
+let clearTokenKeyCookie;
+let getCustodyService;
 let setCloudFrontCookies;
 let getCloudFrontConfig;
 let parseCloudFrontCookieScope;
-let storeOpenIdSession;
-let jwt;
 let logger;
 let getTenantId;
 let findUser;
@@ -151,15 +222,13 @@ let getUserById;
 let generateToken;
 let generateRefreshToken;
 let createSession;
-let upsertSession;
-let deleteSession;
 let createToken;
 let deleteTokens;
 let getAppConfig;
 let sendEmail;
 let bcrypt;
 let setOpenIDAuthTokens;
-let storeOpenIDSession;
+let clearOpenIDAuthTokens;
 let requestPasswordReset;
 let registerUser;
 let resetPassword;
@@ -173,14 +242,14 @@ jest.isolateModules(() => {
     checkEmailConfig,
     isEmailDomainAllowed,
     resolveAppConfigForUser,
-    setRefreshTokenCookie,
     setOpenIDMarkerCookies,
+    setTokenKeyCookie,
+    clearTokenKeyCookie,
+    __getCustodyService: getCustodyService,
     setCloudFrontCookies,
     getCloudFrontConfig,
     parseCloudFrontCookieScope,
-    storeOpenIdSession,
   } = require('@librechat/api'));
-  jwt = require('jsonwebtoken');
   ({ logger, getTenantId } = require('@librechat/data-schemas'));
   ({
     findUser,
@@ -192,8 +261,6 @@ jest.isolateModules(() => {
     generateToken,
     generateRefreshToken,
     createSession,
-    upsertSession,
-    deleteSession,
     createToken,
     deleteTokens,
   } = require('~/models'));
@@ -202,7 +269,7 @@ jest.isolateModules(() => {
   bcrypt = require('bcryptjs');
   ({
     setOpenIDAuthTokens,
-    storeOpenIDSession,
+    clearOpenIDAuthTokens,
     requestPasswordReset,
     registerUser,
     resetPassword,
@@ -219,6 +286,9 @@ function mockResponse() {
   const res = {
     cookie: jest.fn((name, value, options) => {
       cookies[name] = { value, options };
+    }),
+    clearCookie: jest.fn((name) => {
+      delete cookies[name];
     }),
     _cookies: cookies,
   };
@@ -249,8 +319,11 @@ describe('setOpenIDAuthTokens', () => {
     process.env = env;
   });
 
+  /** The single custody service instance the module constructed, so tests can read its spies. */
+  const custodyService = () => getCustodyService();
+
   describe('token selection (id_token vs access_token)', () => {
-    it('should return id_token when both id_token and access_token are present', () => {
+    it('should return id_token when both id_token and access_token are present', async () => {
       const tokenset = {
         id_token: 'the-id-token',
         access_token: 'the-access-token',
@@ -259,11 +332,11 @@ describe('setOpenIDAuthTokens', () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      const result = setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      const result = await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
       expect(result).toBe('the-id-token');
     });
 
-    it('should return access_token when id_token is not available', () => {
+    it('should return access_token when id_token is not available', async () => {
       const tokenset = {
         access_token: 'the-access-token',
         refresh_token: 'the-refresh-token',
@@ -271,11 +344,11 @@ describe('setOpenIDAuthTokens', () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      const result = setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      const result = await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
       expect(result).toBe('the-access-token');
     });
 
-    it('should return access_token when id_token is undefined', () => {
+    it('should return access_token when id_token is undefined', async () => {
       const tokenset = {
         id_token: undefined,
         access_token: 'the-access-token',
@@ -284,11 +357,11 @@ describe('setOpenIDAuthTokens', () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      const result = setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      const result = await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
       expect(result).toBe('the-access-token');
     });
 
-    it('should return access_token when id_token is null', () => {
+    it('should return access_token when id_token is null', async () => {
       const tokenset = {
         id_token: null,
         access_token: 'the-access-token',
@@ -297,11 +370,11 @@ describe('setOpenIDAuthTokens', () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      const result = setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      const result = await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
       expect(result).toBe('the-access-token');
     });
 
-    it('should return id_token even when id_token and access_token differ', () => {
+    it('should return id_token even when id_token and access_token differ', async () => {
       const tokenset = {
         id_token: 'id-token-jwt-signed-by-idp',
         access_token: 'opaque-graph-api-token',
@@ -310,14 +383,28 @@ describe('setOpenIDAuthTokens', () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      const result = setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      const result = await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
       expect(result).toBe('id-token-jwt-signed-by-idp');
       expect(result).not.toBe('opaque-graph-api-token');
     });
+
+    it('still prefers an id_token whose expiry cannot be read', async () => {
+      const tokenset = {
+        id_token: 'opaque-but-not-a-jwt',
+        access_token: 'new-access-token',
+        refresh_token: 'new-refresh-token',
+      };
+      const req = mockRequest();
+      const res = mockResponse();
+
+      await expect(setOpenIDAuthTokens(tokenset, req, res, 'user-123')).resolves.toBe(
+        'opaque-but-not-a-jwt',
+      );
+    });
   });
 
-  describe('session token storage', () => {
-    it('should store the original access_token in session (not id_token)', () => {
+  describe('custody record sealing', () => {
+    it('seals the token set into a custody record and never writes req.session.openidTokens', async () => {
       const tokenset = {
         id_token: 'the-id-token',
         access_token: 'the-access-token',
@@ -326,16 +413,20 @@ describe('setOpenIDAuthTokens', () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
 
-      expect(req.session.openidTokens.accessToken).toBe('the-access-token');
-      expect(req.session.openidTokens.idToken).toBe('the-id-token');
-      expect(req.session.openidTokens.refreshToken).toBe('the-refresh-token');
-      expect(req.session.openidTokens.browserRefreshToken).toBe('the-refresh-token');
-      expect(req.session.openidTokens.lastRefreshedAt).toEqual(expect.any(Number));
+      const service = custodyService();
+      expect(service.createCustody).toHaveBeenCalledTimes(1);
+      const { tokens } = service.createCustody.mock.calls[0][0];
+      expect(tokens.accessToken).toBe('the-access-token');
+      expect(tokens.idToken).toBe('the-id-token');
+      expect(tokens.refreshToken).toBe('the-refresh-token');
+      expect(tokens.issuedAt).toEqual(expect.any(Number));
+      /** The retired session field is never populated on the custody path. */
+      expect(req.session.openidTokens).toBeNull();
     });
 
-    it('should bind session tokens to the OpenID user identity', () => {
+    it('binds the custody record to the OpenID user identity', async () => {
       const tokenset = {
         id_token: 'the-id-token',
         access_token: 'the-access-token',
@@ -344,32 +435,23 @@ describe('setOpenIDAuthTokens', () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      setOpenIDAuthTokens(tokenset, req, res, {
+      await setOpenIDAuthTokens(tokenset, req, res, {
         userId: 'user-123',
         openidSubject: 'oidc-sub-123',
         tenantId: 'tenantA',
         openidIssuer: 'https://issuer.example.com/.well-known/openid-configuration',
       });
 
-      expect(req.session.openidTokens).toEqual(
-        expect.objectContaining({
-          appUserId: 'user-123',
-          openidSubject: 'oidc-sub-123',
-          tenantId: 'tenantA',
-          openidIssuer: 'https://issuer.example.com',
-        }),
-      );
+      const { identity } = custodyService().createCustody.mock.calls[0][0];
+      expect(identity).toEqual({
+        userId: 'user-123',
+        openidSubject: 'oidc-sub-123',
+        tenantId: 'tenantA',
+        openidIssuer: 'https://issuer.example.com',
+      });
     });
 
-    /**
-     * Codex Finding 5: persist the access-token's expiry (unix seconds) so the
-     * first OBO call after login or SPA refresh can reuse a still-valid OPAQUE
-     * access token without burning a redundant inline refresh. The expiry comes
-     * from the IdP's `tokenset.expires_in`; downstream consumers (notably
-     * `OpenIDSessionRefresh.getAccessTokenExp`) read it as a fallback when the
-     * access token isn't a JWT and can't be decoded.
-     */
-    it('should persist accessTokenExpiresAt when tokenset.expires_in is provided', () => {
+    it('passes accessTokenExpiresAt to the custody record when tokenset.expires_in is provided', async () => {
       const tokenset = {
         id_token: 'the-id-token',
         access_token: 'the-access-token',
@@ -380,15 +462,15 @@ describe('setOpenIDAuthTokens', () => {
       const res = mockResponse();
       const beforeSec = Math.floor(Date.now() / 1000);
 
-      setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
 
-      const persisted = req.session.openidTokens.accessTokenExpiresAt;
-      expect(typeof persisted).toBe('number');
-      expect(persisted).toBeGreaterThanOrEqual(beforeSec + 3590);
-      expect(persisted).toBeLessThanOrEqual(beforeSec + 3610);
+      const { tokens } = custodyService().createCustody.mock.calls[0][0];
+      expect(typeof tokens.accessTokenExpiresAt).toBe('number');
+      expect(tokens.accessTokenExpiresAt).toBeGreaterThanOrEqual(beforeSec + 3590);
+      expect(tokens.accessTokenExpiresAt).toBeLessThanOrEqual(beforeSec + 3610);
     });
 
-    it('should persist accessTokenExpiresAt when tokenset.expires_in is a numeric string', () => {
+    it('passes accessTokenExpiresAt when tokenset.expires_in is a numeric string', async () => {
       const tokenset = {
         id_token: 'the-id-token',
         access_token: 'the-access-token',
@@ -399,14 +481,13 @@ describe('setOpenIDAuthTokens', () => {
       const res = mockResponse();
       const beforeSec = Math.floor(Date.now() / 1000);
 
-      setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
 
-      expect(req.session.openidTokens.accessTokenExpiresAt).toBeGreaterThanOrEqual(
-        beforeSec + 3590,
-      );
+      const { tokens } = custodyService().createCustody.mock.calls[0][0];
+      expect(tokens.accessTokenExpiresAt).toBeGreaterThanOrEqual(beforeSec + 3590);
     });
 
-    it('should NOT persist accessTokenExpiresAt when tokenset.expires_in is missing', () => {
+    it('omits accessTokenExpiresAt when tokenset.expires_in is missing', async () => {
       const tokenset = {
         id_token: 'the-id-token',
         access_token: 'the-access-token',
@@ -416,160 +497,38 @@ describe('setOpenIDAuthTokens', () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
 
-      expect(req.session.openidTokens).not.toHaveProperty('accessTokenExpiresAt');
+      const { tokens } = custodyService().createCustody.mock.calls[0][0];
+      expect(tokens).not.toHaveProperty('accessTokenExpiresAt');
     });
 
-    it('should return the existing unexpired session id_token when refresh omits one', () => {
-      const existingIdToken = jwt.sign(
-        { sub: 'user-123', exp: Math.floor(Date.now() / 1000) + 3600 },
-        'idp-signing-secret',
-      );
+    it('sets neither cookie and writes no fallback when createCustody rejects', async () => {
       const tokenset = {
-        access_token: 'new-access-token',
-        refresh_token: 'new-refresh-token',
-      };
-      const req = mockRequest({
-        openidTokens: {
-          accessToken: 'old-access-token',
-          idToken: existingIdToken,
-          refreshToken: 'old-refresh-token',
-        },
-      });
-      const res = mockResponse();
-
-      const result = setOpenIDAuthTokens(tokenset, req, res, 'user-123');
-
-      expect(result).toBe(existingIdToken);
-      expect(req.session.openidTokens.accessToken).toBe('new-access-token');
-      expect(req.session.openidTokens.idToken).toBe(existingIdToken);
-      expect(req.session.openidTokens.refreshToken).toBe('new-refresh-token');
-      expect(req.session.openidTokens.lastRefreshedAt).toEqual(expect.any(Number));
-    });
-
-    it('should fall back to access_token when the existing session id_token is expired', () => {
-      const expiredIdToken = jwt.sign(
-        { sub: 'user-123', exp: Math.floor(Date.now() / 1000) - 60 },
-        'idp-signing-secret',
-      );
-      const tokenset = {
-        access_token: 'new-access-token',
-        refresh_token: 'new-refresh-token',
-      };
-      const req = mockRequest({
-        openidTokens: {
-          accessToken: 'old-access-token',
-          idToken: expiredIdToken,
-          refreshToken: 'old-refresh-token',
-        },
-      });
-      const res = mockResponse();
-
-      const result = setOpenIDAuthTokens(tokenset, req, res, 'user-123');
-
-      expect(result).toBe('new-access-token');
-      expect(req.session.openidTokens.idToken).toBe(expiredIdToken);
-      expect(req.session.openidTokens.accessToken).toBe('new-access-token');
-    });
-
-    it('falls back to access_token when the refresh carried an expired id_token forward', () => {
-      const expiredIdToken = jwt.sign(
-        { sub: 'user-123', exp: Math.floor(Date.now() / 1000) - 60 },
-        'idp-signing-secret',
-      );
-      const tokenset = {
-        id_token: expiredIdToken,
-        access_token: 'new-access-token',
-        refresh_token: 'new-refresh-token',
-      };
-      const req = mockRequest({
-        openidTokens: {
-          accessToken: 'old-access-token',
-          idToken: expiredIdToken,
-          refreshToken: 'old-refresh-token',
-        },
-      });
-      const res = mockResponse();
-
-      const result = setOpenIDAuthTokens(tokenset, req, res, 'user-123');
-
-      expect(result).toBe('new-access-token');
-      expect(req.session.openidTokens.idToken).toBe(expiredIdToken);
-    });
-
-    it('still prefers an id_token whose expiry cannot be read', () => {
-      const tokenset = {
-        id_token: 'opaque-but-not-a-jwt',
-        access_token: 'new-access-token',
-        refresh_token: 'new-refresh-token',
+        id_token: 'the-id-token',
+        access_token: 'the-access-token',
+        refresh_token: 'the-refresh-token',
       };
       const req = mockRequest();
       const res = mockResponse();
 
-      expect(setOpenIDAuthTokens(tokenset, req, res, 'user-123')).toBe('opaque-but-not-a-jwt');
-    });
+      /** First call minted the shared service; make its createCustody reject for this login. */
+      await setOpenIDAuthTokens(tokenset, mockRequest(), mockResponse(), 'user-000');
+      const service = custodyService();
+      service.createCustody.mockRejectedValueOnce(new Error('store unavailable'));
+      /** Clear the shared cookie spy so the assertions below see only the failing login. */
+      setTokenKeyCookie.mockClear();
 
-    it('should fall back to access_token when the existing session id_token is near expiry', () => {
-      const nearExpiryIdToken = jwt.sign(
-        { sub: 'user-123', exp: Math.floor(Date.now() / 1000) + 10 },
-        'idp-signing-secret',
+      await expect(setOpenIDAuthTokens(tokenset, req, res, 'user-123')).rejects.toThrow(
+        'store unavailable',
       );
-      const tokenset = {
-        access_token: 'new-access-token',
-        refresh_token: 'new-refresh-token',
-      };
-      const req = mockRequest({
-        openidTokens: {
-          accessToken: 'old-access-token',
-          idToken: nearExpiryIdToken,
-          refreshToken: 'old-refresh-token',
-        },
-      });
-      const res = mockResponse();
-
-      const result = setOpenIDAuthTokens(tokenset, req, res, 'user-123');
-
-      expect(result).toBe('new-access-token');
-      expect(req.session.openidTokens.idToken).toBe(nearExpiryIdToken);
-      expect(req.session.openidTokens.accessToken).toBe('new-access-token');
+      expect(setTokenKeyCookie).not.toHaveBeenCalled();
+      expect(res.cookie).not.toHaveBeenCalled();
     });
-  });
-
-  it('stores an OpenID refresh token for durable revocation checks', async () => {
-    storeOpenIdSession.mockResolvedValue(true);
-
-    await storeOpenIDSession('user-123', 'the-refresh-token', 'tenant-a');
-
-    expect(storeOpenIdSession).toHaveBeenCalledWith(
-      {
-        userId: 'user-123',
-        refreshToken: 'the-refresh-token',
-        tenantId: 'tenant-a',
-        previousRefreshToken: undefined,
-      },
-      { upsertSession, deleteSession },
-    );
-  });
-
-  it('revokes the previous durable session when the IdP rotates the refresh token', async () => {
-    storeOpenIdSession.mockResolvedValue(true);
-
-    await storeOpenIDSession('user-123', 'new-refresh-token', 'tenant-a', 'old-refresh-token');
-
-    expect(storeOpenIdSession).toHaveBeenCalledWith(
-      {
-        userId: 'user-123',
-        refreshToken: 'new-refresh-token',
-        tenantId: 'tenant-a',
-        previousRefreshToken: 'old-refresh-token',
-      },
-      { upsertSession, deleteSession },
-    );
   });
 
   describe('OpenID cookie delegation', () => {
-    it('delegates session-path refresh and marker cookies to shared cookie helpers', () => {
+    it('sets the token key cookie and the marker, and never the retired token cookies', async () => {
       const tokenset = {
         id_token: 'the-id-token',
         access_token: 'the-access-token',
@@ -578,19 +537,23 @@ describe('setOpenIDAuthTokens', () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
 
-      expect(setRefreshTokenCookie).toHaveBeenCalledWith(
-        res,
-        'the-refresh-token',
-        expect.any(Date),
-      );
+      const { tokenKey, expiresAt } = await custodyService().createCustody.mock.results[0].value;
+      /** The cookie's expiry IS the record's expiresAt, passed through by the helper. */
+      expect(setTokenKeyCookie).toHaveBeenCalledWith(res, tokenKey, expiresAt);
       expect(setOpenIDMarkerCookies).toHaveBeenCalledWith(res, {
         userId: 'user-123',
-        expires: expect.any(Date),
+        expires: expiresAt,
         refreshExpiryMs: 604800000,
-        refreshToken: 'the-refresh-token',
+        tokenKey,
       });
+      /** No refresh-token cookie on the OpenID path, and no plaintext token fallback. */
+      expect(res.cookie).not.toHaveBeenCalledWith(
+        'refreshToken',
+        expect.any(String),
+        expect.any(Object),
+      );
       expect(res.cookie).not.toHaveBeenCalledWith(
         'openid_access_token',
         expect.any(String),
@@ -603,74 +566,57 @@ describe('setOpenIDAuthTokens', () => {
       );
     });
 
-    it('uses cookie fallback for OpenID access tokens when no session is available', () => {
+    it('seals the record even when no Express session exists', async () => {
       const tokenset = {
         id_token: 'the-id-token',
         access_token: 'the-access-token',
         refresh_token: 'the-refresh-token',
       };
-      const req = { session: null };
+      const req = { session: null, cookies: {} };
       const res = mockResponse();
 
-      setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
 
-      expect(setRefreshTokenCookie).toHaveBeenCalledWith(
-        res,
-        'the-refresh-token',
-        expect.any(Date),
-      );
-      expect(setOpenIDMarkerCookies).toHaveBeenCalledWith(res, {
-        userId: 'user-123',
-        expires: expect.any(Date),
-        refreshExpiryMs: 604800000,
-        refreshToken: 'the-refresh-token',
-      });
-      expect(res.cookie).toHaveBeenCalledWith(
+      expect(custodyService().createCustody).toHaveBeenCalledTimes(1);
+      expect(setTokenKeyCookie).toHaveBeenCalledWith(res, expect.any(String), expect.any(Date));
+      expect(res.cookie).not.toHaveBeenCalledWith(
         'openid_access_token',
-        'the-access-token',
-        expect.objectContaining({
-          expires: expect.any(Date),
-          httpOnly: true,
-          sameSite: 'strict',
-        }),
+        expect.any(String),
+        expect.any(Object),
       );
-      expect(res.cookie).toHaveBeenCalledWith(
+      expect(res.cookie).not.toHaveBeenCalledWith(
         'openid_id_token',
-        'the-id-token',
-        expect.objectContaining({
-          expires: expect.any(Date),
-          httpOnly: true,
-          sameSite: 'strict',
-        }),
+        expect.any(String),
+        expect.any(Object),
       );
     });
   });
 
   describe('edge cases', () => {
-    it('should return undefined when tokenset is null', () => {
+    it('should return undefined when tokenset is null', async () => {
       const req = mockRequest();
       const res = mockResponse();
-      const result = setOpenIDAuthTokens(null, req, res, 'user-123');
+      const result = await setOpenIDAuthTokens(null, req, res, 'user-123');
       expect(result).toBeUndefined();
     });
 
-    it('should return undefined when access_token is missing', () => {
+    it('should return undefined when access_token is missing', async () => {
       const tokenset = { refresh_token: 'refresh' };
       const req = mockRequest();
       const res = mockResponse();
-      const result = setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      const result = await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
       expect(result).toBeUndefined();
     });
 
-    it('should return undefined when no refresh token is available', () => {
+    it('should return undefined when no refresh token is available', async () => {
       const tokenset = { access_token: 'access', id_token: 'id' };
       const req = mockRequest();
       const res = mockResponse();
-      const result = setOpenIDAuthTokens(tokenset, req, res, 'user-123');
+      const result = await setOpenIDAuthTokens(tokenset, req, res, 'user-123');
       expect(result).toBeUndefined();
     });
 
-    it('should use existingRefreshToken when tokenset has no refresh_token', () => {
+    it('should use existingRefreshToken when tokenset has no refresh_token', async () => {
       const tokenset = {
         id_token: 'the-id-token',
         access_token: 'the-access-token',
@@ -678,9 +624,55 @@ describe('setOpenIDAuthTokens', () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      const result = setOpenIDAuthTokens(tokenset, req, res, 'user-123', 'existing-refresh');
+      const result = await setOpenIDAuthTokens(tokenset, req, res, 'user-123', 'existing-refresh');
       expect(result).toBe('the-id-token');
-      expect(req.session.openidTokens.refreshToken).toBe('existing-refresh');
+      const { tokens } = custodyService().createCustody.mock.calls[0][0];
+      expect(tokens.refreshToken).toBe('existing-refresh');
+    });
+  });
+
+  describe('clearOpenIDAuthTokens', () => {
+    it('deletes the custody record for the presented key and clears the token key cookie', async () => {
+      const tokenset = {
+        id_token: 'the-id-token',
+        access_token: 'the-access-token',
+        refresh_token: 'the-refresh-token',
+      };
+      const res = mockResponse();
+      await setOpenIDAuthTokens(tokenset, mockRequest(), res, 'user-123');
+      const { tokenKey, tokenKeyHash } = await custodyService().createCustody.mock.results[0].value;
+
+      const clearRes = mockResponse();
+      await clearOpenIDAuthTokens(
+        { cookies: { openid_token_key: tokenKey } },
+        clearRes,
+        'user-123',
+      );
+
+      expect(custodyService().deleteCustody).toHaveBeenCalledWith({ tokenKeyHash });
+      expect(clearTokenKeyCookie).toHaveBeenCalledWith(clearRes);
+      expect(clearRes.clearCookie).toHaveBeenCalledWith('openid_user_id');
+      expect(clearRes.clearCookie).toHaveBeenCalledWith('token_provider');
+    });
+
+    it('skips the delete when the key cookie is absent or malformed but still clears the cookie', async () => {
+      /** Mint the shared service so custodyService() resolves, then clear with no valid key. */
+      await setOpenIDAuthTokens(
+        {
+          id_token: 'the-id-token',
+          access_token: 'the-access-token',
+          refresh_token: 'the-refresh-token',
+        },
+        mockRequest(),
+        mockResponse(),
+        'user-000',
+      );
+      const clearRes = mockResponse();
+
+      await clearOpenIDAuthTokens({ cookies: { openid_token_key: 'not-a-valid-key' } }, clearRes);
+
+      expect(custodyService().deleteCustody).not.toHaveBeenCalled();
+      expect(clearTokenKeyCookie).toHaveBeenCalledWith(clearRes);
     });
   });
 });
@@ -1444,11 +1436,11 @@ describe('CloudFront cookie integration', () => {
       refresh_token: 'the-refresh-token',
     };
 
-    it('calls setCloudFrontCookies with response object and user scope from options', () => {
+    it('calls setCloudFrontCookies with response object and user scope from options', async () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      setOpenIDAuthTokens(validTokenset, req, res, {
+      await setOpenIDAuthTokens(validTokenset, req, res, {
         userId: 'user-123',
         tenantId: 'tenantA',
       });
@@ -1463,11 +1455,11 @@ describe('CloudFront cookie integration', () => {
       );
     });
 
-    it('keeps backward compatibility with positional user and tenant params', () => {
+    it('keeps backward compatibility with positional user and tenant params', async () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      setOpenIDAuthTokens(validTokenset, req, res, 'user-123', undefined, 'tenantA');
+      await setOpenIDAuthTokens(validTokenset, req, res, 'user-123', undefined, 'tenantA');
 
       expect(setCloudFrontCookies).toHaveBeenCalledWith(
         res,
@@ -1479,67 +1471,51 @@ describe('CloudFront cookie integration', () => {
       );
     });
 
-    it('treats a null options argument as an empty legacy user id', () => {
+    /**
+     * Without a user id there is no identity to bind a custody record to and no `id` for the
+     * marker cookie, so the login fails closed: no record is sealed, no key cookie is set, no
+     * CloudFront cookie is written, and the function returns undefined rather than an app token.
+     */
+    it('fails closed with no user id from a null options argument', async () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      const result = setOpenIDAuthTokens(validTokenset, req, res, null);
+      const result = await setOpenIDAuthTokens(validTokenset, req, res, null);
 
-      expect(result).toBe('the-id-token');
+      expect(result).toBeUndefined();
       expect(setCloudFrontCookies).not.toHaveBeenCalled();
-      expect(logger.debug).toHaveBeenCalledWith(
-        '[setCloudFrontAuthCookies] CloudFront auth cookies skipped',
-        expect.objectContaining({
-          attempted: false,
-          set: false,
-          reason: 'missing_user_id',
-        }),
-      );
+      expect(setTokenKeyCookie).not.toHaveBeenCalled();
     });
 
-    it('treats omitted options as an empty legacy user id', () => {
+    it('fails closed with no user id from omitted options', async () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      const result = setOpenIDAuthTokens(validTokenset, req, res);
+      const result = await setOpenIDAuthTokens(validTokenset, req, res);
 
-      expect(result).toBe('the-id-token');
+      expect(result).toBeUndefined();
       expect(setCloudFrontCookies).not.toHaveBeenCalled();
-      expect(logger.debug).toHaveBeenCalledWith(
-        '[setCloudFrontAuthCookies] CloudFront auth cookies skipped',
-        expect.objectContaining({
-          attempted: false,
-          set: false,
-          reason: 'missing_user_id',
-        }),
-      );
+      expect(setTokenKeyCookie).not.toHaveBeenCalled();
     });
 
-    it('treats an object without token option keys as empty options', () => {
+    it('fails closed with no user id from an object without token option keys', async () => {
       const req = mockRequest();
       const res = mockResponse();
 
-      const result = setOpenIDAuthTokens(validTokenset, req, res, {});
+      const result = await setOpenIDAuthTokens(validTokenset, req, res, {});
 
-      expect(result).toBe('the-id-token');
+      expect(result).toBeUndefined();
       expect(setCloudFrontCookies).not.toHaveBeenCalled();
-      expect(logger.debug).toHaveBeenCalledWith(
-        '[setCloudFrontAuthCookies] CloudFront auth cookies skipped',
-        expect.objectContaining({
-          attempted: false,
-          set: false,
-          reason: 'missing_user_id',
-        }),
-      );
+      expect(setTokenKeyCookie).not.toHaveBeenCalled();
     });
 
-    it('succeeds even when setCloudFrontCookies returns false', () => {
+    it('succeeds even when setCloudFrontCookies returns false', async () => {
       setCloudFrontCookies.mockReturnValue(false);
 
       const req = mockRequest();
       const res = mockResponse();
 
-      const result = setOpenIDAuthTokens(validTokenset, req, res, 'user-123');
+      const result = await setOpenIDAuthTokens(validTokenset, req, res, 'user-123');
 
       expect(result).toBe('the-id-token');
     });

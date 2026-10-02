@@ -5,12 +5,12 @@ import { getTenantIndexMigrationHint } from '~/migrations/tenantIndexes';
 import { createSkillSyncCredentialModel } from './skillSyncCredential';
 import { createOpenIDRefreshFlightModel } from './openidRefreshFlight';
 import { createAgentTriggerUserPurgeModel } from './triggerUserPurge';
-import { createRefreshTokenBridgeModel } from './refreshTokenBridge';
 import { createAgentTriggerDeliveryModel } from './triggerDelivery';
 import { createSkillSyncStatusModel } from './skillSyncStatus';
 import { createConversationTagModel } from './conversationTag';
 import { createCodeEnvironmentModel } from './codeEnvironment';
 import { createAgentCategoryModel } from './agentCategory';
+import { createTokenCustodyModel } from './tokenCustody';
 import { createChatProjectModel } from './chatProject';
 import { createAgentApiKeyModel } from './agentApiKey';
 import { createTransactionModel } from './transaction';
@@ -95,8 +95,9 @@ export function createModels(mongoose: typeof import('mongoose')): {
   AgentQueuedTurnSequence: ReturnType<typeof createAgentQueuedTurnSequenceModel>;
   Schedule: ReturnType<typeof createScheduleModel>;
   ScheduleRun: ReturnType<typeof createScheduleRunModel>;
-  RefreshTokenBridge: ReturnType<typeof createRefreshTokenBridgeModel>;
+
   OpenIDRefreshFlight: ReturnType<typeof createOpenIDRefreshFlightModel>;
+  TokenCustody: ReturnType<typeof createTokenCustodyModel>;
 } {
   const models = {
     User: createUserModel(mongoose),
@@ -144,8 +145,8 @@ export function createModels(mongoose: typeof import('mongoose')): {
     AgentQueuedTurnSequence: createAgentQueuedTurnSequenceModel(mongoose),
     Schedule: createScheduleModel(mongoose),
     ScheduleRun: createScheduleRunModel(mongoose),
-    RefreshTokenBridge: createRefreshTokenBridgeModel(mongoose),
     OpenIDRefreshFlight: createOpenIDRefreshFlightModel(mongoose),
+    TokenCustody: createTokenCustodyModel(mongoose),
   };
   /**
    * Background index builds fail silently unless an 'index' listener is

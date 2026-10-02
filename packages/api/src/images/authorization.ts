@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import jwt, { type JwtPayload } from 'jsonwebtoken';
 import { PermissionBits, PrincipalType, ResourceType } from 'librechat-data-provider';
 import {
@@ -11,6 +10,8 @@ import {
 import type { IAgent, IAssistant, AssistantQuery, SystemCapability } from '@librechat/data-schemas';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import type { FilterQuery, ProjectionType, Types } from 'mongoose';
+import type { TokenCustodyService } from '~/auth/custody/service';
+import { verifyCustodyBinding } from '~/auth/custody/binding';
 
 const MAX_URL_LENGTH = 2048;
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
@@ -56,16 +57,24 @@ type CookieAuthResult =
   | { status: 'invalid' }
   | { status: 'authenticated'; userId: string };
 
-type OpenIdCookieAuthResult =
-  | { status: 'invalid' }
-  | { status: 'legacy'; userId: string }
-  | { status: 'authenticated'; userId: string };
-
 export interface ImageAuthorizationDeps {
   parseCookies: (cookieHeader: string) => Record<string, string | undefined>;
   isOpenIdReuseEnabled: () => boolean;
   getBasePath: () => string;
   findSession: (query: { userId: string; refreshToken: string }) => Promise<unknown | null>;
+  /**
+   * The custody service behind the OpenID-reuse binding check. Image authorization confirms the
+   * session is live through {@link verifyCustodyBinding}, which performs one indexed
+   * existence-and-`userId` read and never opens the sealed blob.
+   */
+  custody: TokenCustodyService;
+  /**
+   * The ambient request tenant, supplied by the caller so this module reads no ALS singleton. It
+   * scopes the custody record lookup to the viewer's tenant exactly as `openCustody` does — a
+   * viewer's record carries its tenant when the deployment is multi-tenant, and `undefined` matches
+   * only records with no tenant.
+   */
+  getTenantId?: () => string | undefined;
   getUserById: (userId: string, select: string) => Promise<ImageUser | null>;
   getAgent: (
     query: FilterQuery<IAgent>,
@@ -102,11 +111,7 @@ export interface ImageAuthorizationOptions {
   assistantEndpoints?: AssistantConfig[];
 }
 
-type ImageRequest = Request & {
-  session?: Request['session'] & {
-    openidTokens?: { refreshToken?: string };
-  };
-};
+type ImageRequest = Request;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -173,30 +178,29 @@ function getSignedUserId(token: string | undefined): string | null {
   }
 }
 
-function getSignedOpenIdUserId(
-  token: string | undefined,
-  refreshToken: string,
-): OpenIdCookieAuthResult {
-  const secret = process.env.JWT_REFRESH_SECRET;
-  if (!token || !secret) {
-    return { status: 'invalid' };
-  }
-  try {
-    const payload = jwt.verify(token, secret) as JwtPayload;
-    if (typeof payload.id !== 'string' || !OBJECT_ID_PATTERN.test(payload.id)) {
-      return { status: 'invalid' };
-    }
-    if (typeof payload.refreshTokenHash !== 'string') {
-      return { status: 'legacy', userId: payload.id };
-    }
-    const refreshTokenHash = createHash('sha256').update(refreshToken).digest('base64url');
-    return payload.refreshTokenHash === refreshTokenHash
-      ? { status: 'authenticated', userId: payload.id }
-      : { status: 'invalid' };
-  } catch (error) {
-    logger.warn('[imageAuthorization] Invalid signed OpenID user token', error);
-    return { status: 'invalid' };
-  }
+/**
+ * Establishes the OpenID-reuse user id through {@link verifyCustodyBinding}: the token key cookie is
+ * parsed and hashed with `hashTokenKey`, the marker cookie is verified with `JWT_REFRESH_SECRET`, its
+ * `tokenKeyHash` claim is compared for exact string equality, and only on a match is the marker's
+ * `id` claim trusted, gated by one indexed custody record existence-and-`userId` check. A marker with
+ * no string `tokenKeyHash` claim — including a previous-format `refreshTokenHash`-only marker — fails
+ * closed. No sealed blob is opened, no AEAD key is used and no custody context is attached.
+ *
+ * Returns the resolved user id, or null for every failure. `verifyCustodyBinding` reads the parsed
+ * cookies off `req.cookies`, so the already-parsed cookie map is handed to it as a request-shaped
+ * object rather than re-parsing the header.
+ */
+async function getSignedOpenIdUserId(
+  parsed: Record<string, string | undefined>,
+  deps: ImageAuthorizationDeps,
+): Promise<string | null> {
+  const binding = await runAsSystem(() =>
+    verifyCustodyBinding({ cookies: parsed } as unknown as Request, {
+      custody: deps.custody,
+      tenantId: deps.getTenantId?.(),
+    }),
+  );
+  return binding?.userId ?? null;
 }
 
 function getStoredPathCandidates(canonicalPath: string): string[] {
@@ -219,25 +223,21 @@ async function authenticateRequest(
     return { status: 'invalid' };
   }
 
+  if (parsed.token_provider === 'openid' && deps.isOpenIdReuseEnabled()) {
+    /**
+     * The OpenID-reuse path no longer carries a `refreshToken` cookie: the token key cookie and
+     * marker cookie pair alone establish the user id through the custody-record binding check, so a
+     * request with a matching pair is not rejected for a missing `refreshToken`, and a request whose
+     * `refreshToken` cookie happens to match a claim establishes no user id without a valid token
+     * key cookie.
+     */
+    const userId = await getSignedOpenIdUserId(parsed, deps);
+    return userId ? { status: 'authenticated', userId } : { status: 'invalid' };
+  }
+
   const refreshToken = parsed.refreshToken;
   if (!refreshToken) {
     return { status: 'missing' };
-  }
-
-  if (parsed.token_provider === 'openid' && deps.isOpenIdReuseEnabled()) {
-    const openIdAuth = getSignedOpenIdUserId(parsed.openid_user_id, refreshToken);
-    if (openIdAuth.status === 'invalid') {
-      return { status: 'invalid' };
-    }
-    if (openIdAuth.status === 'legacy') {
-      return refreshToken === req.session?.openidTokens?.refreshToken
-        ? { status: 'authenticated', userId: openIdAuth.userId }
-        : { status: 'invalid' };
-    }
-    const session = await runAsSystem(() =>
-      deps.findSession({ userId: openIdAuth.userId, refreshToken }),
-    );
-    return session ? openIdAuth : { status: 'invalid' };
   }
 
   const userId = getSignedUserId(refreshToken);

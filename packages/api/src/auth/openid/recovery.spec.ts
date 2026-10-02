@@ -1,54 +1,35 @@
+import type { OpenIDCustodyContext } from '~/auth/custody/service';
 import type { OpenIDRefreshRecoveryDeps } from './recovery';
 import { createOpenIDRefreshRecoveryService } from './recovery';
 
-describe('OpenID authentication publication settlement', () => {
+/**
+ * `sendOpenIDAuthResponse` persists the published token set only through custody: `createCustody`
+ * via `setOpenIDAuthTokens` on a fresh login, or `rotateCustody` under the same token key when the
+ * request already carries a custody context. No `sessions` row and no publication flight.
+ */
+describe('OpenID custody-native authentication publication', () => {
   function setup() {
+    const setOpenIDAuthTokens = jest.fn().mockResolvedValue('app-token');
+    const rotateCustody = jest.fn();
+    const setTokenKeyCookie = jest.fn();
     const deps = {
-      jwt: { decode: jest.fn() },
-      findOpenIDUser: jest.fn(),
-      findUser: jest.fn(),
-      getOpenIdConfig: jest.fn(),
-      getOpenIdEmail: jest.fn(),
-      getOpenIdIssuer: jest.fn(),
-      createAuthIdentityContext: jest.fn(),
-      refreshOpenIDSession: jest.fn(),
-      clearOpenIDAuthTokens: jest.fn(),
-      deleteOpenIDSession: jest.fn(),
       createOpenIDRefreshFlightKey: jest.fn(),
-      storeRefreshTokenBridge: jest.fn(),
-      deleteRefreshTokenBridges: jest.fn(),
-      waitForOpenIDRefreshFlight: jest.fn(),
-      assertOpenIDRefreshSessionGenerationAvailable: jest.fn(),
       revokeOpenIDRefreshFlights: jest.fn(),
-      bridgeGraceMs: 1000,
-      logger: { debug: jest.fn(), warn: jest.fn() },
-      createRefreshTokenBridgeFlightKey: jest.fn(() => 'publication'),
-      acquireOpenIDRefreshFlight: jest.fn().mockResolvedValue({
-        acquired: true,
-        ownerId: 'owner',
-      }),
-      withOpenIDRefreshFlightLease: jest.fn(({ operation }) =>
-        operation({
-          assertLeaseOwned: jest.fn().mockResolvedValue(true),
-          markLeaseSettled: jest.fn(),
-        }),
-      ),
-      failOpenIDRefreshFlight: jest.fn().mockResolvedValue(null),
-      completeOpenIDRefreshFlight: jest.fn().mockResolvedValue({ status: 'completed' }),
       getOpenIDAppAuthToken: jest.fn(() => 'app-token'),
-      storeOpenIDSession: jest.fn().mockResolvedValue(undefined),
-      assertOpenIDRefreshFlightAvailable: jest.fn().mockResolvedValue(true),
-      setOpenIDAuthTokens: jest.fn(() => 'app-token'),
+      setOpenIDAuthTokens,
+      getCustody: () =>
+        ({ rotateCustody }) as unknown as ReturnType<OpenIDRefreshRecoveryDeps['getCustody']>,
+      setTokenKeyCookie,
     } satisfies OpenIDRefreshRecoveryDeps;
     const service = createOpenIDRefreshRecoveryService(deps);
     const input = {
       tokenset: { access_token: 'access', id_token: 'id', refresh_token: 'refresh' },
       user: { _id: 'user' },
       existingRefreshToken: 'refresh',
-      req: {},
-      res: {},
+      req: {} as never,
+      res: {} as never,
     };
-    return { deps, service, input };
+    return { deps, service, input, rotateCustody, setTokenKeyCookie, setOpenIDAuthTokens };
   }
 
   /** A session whose persisted record is gone: the store TTL elapsed, or an eviction removed it. */
@@ -58,130 +39,160 @@ describe('OpenID authentication publication settlement', () => {
         reload: (callback: (error: Error) => void) => callback(new Error('failed to load session')),
         save: (callback: (error?: Error | null) => void) => callback(null),
       },
-    };
+    } as never;
   }
 
-  it('publishes into a new session when the persisted record expired', async () => {
+  it('establishes the record through setOpenIDAuthTokens on a fresh login', async () => {
+    const { deps, service, input } = setup();
+    await expect(service.sendOpenIDAuthResponse(input)).resolves.toBe('app-token');
+    expect(deps.setOpenIDAuthTokens).toHaveBeenCalledTimes(1);
+    expect(deps.setOpenIDAuthTokens).toHaveBeenCalledWith(
+      expect.objectContaining({ access_token: 'access', refresh_token: 'refresh' }),
+      input.req,
+      input.res,
+      expect.objectContaining({ userId: 'user', existingRefreshToken: 'refresh' }),
+    );
+  });
+
+  it('establishes the record only through setOpenIDAuthTokens, without any flight coordination', async () => {
+    const { deps, service, input } = setup();
+    await service.sendOpenIDAuthResponse(input);
+    // A fresh login writes exactly one custody record via setOpenIDAuthTokens and touches no
+    // publication flight.
+    expect(deps.setOpenIDAuthTokens).toHaveBeenCalledTimes(1);
+    expect(deps.revokeOpenIDRefreshFlights).not.toHaveBeenCalled();
+  });
+
+  it('publishes into a new record when the persisted session expired', async () => {
     const { deps, service, input } = setup();
     await expect(
       service.sendOpenIDAuthResponse({ ...input, req: missingSessionRequest() }),
     ).resolves.toBe('app-token');
-    expect(deps.completeOpenIDRefreshFlight).toHaveBeenCalledTimes(1);
-    expect(deps.failOpenIDRefreshFlight).not.toHaveBeenCalled();
+    expect(deps.setOpenIDAuthTokens).toHaveBeenCalledTimes(1);
   });
 
-  /**
-   * Tolerating an absent record leaves the durable revoked publication flight as the only fence
-   * against resurrecting a logged-out session, so both of its checks are pinned here: the
-   * tombstone read that precedes the reload, and the completion that follows it.
-   */
-  it('refuses a revoked generation before reloading the expired session', async () => {
+  it('drops the stale Express-session token set before publishing at login', async () => {
     const { deps, service, input } = setup();
-    deps.acquireOpenIDRefreshFlight.mockResolvedValue({ acquired: false, ownerId: 'other' });
-    deps.waitForOpenIDRefreshFlight.mockRejectedValue(
-      new Error('OpenID refresh was revoked by logout'),
+    const req = {
+      session: {
+        openidTokens: {
+          accessToken: 'stale-access',
+          idToken: 'stale-id',
+          refreshToken: 'stale-refresh',
+        },
+      },
+    } as never;
+    await expect(
+      service.sendOpenIDAuthResponse({ ...input, req, discardSessionTokens: true }),
+    ).resolves.toBe('app-token');
+    expect((req as { session: { openidTokens?: unknown } }).session.openidTokens).toBeUndefined();
+    // The IdP token set the caller passed is published, not the stale session set.
+    expect(deps.setOpenIDAuthTokens).toHaveBeenCalledWith(
+      expect.objectContaining({ access_token: 'access', refresh_token: 'refresh' }),
+      req,
+      input.res,
+      expect.objectContaining({ existingRefreshToken: 'refresh' }),
     );
-    await expect(
-      service.sendOpenIDAuthResponse({ ...input, req: missingSessionRequest() }),
-    ).rejects.toThrow('revoked by logout');
-    expect(deps.completeOpenIDRefreshFlight).not.toHaveBeenCalled();
+  });
+
+  it('rotates through rotateCustody when the request already carries a custody context', async () => {
+    const { deps, service, input, rotateCustody, setTokenKeyCookie } = setup();
+    const tokenKey = Buffer.from('0123456789abcdef0123456789abcdef');
+    const rotatedContext = {
+      tokenKey,
+      recordExpiresAt: new Date('2030-01-01T00:00:00Z'),
+    } as unknown as OpenIDCustodyContext;
+    rotateCustody.mockResolvedValue({
+      applied: true,
+      context: rotatedContext,
+      expiresAt: new Date('2030-01-02T00:00:00Z'),
+    });
+    const req = {
+      openidCustody: { tokenKeyHash: 'hash', rotationCounter: 3 },
+      res: undefined,
+    } as never;
+    const res = { cookie: jest.fn(), headersSent: false } as never;
+
+    await expect(service.sendOpenIDAuthResponse({ ...input, req, res })).resolves.toBe('app-token');
+
+    expect(rotateCustody).toHaveBeenCalledTimes(1);
+    expect(rotateCustody).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ tokenKeyHash: 'hash' }),
+        tokens: expect.objectContaining({ accessToken: 'access', refreshToken: 'refresh' }),
+      }),
+    );
+    // The unchanged token key value is re-issued with the rotation's expiry.
+    expect(setTokenKeyCookie).toHaveBeenCalledWith(
+      res,
+      tokenKey.toString('base64url'),
+      new Date('2030-01-02T00:00:00Z'),
+    );
     expect(deps.setOpenIDAuthTokens).not.toHaveBeenCalled();
   });
 
-  it('withholds tokens when logout revokes the flight after the expired session reloaded', async () => {
-    const { deps, service, input } = setup();
-    deps.completeOpenIDRefreshFlight.mockResolvedValue(null);
+  it('adopts the concurrent winner when rotateCustody reports applied: false', async () => {
+    const { service, input, rotateCustody, setTokenKeyCookie } = setup();
+    const tokenKey = Buffer.from('fedcba9876543210fedcba9876543210');
+    const winner = {
+      tokenKey,
+      recordExpiresAt: new Date('2031-06-01T00:00:00Z'),
+    } as unknown as OpenIDCustodyContext;
+    rotateCustody.mockResolvedValue({
+      applied: false,
+      context: winner,
+      expiresAt: new Date('2000-01-01T00:00:00Z'),
+    });
+    const req = { openidCustody: { tokenKeyHash: 'hash', rotationCounter: 1 } } as never;
+    const res = { cookie: jest.fn(), headersSent: false } as never;
+
+    await expect(service.sendOpenIDAuthResponse({ ...input, req, res })).resolves.toBe('app-token');
+    // Re-issue uses the winner's record expiry, not the locally computed one.
+    expect(setTokenKeyCookie).toHaveBeenCalledWith(
+      res,
+      tokenKey.toString('base64url'),
+      new Date('2031-06-01T00:00:00Z'),
+    );
+  });
+
+  it('skips the cookie re-issue on the streaming path (headers already sent)', async () => {
+    const { service, input, rotateCustody, setTokenKeyCookie } = setup();
+    rotateCustody.mockResolvedValue({
+      applied: true,
+      context: { tokenKey: Buffer.from('x'.repeat(32)) } as unknown as OpenIDCustodyContext,
+      expiresAt: new Date('2030-01-02T00:00:00Z'),
+    });
+    const req = { openidCustody: { tokenKeyHash: 'hash', rotationCounter: 0 } } as never;
+    const res = { cookie: jest.fn(), headersSent: true } as never;
+
+    await expect(service.sendOpenIDAuthResponse({ ...input, req, res })).resolves.toBe('app-token');
+    expect(setTokenKeyCookie).not.toHaveBeenCalled();
+  });
+
+  it('throws when the published token set carries no refresh token', async () => {
+    const { service, input } = setup();
     await expect(
-      service.sendOpenIDAuthResponse({ ...input, req: missingSessionRequest() }),
-    ).rejects.toThrow('revoked before completion');
+      service.sendOpenIDAuthResponse({
+        tokenset: { access_token: 'access', id_token: 'id' },
+        user: input.user,
+        req: input.req,
+        res: input.res,
+      }),
+    ).rejects.toThrow('no refresh token');
+  });
+
+  it('throws when no application authentication token is available', async () => {
+    const { deps, service, input } = setup();
+    (deps.getOpenIDAppAuthToken as jest.Mock).mockReturnValue(undefined);
+    await expect(service.sendOpenIDAuthResponse(input)).rejects.toThrow(
+      'no application authentication token',
+    );
     expect(deps.setOpenIDAuthTokens).not.toHaveBeenCalled();
-    expect(deps.deleteOpenIDSession).toHaveBeenCalledWith('refresh');
-    expect(deps.clearOpenIDAuthTokens).toHaveBeenCalled();
   });
 
-  it('preserves the request error when failure settlement also fails', async () => {
+  it('throws when setOpenIDAuthTokens publishes an inconsistent token', async () => {
     const { deps, service, input } = setup();
-    const error = new Error('session unavailable');
-    deps.getOpenIDAppAuthToken.mockImplementation(() => {
-      throw error;
-    });
-    deps.failOpenIDRefreshFlight.mockRejectedValue(new Error('store unavailable'));
-    await expect(service.sendOpenIDAuthResponse(input)).rejects.toBe(error);
-    expect(deps.logger.warn).toHaveBeenCalled();
-  });
-
-  it('does not fail an indeterminate completion write', async () => {
-    const { deps, service, input } = setup();
-    const error = new Error('completion acknowledgement lost');
-    deps.completeOpenIDRefreshFlight.mockImplementation(({ onWriteStart }) => {
-      onWriteStart?.();
-      return Promise.reject(error);
-    });
-    await expect(service.sendOpenIDAuthResponse(input)).rejects.toBe(error);
-    expect(deps.failOpenIDRefreshFlight).not.toHaveBeenCalled();
-  });
-
-  it('settles completion preparation failures before the write starts', async () => {
-    const { deps, service, input } = setup();
-    const error = new Error('encryption failed');
-    deps.completeOpenIDRefreshFlight.mockRejectedValue(error);
-    await expect(service.sendOpenIDAuthResponse(input)).rejects.toBe(error);
-    expect(deps.failOpenIDRefreshFlight).toHaveBeenCalledWith({
-      key: 'publication',
-      ownerId: 'owner',
-      error,
-    });
-  });
-
-  it('leaves successful publication completed', async () => {
-    const { deps, service, input } = setup();
-    await expect(service.sendOpenIDAuthResponse(input)).resolves.toBe('app-token');
-    expect(deps.completeOpenIDRefreshFlight).toHaveBeenCalledTimes(1);
-    expect(deps.failOpenIDRefreshFlight).not.toHaveBeenCalled();
-  });
-
-  describe('with a stale token set left in the Express session', () => {
-    function buildStaleSession() {
-      return {
-        accessToken: 'stale-access',
-        idToken: 'stale-id',
-        refreshToken: 'stale-refresh',
-        accessTokenExpiresAt: Math.floor(Date.now() / 1000) - 120,
-      };
-    }
-
-    it('publishes the IdP token set at login instead of the stale session set', async () => {
-      const { deps, service, input } = setup();
-      const req = { session: { openidTokens: buildStaleSession() } };
-      await expect(
-        service.sendOpenIDAuthResponse({ ...input, req, discardSessionTokens: true }),
-      ).resolves.toBe('app-token');
-      expect(req.session.openidTokens).toBeUndefined();
-      expect(deps.completeOpenIDRefreshFlight).toHaveBeenCalledWith(
-        expect.objectContaining({
-          tokens: expect.objectContaining({
-            tokenset: expect.objectContaining({ access_token: 'access', refresh_token: 'refresh' }),
-          }),
-        }),
-      );
-      expect(deps.setOpenIDAuthTokens).toHaveBeenCalledWith(
-        expect.objectContaining({ access_token: 'access', refresh_token: 'refresh' }),
-        req,
-        input.res,
-        expect.objectContaining({ userId: 'user', existingRefreshToken: 'refresh' }),
-      );
-    });
-
-    it('keeps adopting an advanced session on the refresh path', async () => {
-      const { deps, service, input } = setup();
-      const req = { session: { openidTokens: buildStaleSession() } };
-      await expect(service.sendOpenIDAuthResponse({ ...input, req })).resolves.toBe('app-token');
-      expect(deps.setOpenIDAuthTokens).toHaveBeenCalledWith(
-        expect.objectContaining({ access_token: 'stale-access', refresh_token: 'stale-refresh' }),
-        req,
-        input.res,
-        expect.objectContaining({ existingRefreshToken: 'stale-refresh' }),
-      );
-    });
+    deps.setOpenIDAuthTokens.mockResolvedValue('a-different-token');
+    await expect(service.sendOpenIDAuthResponse(input)).rejects.toThrow('inconsistent token');
   });
 });

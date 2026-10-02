@@ -3,7 +3,6 @@ import {
   createOpenIDOboIdentityTuple,
   createOpenIDSessionIdentity,
   createOpenIDRefreshIdentityTuple,
-  createRefreshTokenBridgeIdentity,
   isOpenIDSessionIdentityMatch,
   resolveAppUserId,
   serializeAuthIdentityTuple,
@@ -107,29 +106,6 @@ describe('auth identity helpers', () => {
       tenantId: 'tenant-a',
       openidIssuer: 'https://issuer-a.example.com',
     });
-  });
-
-  it('creates refresh-token bridge identity from app user id and normalized issuer', () => {
-    expect(
-      createRefreshTokenBridgeIdentity({
-        userId: ' user-123 ',
-        tenantId: ' tenant-a ',
-        openidIssuer: 'https://issuer.example.com/.well-known/openid-configuration',
-      }),
-    ).toEqual({
-      userId: 'user-123',
-      tenantId: 'tenant-a',
-      openidIssuer: 'https://issuer.example.com',
-    });
-  });
-
-  it('requires an app user id for refresh-token bridge identity', () => {
-    expect(
-      createRefreshTokenBridgeIdentity({
-        user: { openidId: 'oidc-sub' },
-        tenantId: 'tenant-a',
-      }),
-    ).toBeNull();
   });
 
   it('requires an OpenID subject for OBO identity tuples', () => {

@@ -16,8 +16,28 @@ import {
   isOpenIDRefreshOwnershipError,
   toOpenIDLogArgument,
 } from './errors';
+import {
+  sealTokens,
+  openTokens,
+  CustodyOpenError,
+  type CustodyTokenPayload,
+  type TokenCustodyIdentity,
+} from '~/auth/custody/aead';
 import { createOpenIDRefreshIdentityTuple, serializeAuthIdentityTuple } from '~/utils/identity';
 import { OPENID_EXPIRY_BUFFER_SECONDS } from '~/oauth/expiry';
+
+/**
+ * The per-request seal the flight store uses to protect a completed refresh result: the flight
+ * owner's token key (the 32 raw AEAD bytes), bound to the same token key hash and identity as the
+ * custody record. Every request in one browser session carries the same token key, so a waiting
+ * worker opens what the owner sealed, and no plaintext token set is ever written to
+ * `openidrefreshflights`.
+ */
+export interface CustodyFlightSeal {
+  aeadKey: Buffer;
+  tokenKeyHash: string;
+  identity: TokenCustodyIdentity;
+}
 
 const DEFAULT_FLIGHT_TTL_MS = 2 * 60 * 1000;
 const DEFAULT_LOCK_TTL_MS = 30 * 1000;
@@ -25,7 +45,6 @@ const DEFAULT_WAIT_TIMEOUT_MS = DEFAULT_FLIGHT_TTL_MS;
 const DEFAULT_WAIT_INTERVAL_MS = 100;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 10 * 1000;
 const DEFAULT_DELIVERY_TTL_MS = 30 * 1000;
-const INTERNAL_BROWSER_REFRESH_TOKEN_FIELD = '__browserRefreshToken';
 const INTERNAL_PREDECESSOR_REFRESH_TOKEN_FIELD = '__predecessorRefreshToken';
 const INTERNAL_PREDECESSOR_ACCESS_TOKEN_FIELD = '__predecessorAccessToken';
 const INTERNAL_DEFERRED_PUBLICATION_FIELD = '__deferredPublication';
@@ -36,7 +55,6 @@ export interface TokenResult extends Omit<OpenIDTokenSet, 'claims'> {
   tokenset?: OpenIDTokenSet;
   claims?: OpenIDClaims | (() => OpenIDClaims);
   openidIssuer?: string;
-  __browserRefreshToken?: string;
   __predecessorRefreshToken?: string;
   __predecessorAccessToken?: string;
   __deferredPublication?: boolean;
@@ -60,7 +78,7 @@ interface FlightOwnerData {
 }
 
 interface FlightCompleteData extends FlightOwnerData {
-  encryptedResult: string;
+  sealedResult: string;
 }
 
 interface FlightRenewData extends FlightOwnerData {
@@ -88,6 +106,7 @@ export interface OpenIDRefreshFlightService {
     key?: string | null;
     ownerId?: string;
     tokens?: TokenResult | null;
+    seal: CustodyFlightSeal;
     ttl?: number;
     onWriteStart?: () => void;
   }) => Promise<RefreshFlightRecord | null>;
@@ -123,10 +142,12 @@ export interface OpenIDRefreshFlightService {
   releaseOpenIDRefreshFlightDelivery: (args: FlightDeliveryData) => Promise<void>;
   revokeOpenIDRefreshFlights: (args: {
     keys?: Array<string | null | undefined>;
+    seal: CustodyFlightSeal;
     ttl?: number;
   }) => Promise<Array<TokenResult | null>>;
   waitForOpenIDRefreshFlight: (args: {
     key?: string | null;
+    seal: CustodyFlightSeal;
     timeoutMs?: number;
     intervalMs?: number;
     requirePublication?: boolean;
@@ -142,7 +163,10 @@ export interface OpenIDRefreshFlightService {
   }) => Promise<T>;
   __internals: {
     sha256: (value: string) => string;
-    readCompletedFlight: (flight: RefreshFlightRecord | null) => Promise<TokenResult | null>;
+    readCompletedFlight: (
+      flight: RefreshFlightRecord | null,
+      seal: CustodyFlightSeal,
+    ) => Promise<TokenResult | null>;
     DEFAULT_FLIGHT_TTL_MS: number;
     DEFAULT_LOCK_TTL_MS: number;
     DEFAULT_WAIT_TIMEOUT_MS: number;
@@ -175,17 +199,42 @@ export interface OpenIDRefreshFlightDeps {
     ) => Promise<RefreshFlightRecord | null>;
   };
   logger: Pick<OpenIDLogger, 'warn'>;
-  encrypt: (value: string) => Promise<string>;
-  decrypt: (value: string) => Promise<string>;
 }
 
 export function createOpenIDRefreshFlightService({
   db,
   logger,
-  encrypt,
-  decrypt,
 }: OpenIDRefreshFlightDeps): OpenIDRefreshFlightService {
   const sha256 = (value: string): string => crypto.createHash('sha256').update(value).digest('hex');
+
+  /**
+   * Seals a flight's completed token set under the owner's token key with the custody AEAD. The
+   * serialized `TokenResult`, including the coordination markers already promoted to own fields,
+   * is sealed whole as an opaque payload; the AAD binds the blob to the owner's token key hash and
+   * identity.
+   */
+  function sealFlightResult(tokens: TokenResult, seal: CustodyFlightSeal): string {
+    return sealTokens(
+      seal.aeadKey,
+      tokens as unknown as CustodyTokenPayload,
+      seal.tokenKeyHash,
+      seal.identity,
+    );
+  }
+
+  /**
+   * Opens a `sealedResult` blob with the waiting worker's own token key. A `CustodyOpenError`
+   * propagates so the caller uses no token set from that flight and leaves the custody record in
+   * place.
+   */
+  function openFlightResult(sealed: string, seal: CustodyFlightSeal): TokenResult {
+    return openTokens(
+      seal.aeadKey,
+      sealed,
+      seal.tokenKeyHash,
+      seal.identity,
+    ) as unknown as TokenResult;
+  }
 
   function createOpenIDRefreshFlightKey({
     req,
@@ -234,20 +283,19 @@ export function createOpenIDRefreshFlightService({
     key,
     ownerId,
     tokens,
+    seal,
     ttl = DEFAULT_FLIGHT_TTL_MS,
     onWriteStart,
   }: {
     key?: string | null;
     ownerId?: string;
     tokens?: TokenResult | null;
+    seal: CustodyFlightSeal;
     ttl?: number;
     onWriteStart?: () => void;
   }): Promise<RefreshFlightRecord | null> {
     if (!key || !ownerId || !tokens) return null;
     const serializedTokens: TokenResult = { ...tokens };
-    if (tokens.__browserRefreshToken) {
-      serializedTokens.__browserRefreshToken = tokens.__browserRefreshToken;
-    }
     if (tokens.__predecessorRefreshToken) {
       serializedTokens.__predecessorRefreshToken = tokens.__predecessorRefreshToken;
     }
@@ -261,12 +309,12 @@ export function createOpenIDRefreshFlightService({
     const usableTokenTtl = Number.isFinite(accessTokenExpiresAt)
       ? Math.max(1, accessTokenExpiresAt - Date.now() - OPENID_EXPIRY_BUFFER_SECONDS * 1000)
       : ttl;
-    const encryptedResult = await encrypt(JSON.stringify(serializedTokens));
+    const sealedResult = sealFlightResult(serializedTokens, seal);
     onWriteStart?.();
     return db.completeOpenIDRefreshFlight({
       key,
       ownerId,
-      encryptedResult,
+      sealedResult,
       expiresAt: new Date(Date.now() + Math.min(ttl, usableTokenTtl)),
     });
   }
@@ -533,9 +581,11 @@ export function createOpenIDRefreshFlightService({
 
   async function revokeOpenIDRefreshFlights({
     keys,
+    seal,
     ttl = DEFAULT_FLIGHT_TTL_MS,
   }: {
     keys?: Array<string | null | undefined>;
+    seal: CustodyFlightSeal;
     ttl?: number;
   }): Promise<Array<TokenResult | null>> {
     const uniqueKeys = [...new Set<string>((keys ?? []).filter((key): key is string => !!key))];
@@ -544,19 +594,24 @@ export function createOpenIDRefreshFlightService({
     const revoked = await Promise.all(
       uniqueKeys.map((key) => db.revokeOpenIDRefreshFlight({ key, expiresAt })),
     );
-    return Promise.all(
-      revoked.map(async (flight) => {
-        if (!flight?.encryptedResult) return null;
-        return restoreInternalTokenFields(
-          JSON.parse(await decrypt(flight.encryptedResult)) as TokenResult,
-        );
-      }),
-    );
+    return revoked.map((flight) => {
+      if (!flight?.sealedResult) return null;
+      try {
+        return restoreInternalTokenFields(openFlightResult(flight.sealedResult, seal));
+      } catch (error) {
+        if (error instanceof CustodyOpenError) {
+          logger.warn('[OpenIDRefreshFlight] Revoked flight result failed to open', {
+            reason: error.reason,
+          });
+          return null;
+        }
+        throw error;
+      }
+    });
   }
 
   function restoreInternalTokenFields(tokens: TokenResult): TokenResult {
     for (const [field, value] of [
-      [INTERNAL_BROWSER_REFRESH_TOKEN_FIELD, tokens.__browserRefreshToken],
       [INTERNAL_PREDECESSOR_REFRESH_TOKEN_FIELD, tokens.__predecessorRefreshToken],
       [INTERNAL_PREDECESSOR_ACCESS_TOKEN_FIELD, tokens.__predecessorAccessToken],
       [INTERNAL_DEFERRED_PUBLICATION_FIELD, tokens.__deferredPublication],
@@ -593,6 +648,7 @@ export function createOpenIDRefreshFlightService({
 
   async function readCompletedFlight(
     flight: RefreshFlightRecord | null,
+    seal: CustodyFlightSeal,
   ): Promise<TokenResult | null> {
     if (!flight) return null;
     if (
@@ -608,9 +664,9 @@ export function createOpenIDRefreshFlightService({
       throw new Error(flight.errorMessage || 'OpenID refresh was revoked by logout');
     if (flight.status === 'failed')
       throw new Error(flight.errorMessage || 'OpenID refresh failed in another worker');
-    if (flight.status !== 'completed' || flight.revocationRequestedAt || !flight.encryptedResult)
+    if (flight.status !== 'completed' || flight.revocationRequestedAt || !flight.sealedResult)
       return null;
-    const tokens = JSON.parse(await decrypt(flight.encryptedResult)) as TokenResult;
+    const tokens = openFlightResult(flight.sealedResult, seal);
     const accessTokenExpiresAt = Number(tokens.expires_at) * 1000;
     if (
       Number.isFinite(accessTokenExpiresAt) &&
@@ -628,12 +684,14 @@ export function createOpenIDRefreshFlightService({
 
   async function waitForOpenIDRefreshFlight({
     key,
+    seal,
     timeoutMs,
     intervalMs = DEFAULT_WAIT_INTERVAL_MS,
     requirePublication = false,
     signal,
   }: {
     key?: string | null;
+    seal: CustodyFlightSeal;
     timeoutMs?: number;
     intervalMs?: number;
     requirePublication?: boolean;
@@ -647,7 +705,24 @@ export function createOpenIDRefreshFlightService({
       signal?.throwIfAborted();
       const flight = await db.findOpenIDRefreshFlight({ key });
       signal?.throwIfAborted();
-      const completed = await readCompletedFlight(flight);
+      let completed: TokenResult | null;
+      try {
+        completed = await readCompletedFlight(flight, seal);
+      } catch (error) {
+        if (error instanceof CustodyOpenError) {
+          /**
+           * The waiter's token key could not open this flight's `sealedResult`. Use no token set
+           * from this flight and leave the custody record in place; the caller answers
+           * session-missing without touching the record.
+           */
+          logger.warn('[OpenIDRefreshFlight] Sealed flight result failed to open', {
+            key,
+            reason: error.reason,
+          });
+          return null;
+        }
+        throw error;
+      }
       signal?.throwIfAborted();
       const awaitingPublication = requirePublication && completed?.__deferredPublication;
       if (completed && !awaitingPublication) return completed;

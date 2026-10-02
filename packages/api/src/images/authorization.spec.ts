@@ -1,7 +1,8 @@
 import jwt from 'jsonwebtoken';
-import { createHash } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
+import type { TokenCustodyService } from '~/auth/custody/service';
 import type { ImageAuthorizationDeps } from './authorization';
+import { generateTokenKey, hashTokenKey, parseTokenKey } from '~/auth/custody/key';
 import { createImageAuthorizationMiddleware } from './authorization';
 
 const VIEWER_ID = '65cfb246f7ecadb8b1e8036b';
@@ -19,6 +20,26 @@ function createResponse(): Response {
   return response as unknown as Response;
 }
 
+/**
+ * A fake custody service exposing only `custodyExists`, the existence-and-`userId` read behind
+ * `verifyCustodyBinding`. Image authorization reaches nothing else on the service, so the remaining
+ * methods throw if the migration ever routes a token open through this path.
+ */
+function createCustody(exists = true): TokenCustodyService {
+  const unreachable = (name: string) => () => {
+    throw new Error(`${name} must not be called by image authorization`);
+  };
+  return {
+    custodyExists: jest.fn().mockResolvedValue(exists),
+    createCustody: unreachable('createCustody'),
+    openCustody: unreachable('openCustody'),
+    rotateCustody: unreachable('rotateCustody'),
+    reloadAfterInvalidGrant: unreachable('reloadAfterInvalidGrant'),
+    deleteCustody: unreachable('deleteCustody'),
+    deleteAllForUser: unreachable('deleteAllForUser'),
+  } as unknown as TokenCustodyService;
+}
+
 function createDeps(): ImageAuthorizationDeps {
   return {
     parseCookies: (header: string) =>
@@ -31,6 +52,8 @@ function createDeps(): ImageAuthorizationDeps {
     isOpenIdReuseEnabled: jest.fn().mockReturnValue(false),
     getBasePath: jest.fn().mockReturnValue(''),
     findSession: jest.fn().mockResolvedValue({ _id: 'active-session' }),
+    custody: createCustody(true),
+    getTenantId: jest.fn().mockReturnValue(undefined),
     getUserById: jest.fn().mockResolvedValue({
       role: 'USER',
       tenantId: 'tenant-a',
@@ -57,15 +80,20 @@ function signUser(userId: string): string {
   return jwt.sign({ id: userId }, process.env.JWT_REFRESH_SECRET as string, { expiresIn: '1h' });
 }
 
-function signOpenIdUser(userId: string, refreshToken: string): string {
-  return jwt.sign(
-    {
-      id: userId,
-      refreshTokenHash: createHash('sha256').update(refreshToken).digest('base64url'),
-    },
-    process.env.JWT_REFRESH_SECRET as string,
-    { expiresIn: '1h' },
-  );
+/**
+ * Mints the token key cookie value and the `openid_user_id` marker JWT that bind an OpenID session
+ * after the key-custody migration: the marker carries `{ id, tokenKeyHash }` signed with
+ * `JWT_REFRESH_SECRET`, where `tokenKeyHash` is `hashTokenKey` of the presented key.
+ */
+function makeOpenIdCookies(
+  userId: string,
+  tokenKey: string = generateTokenKey(),
+): { tokenKey: string; tokenKeyHash: string; marker: string } {
+  const tokenKeyHash = hashTokenKey(parseTokenKey(tokenKey) as Buffer);
+  const marker = jwt.sign({ id: userId, tokenKeyHash }, process.env.JWT_REFRESH_SECRET as string, {
+    expiresIn: '1h',
+  });
+  return { tokenKey, tokenKeyHash, marker };
 }
 
 describe('createImageAuthorizationMiddleware', () => {
@@ -109,82 +137,133 @@ describe('createImageAuthorizationMiddleware', () => {
     expect(response.status).toHaveBeenCalledWith(403);
   });
 
-  it('authenticates a refresh-bound OpenID cookie after the Express session expires', async () => {
-    const refreshToken = 'openid-refresh-token';
-    const signedUserId = signOpenIdUser(VIEWER_ID, refreshToken);
+  it('binds an OpenID session from the key/marker pair with one custody existence check', async () => {
+    const { tokenKey, tokenKeyHash, marker } = makeOpenIdCookies(VIEWER_ID);
     (deps.isOpenIdReuseEnabled as jest.Mock).mockReturnValue(true);
     const middleware = createImageAuthorizationMiddleware({}, deps);
 
     await middleware(
       createRequest(
         `/images/${VIEWER_ID}/profile.png`,
-        `refreshToken=${refreshToken}; token_provider=openid; openid_user_id=${signedUserId}`,
+        `token_provider=openid; openid_token_key=${tokenKey}; openid_user_id=${marker}`,
       ),
       response,
       next,
     );
 
     expect(next).toHaveBeenCalledTimes(1);
-    expect(deps.findSession).toHaveBeenCalledWith({
-      userId: VIEWER_ID,
-      refreshToken,
+    // The revocation read is the custody existence check, not a session lookup.
+    expect(deps.custody.custodyExists).toHaveBeenCalledTimes(1);
+    expect(deps.custody.custodyExists).toHaveBeenCalledWith({
+      tokenKeyHash,
+      expectedUserId: VIEWER_ID,
+      tenantId: undefined,
     });
+    expect(deps.findSession).not.toHaveBeenCalled();
   });
 
-  it('rejects an OpenID identity cookie paired with a different refresh token', async () => {
-    const signedUserId = signOpenIdUser(VIEWER_ID, 'expected-refresh-token');
+  it('binds an OpenID session without a refreshToken cookie', async () => {
+    const { tokenKey, marker } = makeOpenIdCookies(VIEWER_ID);
     (deps.isOpenIdReuseEnabled as jest.Mock).mockReturnValue(true);
     const middleware = createImageAuthorizationMiddleware({}, deps);
 
     await middleware(
       createRequest(
         `/images/${VIEWER_ID}/profile.png`,
-        `refreshToken=different-refresh-token; token_provider=openid; openid_user_id=${signedUserId}`,
+        `token_provider=openid; openid_token_key=${tokenKey}; openid_user_id=${marker}`,
       ),
       response,
       next,
     );
-
-    expect(next).not.toHaveBeenCalled();
-    expect(response.status).toHaveBeenCalledWith(403);
-  });
-
-  it('rejects a refresh-bound OpenID cookie after its durable session is revoked', async () => {
-    const refreshToken = 'revoked-openid-refresh-token';
-    const signedUserId = signOpenIdUser(VIEWER_ID, refreshToken);
-    (deps.isOpenIdReuseEnabled as jest.Mock).mockReturnValue(true);
-    (deps.findSession as jest.Mock).mockResolvedValue(null);
-    const middleware = createImageAuthorizationMiddleware({}, deps);
-
-    await middleware(
-      createRequest(
-        `/images/${VIEWER_ID}/profile.png`,
-        `refreshToken=${refreshToken}; token_provider=openid; openid_user_id=${signedUserId}`,
-      ),
-      response,
-      next,
-    );
-
-    expect(next).not.toHaveBeenCalled();
-    expect(response.status).toHaveBeenCalledWith(403);
-  });
-
-  it('requires an active Express session for a legacy OpenID identity cookie', async () => {
-    const refreshToken = 'legacy-refresh-token';
-    const signedUserId = signUser(VIEWER_ID);
-    (deps.isOpenIdReuseEnabled as jest.Mock).mockReturnValue(true);
-    const request = {
-      ...createRequest(
-        `/images/${VIEWER_ID}/profile.png`,
-        `refreshToken=${refreshToken}; token_provider=openid; openid_user_id=${signedUserId}`,
-      ),
-      session: { openidTokens: { refreshToken } },
-    } as unknown as Request;
-    const middleware = createImageAuthorizationMiddleware({}, deps);
-
-    await middleware(request, response, next);
 
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a marker whose tokenKeyHash claim does not match the presented key', async () => {
+    const { marker } = makeOpenIdCookies(VIEWER_ID);
+    const otherKey = generateTokenKey();
+    (deps.isOpenIdReuseEnabled as jest.Mock).mockReturnValue(true);
+    const middleware = createImageAuthorizationMiddleware({}, deps);
+
+    await middleware(
+      createRequest(
+        `/images/${VIEWER_ID}/profile.png`,
+        `token_provider=openid; openid_token_key=${otherKey}; openid_user_id=${marker}`,
+      ),
+      response,
+      next,
+    );
+
+    expect(next).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(403);
+    // A claim mismatch fails closed before any store read.
+    expect(deps.custody.custodyExists).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the custody record no longer exists (revoked or logged out)', async () => {
+    const { tokenKey, marker } = makeOpenIdCookies(VIEWER_ID);
+    (deps.isOpenIdReuseEnabled as jest.Mock).mockReturnValue(true);
+    (deps.custody.custodyExists as jest.Mock).mockResolvedValue(false);
+    const middleware = createImageAuthorizationMiddleware({}, deps);
+
+    await middleware(
+      createRequest(
+        `/images/${VIEWER_ID}/profile.png`,
+        `token_provider=openid; openid_token_key=${tokenKey}; openid_user_id=${marker}`,
+      ),
+      response,
+      next,
+    );
+
+    expect(next).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(403);
+    expect(deps.custody.custodyExists).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a previous-format marker carrying only refreshTokenHash', async () => {
+    const { tokenKey } = makeOpenIdCookies(VIEWER_ID);
+    const legacyMarker = jwt.sign(
+      { id: VIEWER_ID, refreshTokenHash: 'some-hash' },
+      process.env.JWT_REFRESH_SECRET as string,
+      { expiresIn: '1h' },
+    );
+    (deps.isOpenIdReuseEnabled as jest.Mock).mockReturnValue(true);
+    const middleware = createImageAuthorizationMiddleware({}, deps);
+
+    await middleware(
+      createRequest(
+        `/images/${VIEWER_ID}/profile.png`,
+        `token_provider=openid; openid_token_key=${tokenKey}; openid_user_id=${legacyMarker}`,
+      ),
+      response,
+      next,
+    );
+
+    expect(next).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(403);
+    expect(deps.custody.custodyExists).not.toHaveBeenCalled();
+  });
+
+  it('scopes the custody existence check to the ambient tenant', async () => {
+    const { tokenKey, tokenKeyHash, marker } = makeOpenIdCookies(VIEWER_ID);
+    (deps.isOpenIdReuseEnabled as jest.Mock).mockReturnValue(true);
+    (deps.getTenantId as jest.Mock).mockReturnValue('tenant-a');
+    const middleware = createImageAuthorizationMiddleware({}, deps);
+
+    await middleware(
+      createRequest(
+        `/images/${VIEWER_ID}/profile.png`,
+        `token_provider=openid; openid_token_key=${tokenKey}; openid_user_id=${marker}`,
+      ),
+      response,
+      next,
+    );
+
+    expect(deps.custody.custodyExists).toHaveBeenCalledWith({
+      tokenKeyHash,
+      expectedUserId: VIEWER_ID,
+      tenantId: 'tenant-a',
+    });
   });
 
   it('uses the disabled fallback for an image path without an owner layout', async () => {

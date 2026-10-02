@@ -28,12 +28,6 @@ export type AuthIdentityTuple = {
   subject: string;
 };
 
-export type RefreshTokenBridgeIdentity = {
-  userId: string;
-  tenantId?: string;
-  openidIssuer?: string;
-};
-
 export type OpenIDSessionIdentitySource = {
   appUserId?: string | null;
   openidSubject?: string | null;
@@ -203,31 +197,6 @@ export function isOpenIDSessionIdentityMatch(
     session.tenantId === expected.tenantId &&
     session.openidIssuer === expected.openidIssuer
   );
-}
-
-export function createRefreshTokenBridgeIdentity({
-  user,
-  requestUser,
-  userId,
-  tenantId,
-  openidIssuer,
-}: {
-  user?: AuthIdentitySource | null;
-  requestUser?: AuthIdentitySource | null;
-  userId?: string | null;
-  tenantId?: string | null;
-  openidIssuer?: string | null;
-}): RefreshTokenBridgeIdentity | null {
-  const appUserId = normalizeIdentityValue(userId) ?? resolveAppUserId(user, requestUser);
-  if (!appUserId) {
-    return null;
-  }
-
-  return {
-    userId: appUserId,
-    tenantId: resolveTenantId({ tenantId, user, requestUser }),
-    openidIssuer: resolveAuthOpenIDIssuer({ openidIssuer, user, requestUser }),
-  };
 }
 
 export function createOpenIDRefreshIdentityTuple({

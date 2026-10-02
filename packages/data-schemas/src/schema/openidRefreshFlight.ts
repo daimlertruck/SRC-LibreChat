@@ -18,7 +18,7 @@ const openidRefreshFlightSchema: Schema<IOpenIDRefreshFlight> = new Schema<IOpen
     default: 'pending',
     index: true,
   },
-  encryptedResult: {
+  sealedResult: {
     type: String,
   },
   errorMessage: {

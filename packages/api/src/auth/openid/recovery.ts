@@ -1,73 +1,18 @@
 import type {
   AuthIdentityContext,
-  LeaseAssertion,
-  LeaseContext,
-  OpenIDClaims,
-  OpenIDLogger,
-  OpenIDPublicationGeneration,
-  OpenIDRefreshResolution,
   OpenIDRequest,
   OpenIDResponse,
   OpenIDTokenSet,
   OpenIDUser,
-  RefreshFlightAcquireResult,
-  RefreshFlightRecord,
-  RefreshTokenBridgeDeleteInput,
-  RefreshTokenBridgeIdentity,
-  RefreshTokenBridgeInput,
-  SharedOpenIDRefreshResult,
-  TokenPreference,
 } from './types';
-import type { TokenResult } from './flight';
-import {
-  createOpenIDRefreshOwnershipError,
-  isOpenIDRefreshOwnershipError,
-  reloadOpenIDSessionIfPersisted,
-  toOpenIDLogArgument,
-} from './errors';
+import type { OpenIDCustodyContext, TokenCustodyService } from '~/auth/custody/service';
+import type { CustodyFlightSeal, TokenResult } from './flight';
+import type { CustodyTokenPayload } from '~/auth/custody/aead';
+import type { CustodyRequest } from '~/auth/custody/loader';
+import { reloadOpenIDSessionIfPersisted } from './errors';
 
-type FindUser = (...args: Array<string | object | undefined>) => Promise<OpenIDUser | null>;
-
-interface FindOpenIDUserArgs {
-  findUser: FindUser;
-  email: string;
-  openidId: string;
-  openidIssuer?: string;
-  idOnTheSource?: string;
-  strategyName: string;
-}
-
-interface RefreshOpenIDUserArgs {
-  req: OpenIDRequest;
-  res?: OpenIDResponse;
-  user: OpenIDUser;
-  refreshToken: string;
-  browserRefreshToken?: string;
-  strategyName: string;
-  assertLeaseOwned?: LeaseAssertion;
-  deferPublication?: boolean;
-}
-
-interface BridgeUser extends OpenIDUser {
+interface RecoveryUser extends OpenIDUser {
   _id: string | number | { toString(): string };
-}
-
-interface ResolveOpenIDRefreshInput {
-  tokenset: OpenIDTokenSet | null;
-  strategyName: string;
-}
-
-type SeedRefreshSessionInput = Omit<
-  RefreshOpenIDUserArgs,
-  'strategyName' | 'assertLeaseOwned' | 'deferPublication'
->;
-
-interface RecoverOpenIDRefreshBridgeInput {
-  req: OpenIDRequest;
-  res: OpenIDResponse;
-  refreshToken: string;
-  bridgedRefreshToken: string;
-  bridgeUser: BridgeUser;
 }
 
 interface RevokeOpenIDRefreshTokenChainInput {
@@ -81,26 +26,12 @@ interface RevokeOpenIDRefreshTokenChainInput {
 
 interface SendOpenIDAuthResponseInput {
   tokenset: OpenIDTokenSet;
-  user: BridgeUser;
+  user: RecoveryUser;
   existingRefreshToken?: string;
   openidSubject?: string;
   openidIssuer?: string;
-  predecessorIdentity?: RefreshTokenBridgeIdentity;
-  predecessorAccessToken?: string;
-  rejectedRefreshTokens?: string[];
   req: OpenIDRequest;
   res: OpenIDResponse;
-  assertLeaseOwned?: LeaseAssertion;
-  publicationGeneration?: OpenIDPublicationGeneration;
-  commitPublication?: (
-    appAuthToken: string,
-    publishedTokenset: OpenIDTokenSet,
-    metadata: {
-      predecessorAccessToken?: string;
-      acceptedIdentity: AuthIdentityContext;
-    },
-  ) => Promise<void>;
-  preparePublication?: boolean;
   /**
    * A fresh authorization-code login supersedes whatever token set the Express session still
    * holds from an earlier authentication. The advanced-session comparison exists for refresh
@@ -110,55 +41,17 @@ interface SendOpenIDAuthResponseInput {
 }
 
 export interface OpenIDRefreshRecoveryService {
-  recoverOpenIDRefreshBridge: (
-    input: RecoverOpenIDRefreshBridgeInput,
-  ) => Promise<SharedOpenIDRefreshResult>;
-  refreshOpenIDUser: (input: RefreshOpenIDUserArgs) => Promise<OpenIDRefreshResolution>;
-  resolveOpenIDRefreshResult: (
-    input: ResolveOpenIDRefreshInput,
-  ) => Promise<OpenIDRefreshResolution>;
   sendOpenIDAuthResponse: (input: SendOpenIDAuthResponseInput) => Promise<string | undefined>;
   revokeOpenIDRefreshTokenChain: (input: RevokeOpenIDRefreshTokenChainInput) => Promise<string[]>;
-  __internals: {
-    getTokenClaims: (tokenset: OpenIDTokenSet) => OpenIDClaims;
-    seedRefreshSession: (input: SeedRefreshSessionInput) => AuthIdentityContext;
-  };
 }
 
 export interface OpenIDRefreshRecoveryDeps {
-  jwt: { decode: (token: string) => OpenIDClaims | string | null };
-  logger: Pick<OpenIDLogger, 'debug' | 'warn'>;
-  findOpenIDUser: (args: FindOpenIDUserArgs) => Promise<{
-    user?: OpenIDUser | null;
-    error?: string | null;
-    migration?: boolean;
-  }>;
-  findUser: FindUser;
-  getOpenIdConfig: () => object;
-  getOpenIdEmail: (claims: OpenIDClaims) => string;
-  getOpenIdIssuer: (claims: OpenIDClaims, config: object) => string | undefined;
-  createAuthIdentityContext: (args: {
-    user?: OpenIDUser;
-    requestUser?: OpenIDUser;
-  }) => AuthIdentityContext;
-  refreshOpenIDSession: (
-    req: OpenIDRequest,
-    res: OpenIDResponse | undefined,
-    user: OpenIDUser,
-    preference: TokenPreference,
-    identity: AuthIdentityContext,
-    options: {
-      forceRefresh: boolean;
-      assertLeaseOwned?: LeaseAssertion;
-      deferPublication?: boolean;
-    },
-  ) => Promise<OpenIDTokenSet | null>;
-  storeOpenIDSession: (
-    userId: string,
-    refreshToken: string,
-    tenantId?: string,
-    previousRefreshToken?: string,
-  ) => Promise<void>;
+  /**
+   * Establishes the request's custody record for a fresh authorization-code login and returns the
+   * app auth token. It seals the IdP token set under a freshly generated token key via
+   * `createCustody` and writes the token key and marker cookies, so this module must `await` it.
+   * It writes no session store row and no bridge.
+   */
   setOpenIDAuthTokens: (
     tokens: OpenIDTokenSet,
     req: OpenIDRequest,
@@ -170,94 +63,65 @@ export interface OpenIDRefreshRecoveryDeps {
       openidSubject?: string;
       openidIssuer?: string;
     },
-  ) => string | undefined;
+  ) => Promise<string | undefined>;
   getOpenIDAppAuthToken: (tokens: OpenIDTokenSet, sessionIdToken?: string) => string | undefined;
-  clearOpenIDAuthTokens: (
-    req: OpenIDRequest,
-    res: OpenIDResponse,
-    userId: string,
-    tenantId?: string,
-  ) => void;
-  deleteOpenIDSession: (refreshToken: string) => Promise<object | null>;
-  createRefreshTokenBridgeFlightKey: (args: {
-    oldRefreshToken: string;
-    userId: string;
-    tenantId?: string;
-    openidIssuer?: string;
-  }) => string | null;
   createOpenIDRefreshFlightKey: (args: {
     req: OpenIDRequest;
     user: OpenIDUser;
     refreshToken: string;
     identityContext: AuthIdentityContext;
   }) => string | null;
-  storeRefreshTokenBridge: (args: RefreshTokenBridgeInput) => Promise<string | null>;
-  deleteRefreshTokenBridges: (args: RefreshTokenBridgeDeleteInput) => Promise<object | null>;
-  acquireOpenIDRefreshFlight: (args: { key: string }) => Promise<RefreshFlightAcquireResult>;
-  completeOpenIDRefreshFlight: (args: {
-    key: string;
-    ownerId: string;
-    tokens: SharedOpenIDRefreshResult;
-    onWriteStart?: () => void;
-  }) => Promise<RefreshFlightRecord | null>;
-  failOpenIDRefreshFlight: (args: {
-    key: string;
-    ownerId: string;
-    error: Error;
-  }) => Promise<RefreshFlightRecord | null>;
-  waitForOpenIDRefreshFlight: (args: { key: string }) => Promise<SharedOpenIDRefreshResult | null>;
-  assertOpenIDRefreshFlightAvailable: (args: {
-    key: string;
-    ownerId: string;
-  }) => Promise<RefreshFlightRecord | boolean>;
-  assertOpenIDRefreshSessionGenerationAvailable: (args: {
-    key?: string | null;
-    ownerId?: string;
-  }) => Promise<RefreshFlightRecord | boolean>;
   revokeOpenIDRefreshFlights: (args: {
     keys: Array<string | null>;
+    seal: CustodyFlightSeal;
     ttl: number;
   }) => Promise<Array<TokenResult | null>>;
-  withOpenIDRefreshFlightLease: <T>(args: {
-    key: string;
-    ownerId: string;
-    operation: (context: LeaseContext) => Promise<T>;
-  }) => Promise<T>;
-  bridgeGraceMs: number;
+  /**
+   * Returns the process-wide token custody service (`getTokenCustodyService` in `AuthService.js`).
+   * It is the only component that reads or writes the custody store; this module, `session.ts`
+   * and `refreshController` share the same instance. A getter so the service is built on first
+   * use, not when this module is wired at load.
+   */
+  getCustody: () => TokenCustodyService;
+  /**
+   * Re-issues the token key cookie with the record's derived `expires`. Rotation never changes the
+   * token key value, so this only refreshes the cookie's expiry after a `rotateCustody`, and only
+   * when a cookie-capable response is available whose headers have not been sent.
+   */
+  setTokenKeyCookie: (res: OpenIDResponse, tokenKey: string, expires: Date) => void;
 }
 
 export function createOpenIDRefreshRecoveryService(
   deps: OpenIDRefreshRecoveryDeps,
 ): OpenIDRefreshRecoveryService {
   const {
-    jwt,
-    logger,
-    findOpenIDUser,
-    findUser,
-    getOpenIdConfig,
-    getOpenIdEmail,
-    getOpenIdIssuer,
-    createAuthIdentityContext,
-    refreshOpenIDSession,
-    storeOpenIDSession,
     setOpenIDAuthTokens,
     getOpenIDAppAuthToken,
-    clearOpenIDAuthTokens,
-    deleteOpenIDSession,
-    createRefreshTokenBridgeFlightKey,
     createOpenIDRefreshFlightKey,
-    storeRefreshTokenBridge,
-    deleteRefreshTokenBridges,
-    acquireOpenIDRefreshFlight,
-    completeOpenIDRefreshFlight,
-    failOpenIDRefreshFlight,
-    waitForOpenIDRefreshFlight,
-    assertOpenIDRefreshFlightAvailable,
-    assertOpenIDRefreshSessionGenerationAvailable,
     revokeOpenIDRefreshFlights,
-    withOpenIDRefreshFlightLease,
-    bridgeGraceMs,
+    getCustody,
+    setTokenKeyCookie,
   } = deps;
+
+  /**
+   * Builds the {@link CustodyFlightSeal} the flight store uses to seal and open a refresh result,
+   * from the request's custody context (`req.openidCustody`, materialized by the request-scoped
+   * loader). Every flight in one session's chain is sealed under the same token key, so a single
+   * seal opens them all. Throws when the request carries no custody context, since without the
+   * key the flight result can neither be sealed nor opened, and there is no plaintext or
+   * `CREDS_KEY` fallback.
+   */
+  function resolveFlightSeal(req: OpenIDRequest): CustodyFlightSeal {
+    const context = (req as CustodyRequest).openidCustody;
+    if (!context) {
+      throw new Error('OpenID refresh coordination requires a custody context');
+    }
+    return {
+      aeadKey: context.tokenKey,
+      tokenKeyHash: context.tokenKeyHash,
+      identity: context.identity,
+    };
+  }
 
   const MAX_LOGOUT_REFRESH_CHAIN_DEPTH = 16;
   const MAX_LOGOUT_REFRESH_TARGETS = 128;
@@ -298,18 +162,12 @@ export function createOpenIDRefreshRecoveryService(
       }
       const keys = [
         ...directPublicationKeys,
-        ...frontier.flatMap(({ refreshToken, identity }) => [
+        ...frontier.map(({ refreshToken, identity }) =>
           createOpenIDRefreshFlightKey({ req, user, refreshToken, identityContext: identity }),
-          createRefreshTokenBridgeFlightKey({
-            oldRefreshToken: refreshToken,
-            userId: identity.appUserId ?? userId,
-            tenantId: identity.tenantId,
-            openidIssuer: identity.openidIssuer,
-          }),
-        ]),
+        ),
       ];
       directPublicationKeys = [];
-      const revoked = await revokeOpenIDRefreshFlights({ keys, ttl });
+      const revoked = await revokeOpenIDRefreshFlights({ keys, seal: resolveFlightSeal(req), ttl });
       const inheritedIdentities = frontier.map(({ identity }) => identity);
       const acceptedIdentities = revoked.flatMap((result) => {
         if (result?.acceptedIdentity) return [result.acceptedIdentity];
@@ -349,556 +207,93 @@ export function createOpenIDRefreshRecoveryService(
     return [...discovered];
   }
 
-  function getTokenClaims(tokenset: OpenIDTokenSet): OpenIDClaims {
-    if (typeof tokenset?.claims === 'function') {
-      return tokenset.claims();
-    }
-    if (tokenset.__identityClaims?.sub) {
-      return tokenset.__identityClaims;
-    }
-    const identityToken = tokenset.id_token ?? tokenset.__identityIdToken;
-    const decoded = identityToken ? jwt.decode(identityToken) : null;
-    if (!decoded || typeof decoded !== 'object') {
-      throw new Error('OpenID refresh returned no usable identity claims');
-    }
-    return decoded as OpenIDClaims;
-  }
-
-  async function resolveOpenIDRefreshResult({
-    tokenset,
-    strategyName,
-  }: ResolveOpenIDRefreshInput): Promise<OpenIDRefreshResolution> {
-    if (!tokenset?.access_token) {
-      throw new Error('OpenID refresh returned no access token');
-    }
-    const claims = getTokenClaims(tokenset);
-    const openIdConfig = getOpenIdConfig();
-    const openidIssuer = getOpenIdIssuer(claims, openIdConfig);
-    const { user, error, migration } = await findOpenIDUser({
-      findUser,
-      email: getOpenIdEmail(claims),
-      openidId: claims.sub,
-      openidIssuer,
-      idOnTheSource: claims.oid,
-      strategyName,
-    });
-
-    logger.debug(
-      `[refreshController] findOpenIDUser result: user=${user?.email ?? 'null'}, error=${error ?? 'null'}, migration=${migration}, userOpenidId=${user?.openidId ?? 'null'}, claimsSub=${claims.sub}`,
-    );
-    return { tokenset, claims, openidIssuer, user, error, migration };
-  }
-
-  function seedRefreshSession({
-    req,
-    user,
-    refreshToken,
-    browserRefreshToken,
-  }: SeedRefreshSessionInput): AuthIdentityContext {
-    if (!req.session) {
-      throw new Error('OpenID refresh requires an Express session');
-    }
-    const identity = createAuthIdentityContext({ user, requestUser: req.user });
-    req.session.openidTokens = {
-      ...(req.session.openidTokens ?? {}),
+  /**
+   * Builds the `CustodyTokenPayload` from a published IdP token set. `rotateCustody` re-derives the
+   * record's TTL from the payload's absolute expiries at receipt time, so any `_in` duration on the
+   * response is converted here and the previous record's TTL is never carried forward.
+   */
+  function toCustodyPayload(published: OpenIDTokenSet, refreshToken: string): CustodyTokenPayload {
+    const payload: CustodyTokenPayload = {
+      accessToken: published.access_token as string,
+      idToken: published.id_token,
       refreshToken,
-      browserRefreshToken: browserRefreshToken || refreshToken,
-      appUserId: identity.appUserId,
-      openidSubject: identity.openidSubject,
-      ...(identity.tenantId ? { tenantId: identity.tenantId } : {}),
-      ...(identity.openidIssuer ? { openidIssuer: identity.openidIssuer } : {}),
+      issuedAt: Date.now(),
     };
-    return identity;
+    if (typeof published.expires_at === 'number' && Number.isFinite(published.expires_at)) {
+      payload.accessTokenExpiresAt = published.expires_at;
+    }
+    const refreshExpiresIn = (published as { refresh_expires_in?: number | string })
+      .refresh_expires_in;
+    let parsedRefreshExpiresIn: number | undefined;
+    if (typeof refreshExpiresIn === 'number') {
+      parsedRefreshExpiresIn = refreshExpiresIn;
+    } else if (typeof refreshExpiresIn === 'string') {
+      parsedRefreshExpiresIn = Number(refreshExpiresIn);
+    }
+    if (parsedRefreshExpiresIn != null && Number.isFinite(parsedRefreshExpiresIn)) {
+      payload.refreshTokenExpiresAt = Math.floor(Date.now() / 1000) + parsedRefreshExpiresIn;
+    }
+    return payload;
   }
 
-  async function refreshOpenIDUser({
-    req,
-    res,
-    user,
-    refreshToken,
-    browserRefreshToken,
-    strategyName,
-    assertLeaseOwned,
-    deferPublication = false,
-  }: RefreshOpenIDUserArgs): Promise<OpenIDRefreshResolution> {
-    const previousSessionTokens = deferPublication ? req.session?.openidTokens : undefined;
-    const hadSessionTokens = Boolean(req.session && 'openidTokens' in req.session);
-    const identityContext = seedRefreshSession({
-      req,
-      user,
-      refreshToken,
-      browserRefreshToken,
-    });
-    let tokenset: OpenIDTokenSet | null;
-    try {
-      tokenset = await refreshOpenIDSession(req, res, user, 'id_token', identityContext, {
-        forceRefresh: true,
-        ...(assertLeaseOwned ? { assertLeaseOwned } : {}),
-        ...(deferPublication ? { deferPublication: true } : {}),
-      });
-    } finally {
-      if (deferPublication && req.session) {
-        if (hadSessionTokens) {
-          req.session.openidTokens = previousSessionTokens;
-        } else {
-          delete req.session.openidTokens;
-        }
-      }
+  /**
+   * Re-issues the token key cookie with the record's derived `expires` after a rotation. The value
+   * is unchanged by rotation, so this only refreshes the cookie's expiry, and only on a
+   * cookie-capable response whose headers have not been sent.
+   */
+  function reissueTokenKeyCookie(
+    res: OpenIDResponse | undefined,
+    tokenKey: Buffer,
+    expires: Date,
+  ): void {
+    if (!res || typeof res.cookie !== 'function' || res.headersSent) {
+      return;
     }
-    return resolveOpenIDRefreshResult({ tokenset, strategyName });
+    setTokenKeyCookie(res, tokenKey.toString('base64url'), expires);
   }
 
-  async function recoverOpenIDRefreshBridge({
-    req,
-    res,
-    refreshToken,
-    bridgedRefreshToken,
-    bridgeUser,
-  }: RecoverOpenIDRefreshBridgeInput): Promise<SharedOpenIDRefreshResult> {
-    const userId = bridgeUser._id.toString();
-    const key = createRefreshTokenBridgeFlightKey({
-      oldRefreshToken: refreshToken,
-      userId,
-      tenantId: bridgeUser.tenantId,
-      openidIssuer: bridgeUser.openidIssuer,
-    });
-    if (!key) {
-      throw new Error('OpenID refresh bridge coordination key is unavailable');
-    }
-
-    const flight = await acquireOpenIDRefreshFlight({ key });
-    if (!flight.acquired) {
-      const resolved = await waitForOpenIDRefreshFlight({ key });
-      if (!resolved?.appAuthToken || !resolved.__flightOwnerId) {
-        throw new Error('OpenID refresh bridge coordination is temporarily unavailable');
-      }
-      const publicationGeneration = {
-        key,
-        ownerId: resolved.__flightOwnerId,
-        createdAt: resolved.__flightCreatedAt,
-      };
-      const publishedAppAuthToken = await sendOpenIDAuthResponse({
-        tokenset: resolved.tokenset,
-        user: bridgeUser,
-        existingRefreshToken: refreshToken,
-        openidSubject: resolved.claims.sub,
-        openidIssuer: resolved.openidIssuer,
-        predecessorIdentity: {
-          userId,
-          tenantId: bridgeUser.tenantId,
-          openidIssuer: bridgeUser.openidIssuer,
-        },
-        predecessorAccessToken: resolved.predecessorAccessToken,
-        req,
-        res,
-        assertLeaseOwned: () => assertOpenIDRefreshFlightAvailable(publicationGeneration),
-        publicationGeneration,
-        commitPublication: async () => {},
-        preparePublication: false,
-      });
-      return { ...resolved, appAuthToken: publishedAppAuthToken ?? resolved.appAuthToken };
-    }
-
-    return withOpenIDRefreshFlightLease({
-      key,
-      ownerId: flight.ownerId,
-      operation: async ({ assertLeaseOwned, markLeaseSettled }: LeaseContext) => {
-        let completionIndeterminate = false;
-        try {
-          const resolved = await refreshOpenIDUser({
-            req,
-            res,
-            user: bridgeUser,
-            refreshToken: bridgedRefreshToken,
-            browserRefreshToken: refreshToken,
-            strategyName: 'refreshController (bridge recovery)',
-            assertLeaseOwned,
-            deferPublication: true,
-          });
-          const { tokenset, user, error } = resolved;
-          const resolvedUserId = user?._id?.toString();
-          if (!user || error || !resolvedUserId || resolvedUserId !== userId) {
-            if (resolvedUserId && resolvedUserId !== userId) {
-              logger.warn(
-                '[refreshController] Bridge recovery resolved a different user; refusing token issuance',
-                { cookieUserId: userId, resolvedUserId },
-              );
-            }
-            throw new Error('Invalid OpenID refresh token');
-          }
-
-          await assertLeaseOwned();
-          let graceBridgeVersion: string | null = null;
-          try {
-            graceBridgeVersion = await storeRefreshTokenBridge({
-              oldRefreshToken: refreshToken,
-              newRefreshToken: tokenset.refresh_token || bridgedRefreshToken,
-              userId,
-              tenantId: bridgeUser.tenantId,
-              openidIssuer: bridgeUser.openidIssuer,
-              ttl: bridgeGraceMs,
-            });
-          } catch (graceError) {
-            logger.warn(
-              '[refreshController] Bridge grace-period storage failed after successful recovery',
-              toOpenIDLogArgument(graceError),
-            );
-          }
-          if (graceBridgeVersion) {
-            try {
-              await assertLeaseOwned();
-            } catch (ownershipError) {
-              /** Ownership must be proven, not merely unreadable; see the note in `session.ts`. */
-              if (!isOpenIDRefreshOwnershipError(ownershipError)) {
-                logger.warn(
-                  '[refreshController] Keeping the grace bridge; lease ownership is undetermined',
-                  { userId, error: (ownershipError as Error)?.message },
-                );
-                throw ownershipError;
-              }
-              try {
-                await deleteRefreshTokenBridges({
-                  refreshTokens: [refreshToken],
-                  userId,
-                  tenantId: bridgeUser.tenantId,
-                  version: graceBridgeVersion,
-                });
-              } catch (cleanupError) {
-                logger.warn(
-                  '[refreshController] Failed to remove grace bridge after ownership loss',
-                  toOpenIDLogArgument(cleanupError),
-                );
-              }
-              throw ownershipError;
-            }
-          }
-
-          const publication: { result?: SharedOpenIDRefreshResult } = {};
-          const sharedResult = {
-            tokenset,
-            claims: resolved.claims,
-            openidIssuer: resolved.openidIssuer,
-            expires_at: tokenset.expires_at,
-          };
-          const appAuthToken = await sendOpenIDAuthResponse({
-            tokenset,
-            user: bridgeUser,
-            existingRefreshToken: refreshToken,
-            openidSubject: resolved.claims.sub,
-            openidIssuer: resolved.openidIssuer,
-            predecessorIdentity: {
-              userId,
-              tenantId: bridgeUser.tenantId,
-              openidIssuer: bridgeUser.openidIssuer,
-            },
-            req,
-            res,
-            assertLeaseOwned,
-            publicationGeneration: {
-              key,
-              ownerId: flight.ownerId,
-              createdAt: flight.flight?.createdAt
-                ? new Date(flight.flight.createdAt).getTime()
-                : Date.now(),
-            },
-            commitPublication: async (preparedAppAuthToken, publishedTokenset, metadata) => {
-              const result = {
-                ...sharedResult,
-                tokenset: publishedTokenset,
-                expires_at: publishedTokenset.expires_at,
-                appAuthToken: preparedAppAuthToken,
-                ...metadata,
-              };
-              let completed: RefreshFlightRecord | null = null;
-              try {
-                completed = await completeOpenIDRefreshFlight({
-                  key,
-                  ownerId: flight.ownerId,
-                  tokens: result,
-                });
-              } catch (completionError) {
-                completionIndeterminate = true;
-                try {
-                  const observed = await assertOpenIDRefreshFlightAvailable({
-                    key,
-                    ownerId: flight.ownerId,
-                  });
-                  if (typeof observed === 'object') {
-                    completed = observed;
-                    completionIndeterminate = false;
-                  }
-                } catch {
-                  /** Preserve the pending generation when completion cannot be observed. */
-                }
-                if (!completed) {
-                  throw completionError;
-                }
-              }
-              if (!completed) {
-                throw createOpenIDRefreshOwnershipError(
-                  'OpenID refresh bridge coordination ownership was lost',
-                );
-              }
-              publication.result = result;
-              markLeaseSettled();
-            },
-          });
-          if (!publication.result || publication.result.appAuthToken !== appAuthToken) {
-            throw new Error('OpenID refresh bridge publication did not settle');
-          }
-          return publication.result;
-        } catch (error) {
-          if (!completionIndeterminate) {
-            try {
-              await failOpenIDRefreshFlight({
-                key,
-                ownerId: flight.ownerId,
-                error: error instanceof Error ? error : new Error('OpenID bridge recovery failed'),
-              });
-            } catch (flightError) {
-              logger.warn('[refreshController] Failed to mark refresh bridge flight failed', {
-                error: (flightError as Error)?.message,
-              });
-            }
-          } else {
-            logger.warn(
-              '[refreshController] Keeping an indeterminate bridge generation recoverable',
-            );
-          }
-          throw error;
-        }
-      },
-    });
-  }
-
+  /**
+   * Publishes an already-obtained OpenID token set, persisting it only through the custody store
+   * (never a `sessions` row or legacy recovery document):
+   *
+   *   - When the request already carries a custody context (`req.openidCustody`), the set is a
+   *     rotation of that record under the same token key through `rotateCustody`. An applied
+   *     rotation re-issues the token key cookie from the returned `expiresAt`; an `applied: false`
+   *     result adopts the concurrent winner's record and re-issues from the winner's expiry.
+   *   - Otherwise this is a fresh authorization-code login: `setOpenIDAuthTokens` generates a token
+   *     key, seals the set through `createCustody`, and writes the token key and marker cookies.
+   *
+   * With `discardSessionTokens` set, the stale Express-session token set is dropped so the set the
+   * caller passed is the one published. Cross-worker convergence and `invalid_grant` handling live
+   * on the refresh path (`session.ts`), since this function publishes rather than grants.
+   */
   async function sendOpenIDAuthResponse({
     tokenset,
     user,
     existingRefreshToken,
     openidSubject,
     openidIssuer,
-    predecessorIdentity,
-    predecessorAccessToken,
-    rejectedRefreshTokens = [],
     req,
     res,
-    assertLeaseOwned,
-    publicationGeneration,
-    commitPublication,
-    preparePublication = true,
     discardSessionTokens = false,
   }: SendOpenIDAuthResponseInput): Promise<string | undefined> {
     const userId = user._id.toString();
-    const publicationIdentity = predecessorIdentity ?? {
-      userId,
-      tenantId: user.tenantId,
-      openidIssuer: user.openidIssuer,
-    };
-    if (!commitPublication && existingRefreshToken) {
-      const key = createRefreshTokenBridgeFlightKey({
-        oldRefreshToken: existingRefreshToken,
-        userId: publicationIdentity.userId,
-        tenantId: publicationIdentity.tenantId,
-        openidIssuer: publicationIdentity.openidIssuer,
-      });
-      if (key) {
-        const flight = await acquireOpenIDRefreshFlight({ key });
-        if (!flight.acquired) {
-          const shared = await waitForOpenIDRefreshFlight({ key });
-          if (!shared?.appAuthToken || !shared.__flightOwnerId) {
-            throw new Error('OpenID authentication publication is temporarily unavailable');
-          }
-          const sharedGeneration = {
-            key,
-            ownerId: shared.__flightOwnerId,
-            createdAt: shared.__flightCreatedAt,
-          };
-          return sendOpenIDAuthResponse({
-            tokenset: shared.tokenset,
-            user,
-            existingRefreshToken,
-            openidSubject: shared.claims.sub,
-            openidIssuer: shared.openidIssuer,
-            predecessorIdentity: publicationIdentity,
-            predecessorAccessToken: shared.predecessorAccessToken,
-            rejectedRefreshTokens,
-            req,
-            res,
-            assertLeaseOwned: () => assertOpenIDRefreshFlightAvailable(sharedGeneration),
-            publicationGeneration: sharedGeneration,
-            commitPublication: async () => {},
-            preparePublication: false,
-            discardSessionTokens,
-          });
-        }
-        let completionStarted = false;
-        return withOpenIDRefreshFlightLease({
-          key,
-          ownerId: flight.ownerId,
-          operation: async ({ assertLeaseOwned, markLeaseSettled }) =>
-            sendOpenIDAuthResponse({
-              tokenset,
-              user,
-              existingRefreshToken,
-              openidSubject,
-              openidIssuer,
-              predecessorIdentity: publicationIdentity,
-              rejectedRefreshTokens,
-              req,
-              res,
-              assertLeaseOwned,
-              publicationGeneration: {
-                key,
-                ownerId: flight.ownerId,
-                createdAt: flight.flight?.createdAt
-                  ? new Date(flight.flight.createdAt).getTime()
-                  : Date.now(),
-              },
-              discardSessionTokens,
-              commitPublication: async (appAuthToken, publishedTokenset, metadata) => {
-                const completed = await completeOpenIDRefreshFlight({
-                  key,
-                  ownerId: flight.ownerId,
-                  onWriteStart: () => {
-                    completionStarted = true;
-                  },
-                  tokens: {
-                    tokenset: publishedTokenset,
-                    claims: { sub: openidSubject ?? user.openidId ?? userId },
-                    openidIssuer: openidIssuer ?? user.openidIssuer,
-                    expires_at: publishedTokenset.expires_at,
-                    appAuthToken,
-                    ...metadata,
-                  },
-                });
-                if (!completed) {
-                  throw createOpenIDRefreshOwnershipError(
-                    'OpenID authentication publication was revoked before completion',
-                  );
-                }
-                markLeaseSettled();
-              },
-            }),
-        }).catch(async (error) => {
-          /** A completion write may have succeeded despite a lost acknowledgement. */
-          if (!completionStarted) {
-            try {
-              await failOpenIDRefreshFlight({
-                key,
-                ownerId: flight.ownerId,
-                error: error instanceof Error ? error : new Error('OpenID publication failed'),
-              });
-            } catch (flightError) {
-              logger.warn('[refreshController] Failed to settle authentication publication', {
-                error: toOpenIDLogArgument(flightError),
-              });
-            }
-          }
-          throw error;
-        });
-      }
-    }
-    if (assertLeaseOwned) {
-      await assertLeaseOwned();
-    }
+
     await reloadOpenIDSessionIfPersisted(req?.session);
     if (discardSessionTokens && req?.session?.openidTokens) {
       delete req.session.openidTokens;
     }
-    let effectiveTokenset = tokenset;
-    let effectiveExistingRefreshToken = existingRefreshToken;
-    let usesAdvancedSession = false;
-    const currentSessionTokens = req?.session?.openidTokens;
-    const proposedRefreshToken = tokenset.refresh_token || existingRefreshToken;
-    const refreshTokenAdvanced = Boolean(
-      currentSessionTokens?.refreshToken &&
-        !rejectedRefreshTokens.includes(currentSessionTokens.refreshToken) &&
-        currentSessionTokens.refreshToken !== existingRefreshToken &&
-        currentSessionTokens.refreshToken !== proposedRefreshToken,
-    );
-    const candidatePredecessorAccessToken =
-      predecessorAccessToken ?? tokenset.__predecessorAccessToken;
-    const accessTokenAdvanced = Boolean(
-      candidatePredecessorAccessToken &&
-        currentSessionTokens?.accessToken &&
-        currentSessionTokens.accessToken !== candidatePredecessorAccessToken &&
-        currentSessionTokens.accessToken !== tokenset.access_token,
-    );
-    if ((refreshTokenAdvanced || accessTokenAdvanced) && currentSessionTokens) {
-      if (!currentSessionTokens.accessToken) {
-        throw new Error('OpenID refresh result was superseded by an incomplete session state');
-      }
-      logger.debug(
-        '[refreshController] Using the advanced session instead of a stale flight result',
-      );
-      effectiveExistingRefreshToken = currentSessionTokens.refreshToken;
-      effectiveTokenset = {
-        access_token: currentSessionTokens.accessToken,
-        id_token: currentSessionTokens.idToken,
-        refresh_token: currentSessionTokens.refreshToken,
-        expires_at: currentSessionTokens.accessTokenExpiresAt,
-      };
-      usesAdvancedSession = true;
-    }
-    const advancedSessionGeneration = usesAdvancedSession
-      ? (() => {
-          const key = currentSessionTokens?.publicationFlightKey;
-          const ownerId = currentSessionTokens?.publicationFlightOwnerId;
-          const createdAt = currentSessionTokens?.publicationFlightCreatedAt;
-          if (!key && !ownerId) return undefined;
-          if (!key || !ownerId) {
-            throw createOpenIDRefreshOwnershipError(
-              'OpenID advanced session publication generation is incomplete',
-            );
-          }
-          return { key, ownerId, createdAt };
-        })()
-      : undefined;
-    if (advancedSessionGeneration) {
-      await assertOpenIDRefreshSessionGenerationAvailable(advancedSessionGeneration);
-    }
-    const effectiveSessionGeneration = advancedSessionGeneration ?? publicationGeneration;
-    const acceptedSessionIdentity: AuthIdentityContext = usesAdvancedSession
-      ? {
-          appUserId: currentSessionTokens?.appUserId ?? userId,
-          openidSubject:
-            currentSessionTokens?.openidSubject ?? openidSubject ?? user.openidId ?? userId,
-          tenantId: currentSessionTokens?.tenantId ?? user.tenantId,
-          openidIssuer: currentSessionTokens?.openidIssuer ?? openidIssuer ?? user.openidIssuer,
-        }
-      : {
-          appUserId: userId,
-          openidSubject: openidSubject ?? user.openidId ?? userId,
-          tenantId: user.tenantId,
-          openidIssuer: openidIssuer ?? user.openidIssuer,
-        };
-    const acceptedBridgeIdentity = {
-      userId: acceptedSessionIdentity.appUserId ?? userId,
-      tenantId: acceptedSessionIdentity.tenantId,
-      openidIssuer: acceptedSessionIdentity.openidIssuer,
-    };
-    const assertSettledPublicationAvailable = async (): Promise<void> => {
-      if (publicationGeneration) {
-        await assertOpenIDRefreshFlightAvailable(publicationGeneration);
-      }
-      if (
-        advancedSessionGeneration &&
-        (advancedSessionGeneration.key !== publicationGeneration?.key ||
-          advancedSessionGeneration.ownerId !== publicationGeneration?.ownerId)
-      ) {
-        await assertOpenIDRefreshSessionGenerationAvailable(advancedSessionGeneration);
-      }
-    };
-    const nextRefreshToken = effectiveTokenset.refresh_token || effectiveExistingRefreshToken;
+
+    const nextRefreshToken = tokenset.refresh_token || existingRefreshToken;
     if (!nextRefreshToken) {
       throw new Error('OpenID refresh returned no refresh token');
     }
 
-    let authTokenset = effectiveTokenset;
-    const effectiveExpiresAt = effectiveTokenset.expires_at;
-    if (effectiveTokenset.expires_in == null && Number.isFinite(effectiveExpiresAt)) {
+    let authTokenset = tokenset;
+    const effectiveExpiresAt = tokenset.expires_at;
+    if (tokenset.expires_in == null && Number.isFinite(effectiveExpiresAt)) {
       authTokenset = {
-        ...effectiveTokenset,
+        ...tokenset,
         expires_in: Math.max(0, Math.floor((effectiveExpiresAt as number) - Date.now() / 1000)),
       };
     }
@@ -909,131 +304,48 @@ export function createOpenIDRefreshRecoveryService(
     if (!preparedAppAuthToken) {
       throw new Error('OpenID refresh returned no application authentication token');
     }
-    let bridgeVersion: string | null = null;
-    const rotated =
-      !!effectiveExistingRefreshToken && nextRefreshToken !== effectiveExistingRefreshToken;
 
-    if (preparePublication) {
-      if (assertLeaseOwned) {
-        await assertLeaseOwned();
-      }
-      try {
-        await storeOpenIDSession(
-          acceptedSessionIdentity.appUserId ?? userId,
-          nextRefreshToken,
-          acceptedSessionIdentity.tenantId,
-          effectiveExistingRefreshToken,
-        );
-      } catch (error) {
-        if (rotated && effectiveExistingRefreshToken) {
-          try {
-            await storeRefreshTokenBridge({
-              oldRefreshToken: effectiveExistingRefreshToken,
-              newRefreshToken: nextRefreshToken,
-              ...acceptedBridgeIdentity,
-              ttl: bridgeGraceMs,
-            });
-          } catch (bridgeError) {
-            logger.warn(
-              '[refreshController] Failed to preserve a rotated token after durable-session failure',
-              toOpenIDLogArgument(bridgeError),
-            );
-          }
-        }
-        throw error;
-      }
-
-      if (rotated && effectiveExistingRefreshToken) {
-        try {
-          bridgeVersion = await storeRefreshTokenBridge({
-            oldRefreshToken: effectiveExistingRefreshToken,
-            newRefreshToken: nextRefreshToken,
-            ...acceptedBridgeIdentity,
-            ttl: bridgeGraceMs,
-          });
-        } catch (bridgeError) {
-          logger.warn(
-            '[refreshController] Failed to store the publication recovery bridge',
-            toOpenIDLogArgument(bridgeError),
-          );
-        }
-      }
-    }
-
-    try {
-      if (assertLeaseOwned) {
-        await assertLeaseOwned();
-      }
-      await commitPublication?.(preparedAppAuthToken, authTokenset, {
-        predecessorAccessToken: candidatePredecessorAccessToken,
-        acceptedIdentity: acceptedSessionIdentity,
+    /**
+     * A request that already opened a custody record publishes over it as a rotation under the same
+     * token key, never as a fresh record. The refresh path (`session.ts`) is where this normally
+     * happens; this branch keeps the publication custody-native if a context is present.
+     */
+    const context = (req as CustodyRequest).openidCustody;
+    if (context) {
+      const rotation = await getCustody().rotateCustody({
+        context,
+        tokens: toCustodyPayload(authTokenset, nextRefreshToken),
       });
-      await assertSettledPublicationAvailable();
-
-      const publishedAppAuthToken = setOpenIDAuthTokens(authTokenset, req, res, {
-        userId: acceptedSessionIdentity.appUserId ?? userId,
-        existingRefreshToken: effectiveExistingRefreshToken,
-        tenantId: acceptedSessionIdentity.tenantId,
-        openidSubject: acceptedSessionIdentity.openidSubject,
-        openidIssuer: acceptedSessionIdentity.openidIssuer,
-      });
-      if (req.session?.openidTokens && effectiveSessionGeneration) {
-        req.session.openidTokens.publicationFlightKey = effectiveSessionGeneration.key;
-        req.session.openidTokens.publicationFlightOwnerId = effectiveSessionGeneration.ownerId;
-        req.session.openidTokens.publicationFlightCreatedAt = effectiveSessionGeneration.createdAt;
-      }
-      await assertSettledPublicationAvailable();
-      if (publishedAppAuthToken !== preparedAppAuthToken) {
-        throw new Error('OpenID authentication publication returned an inconsistent token');
-      }
-      return publishedAppAuthToken;
-    } catch (error) {
-      if (!isOpenIDRefreshOwnershipError(error)) {
-        logger.warn(
-          '[refreshController] Keeping the prepared successor after an indeterminate publication failure',
-          toOpenIDLogArgument(error),
-        );
-        throw error;
-      }
-      try {
-        await deleteOpenIDSession(nextRefreshToken);
-      } catch (cleanupError) {
-        logger.warn(
-          '[refreshController] Failed to remove prepared session after publication failure',
-          toOpenIDLogArgument(cleanupError),
-        );
-      }
-      if (bridgeVersion && effectiveExistingRefreshToken) {
-        try {
-          await deleteRefreshTokenBridges({
-            refreshTokens: [effectiveExistingRefreshToken],
-            userId: acceptedBridgeIdentity.userId,
-            tenantId: acceptedBridgeIdentity.tenantId,
-            version: bridgeVersion,
-          });
-        } catch (cleanupError) {
-          logger.warn(
-            '[refreshController] Failed to remove the owned bridge after publication revocation',
-            toOpenIDLogArgument(cleanupError),
-          );
-        }
-      }
-      clearOpenIDAuthTokens(
-        req,
+      const activeContext: OpenIDCustodyContext = rotation.applied
+        ? rotation.context
+        : rotation.context;
+      reissueTokenKeyCookie(
         res,
-        acceptedSessionIdentity.appUserId ?? userId,
-        acceptedSessionIdentity.tenantId,
+        activeContext.tokenKey,
+        rotation.applied ? rotation.expiresAt : activeContext.recordExpiresAt,
       );
-      throw error;
+      return preparedAppAuthToken;
     }
+
+    /**
+     * Fresh login: establish the custody record and its cookies. `setOpenIDAuthTokens` is
+     * asynchronous (it calls `createCustody`), so it must be awaited.
+     */
+    const publishedAppAuthToken = await setOpenIDAuthTokens(authTokenset, req, res, {
+      userId,
+      existingRefreshToken,
+      tenantId: user.tenantId,
+      openidSubject: openidSubject ?? user.openidId ?? userId,
+      openidIssuer: openidIssuer ?? user.openidIssuer,
+    });
+    if (publishedAppAuthToken !== preparedAppAuthToken) {
+      throw new Error('OpenID authentication publication returned an inconsistent token');
+    }
+    return publishedAppAuthToken;
   }
 
   return {
-    recoverOpenIDRefreshBridge,
     revokeOpenIDRefreshTokenChain,
-    refreshOpenIDUser,
-    resolveOpenIDRefreshResult,
     sendOpenIDAuthResponse,
-    __internals: { getTokenClaims, seedRefreshSession },
   };
 }

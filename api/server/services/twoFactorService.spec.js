@@ -10,8 +10,10 @@ jest.mock('node:crypto', () => {
 
 jest.mock('@librechat/data-schemas', () => ({
   hashBackupCode: jest.fn(),
-  decryptV3: jest.fn(),
-  decryptV2: jest.fn(),
+}));
+
+jest.mock('@librechat/api', () => ({
+  readTotpSecret: jest.fn(async (storedSecret) => storedSecret),
 }));
 
 jest.mock('~/models', () => ({ updateUser: jest.fn() }));

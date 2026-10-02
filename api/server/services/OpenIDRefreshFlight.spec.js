@@ -1,9 +1,9 @@
+const crypto = require('node:crypto');
+
 jest.mock('@librechat/data-schemas', () => ({
   logger: {
     warn: jest.fn(),
   },
-  encryptV2: jest.fn(async (value) => `encrypted:${value}`),
-  decryptV2: jest.fn(async (value) => value.replace(/^encrypted:/, '')),
 }));
 
 jest.mock('@librechat/api', () => ({
@@ -34,7 +34,7 @@ jest.mock('~/models', () => ({
   releaseOpenIDRefreshFlightDelivery: jest.fn(),
 }));
 
-const { encryptV2, decryptV2 } = require('@librechat/data-schemas');
+const { sealTokens, openTokens } = require('@librechat/api');
 const db = require('~/models');
 const {
   acquireOpenIDRefreshFlight,
@@ -52,6 +52,16 @@ const {
   withOpenIDRefreshFlightLease,
   __internals,
 } = require('./OpenIDRefreshFlight');
+
+/** A fixed seal for the suite: a 32-byte AEAD key bound to one hash and identity, so a completed
+ * flight sealed with it opens under the same seal and no plaintext token survives at rest. */
+const TOKEN_KEY = crypto.randomBytes(32);
+const TOKEN_KEY_HASH = 'a'.repeat(43);
+const IDENTITY = { userId: 'user-1' };
+const seal = { aeadKey: TOKEN_KEY, tokenKeyHash: TOKEN_KEY_HASH, identity: IDENTITY };
+
+/** Seals a token set exactly as the flight store does, for use in `findOpenIDRefreshFlight` mocks. */
+const sealed = (tokens) => sealTokens(TOKEN_KEY, tokens, TOKEN_KEY_HASH, IDENTITY);
 
 describe('OpenIDRefreshFlight', () => {
   beforeEach(() => {
@@ -411,7 +421,7 @@ describe('OpenIDRefreshFlight', () => {
     }
   });
 
-  it('encrypts completed token results before storing them', async () => {
+  it('seals completed token results under the session key before storing them', async () => {
     const tokens = {
       access_token: 'access',
       id_token: 'id',
@@ -425,16 +435,21 @@ describe('OpenIDRefreshFlight', () => {
       key: 'flight-key',
       ownerId: 'owner-1',
       tokens,
+      seal,
       ttl: 60000,
     });
 
-    expect(encryptV2).toHaveBeenCalledWith(JSON.stringify(tokens));
-    expect(db.completeOpenIDRefreshFlight).toHaveBeenCalledWith({
+    const stored = db.completeOpenIDRefreshFlight.mock.calls[0][0];
+    expect(stored).toMatchObject({
       key: 'flight-key',
       ownerId: 'owner-1',
-      encryptedResult: `encrypted:${JSON.stringify(tokens)}`,
       expiresAt: expect.any(Date),
     });
+    // The stored blob is a kc1 sealed blob and carries no plaintext token at rest.
+    expect(stored.sealedResult).toEqual(expect.stringMatching(/^kc1:/));
+    expect(stored.sealedResult).not.toContain('access');
+    expect(stored.sealedResult).not.toContain('refresh');
+    expect(stored.encryptedResult).toBeUndefined();
   });
 
   it('expires a completed flight at the access token usable-lifetime boundary', async () => {
@@ -449,6 +464,7 @@ describe('OpenIDRefreshFlight', () => {
       key: 'flight-key',
       ownerId: 'owner-1',
       tokens,
+      seal,
       ttl: 60000,
     });
 
@@ -464,10 +480,6 @@ describe('OpenIDRefreshFlight', () => {
       refresh_token: 'refresh',
       expires_at: 123,
     };
-    Object.defineProperty(tokens, '__browserRefreshToken', {
-      value: 'browser-refresh',
-      enumerable: false,
-    });
     Object.defineProperty(tokens, '__predecessorRefreshToken', {
       value: 'predecessor-refresh',
       enumerable: false,
@@ -485,15 +497,18 @@ describe('OpenIDRefreshFlight', () => {
       key: 'flight-key',
       ownerId: 'owner-1',
       tokens,
+      seal,
       ttl: 60000,
     });
 
-    const serializedTokens = JSON.parse(encryptV2.mock.calls[0][0]);
-    expect(serializedTokens.__browserRefreshToken).toBe('browser-refresh');
-    expect(serializedTokens.__predecessorRefreshToken).toBe('predecessor-refresh');
-    expect(serializedTokens.__predecessorAccessToken).toBe('predecessor-access');
-    expect(serializedTokens.__deferredPublication).toBe(true);
-    expect(Object.keys(tokens)).not.toContain('__browserRefreshToken');
+    const stored = db.completeOpenIDRefreshFlight.mock.calls[0][0];
+    // Open the stored blob directly so the assertion is about what was sealed, not about the
+    // freshness filter `readCompletedFlight` applies on read.
+    const restored = openTokens(TOKEN_KEY, stored.sealedResult, TOKEN_KEY_HASH, IDENTITY);
+    expect(restored.__predecessorRefreshToken).toBe('predecessor-refresh');
+    expect(restored.__predecessorAccessToken).toBe('predecessor-access');
+    expect(restored.__deferredPublication).toBe(true);
+    expect(Object.keys(tokens)).not.toContain('__predecessorRefreshToken');
   });
 
   it('marks a flight failed with a non-sensitive message', async () => {
@@ -515,6 +530,7 @@ describe('OpenIDRefreshFlight', () => {
   it('persists logout revocation fences for every distinct flight key', async () => {
     await revokeOpenIDRefreshFlights({
       keys: ['flight-a', 'flight-b', 'flight-a', null],
+      seal,
       ttl: 60000,
     });
 
@@ -537,13 +553,15 @@ describe('OpenIDRefreshFlight', () => {
     };
     db.revokeOpenIDRefreshFlight.mockResolvedValueOnce({
       status: 'revoked',
-      encryptedResult: `encrypted:${JSON.stringify(result)}`,
+      sealedResult: sealed(result),
     });
 
-    await expect(revokeOpenIDRefreshFlights({ keys: ['flight-a'] })).resolves.toEqual([result]);
+    await expect(revokeOpenIDRefreshFlights({ keys: ['flight-a'], seal })).resolves.toEqual([
+      result,
+    ]);
   });
 
-  it('waits for and decrypts a completed flight result', async () => {
+  it('waits for and opens a completed flight result', async () => {
     const tokens = {
       access_token: 'access',
       refresh_token: 'refresh',
@@ -551,16 +569,16 @@ describe('OpenIDRefreshFlight', () => {
     };
     db.findOpenIDRefreshFlight.mockResolvedValueOnce({
       status: 'completed',
-      encryptedResult: `encrypted:${JSON.stringify(tokens)}`,
+      sealedResult: sealed(tokens),
     });
 
     const result = await waitForOpenIDRefreshFlight({
       key: 'flight-key',
+      seal,
       timeoutMs: 1,
       intervalMs: 1,
     });
 
-    expect(decryptV2).toHaveBeenCalledWith(`encrypted:${JSON.stringify(tokens)}`);
     expect(result).toEqual(tokens);
   });
 
@@ -571,22 +589,44 @@ describe('OpenIDRefreshFlight', () => {
       .mockResolvedValueOnce({
         status: 'completed',
         ownerId: 'owner-1',
-        encryptedResult: 'encrypted:{"access_token":"unpublished","__deferredPublication":true}',
+        sealedResult: sealed({ access_token: 'unpublished', __deferredPublication: true }),
       })
       .mockResolvedValueOnce({
         status: 'completed',
         ownerId: 'owner-1',
-        encryptedResult: 'encrypted:{"access_token":"published"}',
+        sealedResult: sealed({ access_token: 'published' }),
       });
     await expect(
       waitForOpenIDRefreshFlight({
         key: 'flight-key',
+        seal,
         requirePublication: true,
         timeoutMs: 1000,
         intervalMs: 1,
       }),
     ).resolves.toEqual({ access_token: 'published' });
     expect(db.findOpenIDRefreshFlight).toHaveBeenCalledTimes(4);
+  });
+
+  it('yields no token set when a waiter cannot open the sealed result', async () => {
+    const foreignSeal = {
+      aeadKey: crypto.randomBytes(32),
+      tokenKeyHash: TOKEN_KEY_HASH,
+      identity: IDENTITY,
+    };
+    db.findOpenIDRefreshFlight.mockResolvedValue({
+      status: 'completed',
+      sealedResult: sealed({ access_token: 'access', refresh_token: 'refresh' }),
+    });
+
+    await expect(
+      waitForOpenIDRefreshFlight({
+        key: 'flight-key',
+        seal: foreignSeal,
+        timeoutMs: 5,
+        intervalMs: 1,
+      }),
+    ).resolves.toBeNull();
   });
 
   it.each(['before-read', 'during-read', 'during-delay'])(
@@ -604,6 +644,7 @@ describe('OpenIDRefreshFlight', () => {
       if (phase === 'before-read') controller.abort(reason);
       const waiting = waitForOpenIDRefreshFlight({
         key: 'publication-key',
+        seal,
         requirePublication: true,
         timeoutMs: 10000,
         intervalMs: 5000,
@@ -629,11 +670,12 @@ describe('OpenIDRefreshFlight', () => {
       status: 'completed',
       ownerId: 'owner-1',
       expiresAt: new Date(Date.now() + 60000),
-      encryptedResult: 'encrypted:{"access_token":"unpublished","__deferredPublication":true}',
+      sealedResult: sealed({ access_token: 'unpublished', __deferredPublication: true }),
     });
     await expect(
       waitForOpenIDRefreshFlight({
         key: 'flight-key',
+        seal,
         requirePublication: true,
         timeoutMs: 5,
         intervalMs: 1,
@@ -646,7 +688,7 @@ describe('OpenIDRefreshFlight', () => {
       status: 'failed',
       errorMessage: 'OPENID_REFRESH_CANCELLED_BEFORE_GRANT',
     });
-    await expect(waitForOpenIDRefreshFlight({ key: 'flight-key' })).rejects.toMatchObject({
+    await expect(waitForOpenIDRefreshFlight({ key: 'flight-key', seal })).rejects.toMatchObject({
       status: 503,
       retryable: true,
     });
@@ -659,7 +701,7 @@ describe('OpenIDRefreshFlight', () => {
     });
 
     await expect(
-      waitForOpenIDRefreshFlight({ key: 'flight-key', timeoutMs: 1, intervalMs: 1 }),
+      waitForOpenIDRefreshFlight({ key: 'flight-key', seal, timeoutMs: 1, intervalMs: 1 }),
     ).rejects.toThrow('invalid_grant');
   });
 
@@ -670,7 +712,7 @@ describe('OpenIDRefreshFlight', () => {
     });
 
     await expect(
-      waitForOpenIDRefreshFlight({ key: 'flight-key', timeoutMs: 1, intervalMs: 1 }),
+      waitForOpenIDRefreshFlight({ key: 'flight-key', seal, timeoutMs: 1, intervalMs: 1 }),
     ).rejects.toThrow('revoked by logout');
   });
 
@@ -690,34 +732,46 @@ describe('OpenIDRefreshFlight', () => {
       expires_at: Math.floor(Date.now() / 1000) + 10,
     };
     await expect(
-      __internals.readCompletedFlight({
-        status: 'completed',
-        encryptedResult: `encrypted:${JSON.stringify(tokens)}`,
-      }),
+      __internals.readCompletedFlight(
+        {
+          status: 'completed',
+          sealedResult: sealed(tokens),
+        },
+        seal,
+      ),
     ).resolves.toBeNull();
   });
 
   it('exposes completed-flight parsing for focused tests', async () => {
     const tokens = { access_token: 'access' };
     await expect(
-      __internals.readCompletedFlight({
-        status: 'completed',
-        encryptedResult: `encrypted:${JSON.stringify(tokens)}`,
-      }),
+      __internals.readCompletedFlight(
+        {
+          status: 'completed',
+          sealedResult: sealed(tokens),
+        },
+        seal,
+      ),
     ).resolves.toEqual(tokens);
   });
 
   it('restores publication metadata as non-enumerable', async () => {
     const createdAt = new Date('2026-08-29T12:00:00.000Z');
-    const result = await __internals.readCompletedFlight({
-      status: 'completed',
-      ownerId: 'generation-owner',
-      createdAt,
-      encryptedResult:
-        'encrypted:{"access_token":"access","__browserRefreshToken":"browser-refresh","__predecessorRefreshToken":"predecessor-refresh","__predecessorAccessToken":"predecessor-access","__deferredPublication":true}',
-    });
+    const result = await __internals.readCompletedFlight(
+      {
+        status: 'completed',
+        ownerId: 'generation-owner',
+        createdAt,
+        sealedResult: sealed({
+          access_token: 'access',
+          __predecessorRefreshToken: 'predecessor-refresh',
+          __predecessorAccessToken: 'predecessor-access',
+          __deferredPublication: true,
+        }),
+      },
+      seal,
+    );
 
-    expect(result.__browserRefreshToken).toBe('browser-refresh');
     expect(result.__predecessorRefreshToken).toBe('predecessor-refresh');
     expect(result.__predecessorAccessToken).toBe('predecessor-access');
     expect(result.__deferredPublication).toBe(true);

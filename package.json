@@ -150,6 +150,8 @@
     "migrate:code-file-duplicates:dry-run": "node config/migrate-code-file-duplicates.js --dry-run",
     "migrate:code-file-duplicates": "node config/migrate-code-file-duplicates.js",
     "migrate:code-file-duplicates:batch": "node config/migrate-code-file-duplicates.js --batch-size=50",
+    "migrate:key-custody": "node config/migrate-key-custody.js",
+    "migrate:key-custody:dry-run": "node config/migrate-key-custody.js --dry-run",
     "lighthouse": "npm run e2e:prepare && npm run lighthouse:run",
     "lighthouse:run": "playwright test --config=e2e/playwright.config.lighthouse.ts",
     "lighthouse:regression": "cross-env LIGHTHOUSE_REGRESSION=serial-reads npm run lighthouse:run"

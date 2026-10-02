@@ -8,6 +8,12 @@ jest.mock('~/models', () => ({
   deleteAllUserSessions: jest.fn().mockResolvedValue(true),
 }));
 
+// The ban sweep deletes every custody record for the user alongside the session sweep.
+const mockDeleteAllForUser = jest.fn().mockResolvedValue(undefined);
+jest.mock('~/server/services/AuthService', () => ({
+  getTokenCustodyService: () => ({ deleteAllForUser: mockDeleteAllForUser }),
+}));
+
 describe('banViolation', () => {
   let mongoServer;
   let req, res, errorMessage;
@@ -26,6 +32,7 @@ describe('banViolation', () => {
   beforeEach(() => {
     req = {
       ip: '127.0.0.1',
+      user: { id: 'user-1', tenantId: 'tenant-a' },
       cookies: {
         refreshToken: 'someToken',
       },
@@ -103,6 +110,23 @@ describe('banViolation', () => {
     errorMessage.violation_count = 39;
     await banViolation(req, res, errorMessage);
     expect(res.clearCookie).toHaveBeenCalledWith('refreshToken');
+  });
+
+  it('sweeps the user custody records alongside the sessions when the ban threshold is crossed', async () => {
+    errorMessage.prev_count = 19;
+    errorMessage.violation_count = 39;
+    await banViolation(req, res, errorMessage);
+    expect(mockDeleteAllForUser).toHaveBeenCalledWith({
+      userId: errorMessage.user_id,
+      tenantId: 'tenant-a',
+    });
+  });
+
+  it('does not sweep custody records when the threshold is not crossed', async () => {
+    errorMessage.prev_count = 0;
+    errorMessage.violation_count = 19;
+    await banViolation(req, res, errorMessage);
+    expect(mockDeleteAllForUser).not.toHaveBeenCalled();
   });
 
   it('should not ban if violation_count does not change', async () => {

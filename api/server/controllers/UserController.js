@@ -18,7 +18,11 @@ const {
 const { Tools, Constants, FileSources, ResourceType } = require('librechat-data-provider');
 const { updateUserPluginAuth, deleteUserPluginAuth } = require('~/server/services/PluginService');
 const { verifyOTPOrBackupCode } = require('~/server/services/twoFactorService');
-const { verifyEmail, resendVerificationEmail } = require('~/server/services/AuthService');
+const {
+  verifyEmail,
+  resendVerificationEmail,
+  getTokenCustodyService,
+} = require('~/server/services/AuthService');
 const { getMCPManager } = require('~/config');
 const { maybeUninstallOAuthMCP } = require('~/server/services/MCP/oauthCleanup');
 const { invalidateCachedTools } = require('~/server/services/Config/getCachedTools');
@@ -503,6 +507,11 @@ const deleteUserController = async (req, res) => {
 
     await db.deleteMessages({ user: user.id });
     await db.deleteAllUserSessions({ userId: user.id });
+    /**
+     * Delete every custody record for the user alongside the session sweep, so no record holding a
+     * sealed IdP token survives for a user that no longer exists.
+     */
+    await getTokenCustodyService().deleteAllForUser({ userId: user.id, tenantId });
     await db.deleteTransactions({ user: user.id });
     await db.deleteUserKey({ userId: user.id, all: true });
     await db.deleteBalances({ user: user._id });

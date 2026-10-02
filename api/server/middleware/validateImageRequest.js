@@ -5,6 +5,7 @@ const {
   getBasePath,
   isEnabled,
 } = require('@librechat/api');
+const { getTenantId } = require('@librechat/data-schemas');
 const {
   findSession,
   getAgent,
@@ -47,6 +48,13 @@ function createValidateImageRequest(config = {}) {
     isOpenIdReuseEnabled: () => isEnabled(process.env.OPENID_REUSE_TOKENS),
     getBasePath,
     findSession,
+    // The OpenID-reuse binding check reaches the process-wide custody service lazily, so the
+    // instance is constructed on first use rather than at module load and no require cycle forms
+    // through AuthService at load time, matching the refresh controller and the OBO paths.
+    get custody() {
+      return require('~/server/services/AuthService').getTokenCustodyService();
+    },
+    getTenantId,
     getAgent,
     getAssistant,
     getUserById,
