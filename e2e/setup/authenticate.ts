@@ -54,7 +54,9 @@ async function authenticate(config: FullConfig, user: User) {
     ...(chromiumChannel ? { channel: chromiumChannel } : {}),
   });
   try {
-    const page = await browser.newPage();
+    /** Pin the locale: setup matches English labels ("Sign up"), and Chrome otherwise
+     *  renders the UI in the OS language, which `LANG`/`LC_ALL` do not override on macOS. */
+    const page = await browser.newPage({ locale: 'en-US' });
     console.log('🤖: 🗝  authenticating user:', user.email);
 
     if (typeof baseURL !== 'string') {

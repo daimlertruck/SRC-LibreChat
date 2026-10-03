@@ -66,7 +66,11 @@ export async function auditPage({
   fs.mkdirSync(directory, { recursive: true });
 
   const cli = require.resolve('lighthouse/cli/index.js');
-  const chromeFlags = `--headless=new ${process.env.LIGHTHOUSE_CHROME_FLAGS ?? ''}`.trim();
+  /** Lighthouse launches its own Chrome outside Playwright's `en-US` default, so the measured
+   *  page would otherwise render in the OS language. `--accept-lang` sets `navigator.language`
+   *  on every platform; `--lang` is ignored on macOS. */
+  const chromeFlags =
+    `--headless=new --accept-lang=en-US ${process.env.LIGHTHOUSE_CHROME_FLAGS ?? ''}`.trim();
   const flags = [
     url,
     '--quiet',
