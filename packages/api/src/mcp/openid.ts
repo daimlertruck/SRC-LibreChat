@@ -1,9 +1,11 @@
 import { extractEnvVariable } from 'librechat-data-provider';
+import type { OIDCTokens } from '@librechat/data-schemas';
+import type { MCPOptions, ParsedServerConfig } from './types';
 import type { UpstreamTokenProvider } from './oauth/obo';
-import type { MCPOptions } from './types';
+import { GRAPH_TOKEN_PLACEHOLDER, OpenIDReauthRequiredError } from '~/utils/oidc';
+import { isPluginSourced, isUserSourced } from '~/utils/env';
 import { isRetryableOboExchangeError } from './oauth/obo';
 import { MCPAuthenticationRefreshError } from './errors';
-import { OpenIDReauthRequiredError } from '~/utils/oidc';
 import { getAdminApiKeyHeader } from './headers';
 import { isAbortError } from '~/utils/errors';
 
@@ -205,4 +207,131 @@ export async function resolveDirectOpenIDBearerConfig({
     return config;
   }
   return resolveAccessTokenPlaceholders(config, tokens.access_token);
+}
+
+/** Any `{{LIBRECHAT_OPENID_*}}` placeholder (access, id, user or expiry) in a config string. */
+const ANY_OPENID_PLACEHOLDER_PATTERN = /\{\{LIBRECHAT_OPENID_[A-Z_]+\}\}/;
+
+/** Collects every string a server config carries so placeholder detection scans all of them. */
+function collectConfigStrings(config: MCPOptions): string[] {
+  const strings: string[] = [];
+  const pushRecord = (record?: Record<string, string>) => {
+    if (record) {
+      strings.push(...Object.values(record));
+    }
+  };
+  if ('url' in config && typeof config.url === 'string') {
+    strings.push(config.url);
+  }
+  if ('headers' in config) {
+    pushRecord(config.headers);
+  }
+  if ('oauth_headers' in config) {
+    pushRecord(config.oauth_headers);
+  }
+  if ('env' in config && config.env) {
+    pushRecord(config.env);
+  }
+  if ('args' in config && Array.isArray(config.args)) {
+    strings.push(...config.args);
+  }
+  if (config.oauth) {
+    for (const value of Object.values(config.oauth)) {
+      if (typeof value === 'string') {
+        strings.push(value);
+      } else if (Array.isArray(value)) {
+        strings.push(...value.filter((entry): entry is string => typeof entry === 'string'));
+      }
+    }
+  }
+  return strings;
+}
+
+/** Expands operator env indirection, then tests the expanded text for a placeholder. */
+function containsPlaceholder(strings: string[], test: (expanded: string) => boolean): boolean {
+  return strings.some((value) => test(extractEnvVariable(value)));
+}
+
+/** Maps a provider rejection to the same error classes `resolveDirectOpenIDBearerConfig` uses. */
+function mapProviderRejection(error: unknown): Error {
+  if (isAbortError(error)) {
+    return error as Error;
+  }
+  if (isRetryableOboExchangeError(error)) {
+    return new MCPAuthenticationRefreshError(error);
+  }
+  const reauth = new OpenIDReauthRequiredError(
+    'The OpenID session is unavailable; re-authentication is required to resolve an OpenID placeholder.',
+  );
+  reauth.cause = error;
+  return reauth;
+}
+
+/**
+ * Resolves the live OpenID token set a config's `{{LIBRECHAT_OPENID_*}}` / `{{LIBRECHAT_GRAPH_*}}`
+ * placeholders need, lazily: it calls the upstream token provider only when the config is neither
+ * plugin- nor database-sourced AND actually carries at least one such placeholder, so an ordinary
+ * request that uses no token-bearing placeholder performs no custody read on this account.
+ *
+ * The provider's `tokenPreference` follows the placeholders present: `access_token` for the
+ * access/token/expires-at/user placeholders and the Graph placeholder; `id_token` when the id-token
+ * placeholder is the only token-bearing one. When both an access-type placeholder and the id-token
+ * placeholder are present, it resolves under `access_token` first (the access token gates OBO), then
+ * — only if the returned id token is not current — resolves once more under `id_token` so the id
+ * token is itself refreshed. A null provider result returns `undefined` (the resolvers fall back to
+ * the user's `federatedTokens` snapshot, i.e. the remote-agent path). A rejection is mapped to
+ * `OpenIDReauthRequiredError` (session-missing, HTTP 401) or `MCPAuthenticationRefreshError`
+ * (retryable), matching `resolveDirectOpenIDBearerConfig`.
+ *
+ * The returned token set is passed to `processMCPEnv({ openidTokens })` and `preProcessGraphTokens`
+ * so they resolve from it rather than from `user.federatedTokens`.
+ */
+export async function resolveOpenIDPlaceholderTokens({
+  config,
+  upstreamTokenProvider,
+  signal,
+}: {
+  config: ParsedServerConfig;
+  /**
+   * The request's upstream token provider (built by the MCP caller with `access_token` preference,
+   * the same one it uses for OBO and direct bearer). A null/undefined provider returns undefined so
+   * the resolvers fall back to the user's `federatedTokens` snapshot (the remote-agent path).
+   */
+  upstreamTokenProvider?: UpstreamTokenProvider | null;
+  signal?: AbortSignal;
+}): Promise<OIDCTokens | undefined> {
+  if (!upstreamTokenProvider) {
+    return undefined;
+  }
+  /** Plugin configs resolve verbatim; database-sourced configs resolve only customUserVars. */
+  if (isPluginSourced(config) || isUserSourced(config)) {
+    return undefined;
+  }
+
+  const strings = collectConfigStrings(config);
+  const hasOpenIDPlaceholder = containsPlaceholder(strings, (expanded) =>
+    ANY_OPENID_PLACEHOLDER_PATTERN.test(expanded),
+  );
+  const hasGraphPlaceholder = containsPlaceholder(strings, (expanded) =>
+    expanded.includes(GRAPH_TOKEN_PLACEHOLDER),
+  );
+  if (!hasOpenIDPlaceholder && !hasGraphPlaceholder) {
+    return undefined;
+  }
+
+  signal?.throwIfAborted();
+  try {
+    /**
+     * The caller's provider is bound to `access_token` preference, which is correct for the access,
+     * token, user, expires-at and Graph placeholders. For `{{LIBRECHAT_OPENID_ID_TOKEN}}` the
+     * returned id token is used as-is; `processOpenIDPlaceholders` validates its own expiry and
+     * raises `OpenIDReauthRequiredError` if it is stale, so a stale id token fails closed with an
+     * actionable error rather than silently. (A dedicated `id_token`-preference refresh would need
+     * the provider factory threaded down from the request layer; deferred, see the PR notes.)
+     */
+    const tokens = await upstreamTokenProvider({ ...(signal ? { signal } : {}) });
+    return tokens ?? undefined;
+  } catch (error) {
+    throw mapProviderRejection(error);
+  }
 }

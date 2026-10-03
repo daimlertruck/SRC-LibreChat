@@ -83,9 +83,22 @@ export interface TokenCustodyRotation {
   expiresAt: Date;
 }
 
-/** Reader query: a lookup by hash, scoped to the caller's tenant. */
+/**
+ * Reader query: a lookup by hash alone. The unique `tokenKeyHash` index identifies at most one
+ * record, and the record's own `tenantId` is returned for the caller to compare, so a tenant is not
+ * a lookup input.
+ */
 export interface TokenCustodyQuery {
   tokenKeyHash: string;
+}
+
+/**
+ * The projected result of `findTokenCustodyMeta`: the record's identity columns needed for the
+ * file-authorization and existence checks, never the sealed blob. `tenantId` is present only when
+ * the record carries one, so the caller can tell "no tenant" from a tenant value.
+ */
+export interface TokenCustodyMeta {
+  userId: string;
   tenantId?: string;
 }
 

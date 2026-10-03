@@ -18,7 +18,7 @@ import type {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { SearchResultData, UIResource, TPlugin } from 'librechat-data-provider';
-import type { TokenMethods, IUser } from '@librechat/data-schemas';
+import type { TokenMethods, IUser, OIDCTokens } from '@librechat/data-schemas';
 import type { LCTool } from '@librechat/agents';
 import type {
   OboTokenResolver,
@@ -243,6 +243,13 @@ export interface BasicConnectionOptions {
   allowedAddresses?: string[] | null;
   /** When true, only resolve customUserVars in processMCPEnv (for DB-stored servers) */
   dbSourced?: boolean;
+  /**
+   * The live OpenID token set resolved from custody by the async create path, carried to the
+   * synchronous constructor's `processMCPEnv` pass so `{{LIBRECHAT_OPENID_*}}` placeholders resolve
+   * from custody rather than the user's empty `federatedTokens` snapshot. Absent when the config
+   * carries no such placeholder or no provider was available.
+   */
+  openidTokens?: OIDCTokens | null;
   /** When true, serverConfig has already gone through processMCPEnv for this request */
   skipEnvProcessing?: boolean;
   /** When true, the connection is intentionally short-lived for a single request/tool call */

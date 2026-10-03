@@ -5,7 +5,7 @@ import type {
   OpenIDTokenSet,
   OpenIDUser,
 } from './types';
-import type { OpenIDCustodyContext, TokenCustodyService } from '~/auth/custody/service';
+import type { TokenCustodyService } from '~/auth/custody/service';
 import type { CustodyFlightSeal, TokenResult } from './flight';
 import type { CustodyTokenPayload } from '~/auth/custody/aead';
 import type { CustodyRequest } from '~/auth/custody/loader';
@@ -20,7 +20,6 @@ interface RevokeOpenIDRefreshTokenChainInput {
   user: OpenIDUser;
   identityContext: AuthIdentityContext;
   refreshTokens: string[];
-  publicationKeys?: string[];
   ttl: number;
 }
 
@@ -33,9 +32,10 @@ interface SendOpenIDAuthResponseInput {
   req: OpenIDRequest;
   res: OpenIDResponse;
   /**
-   * A fresh authorization-code login supersedes whatever token set the Express session still
-   * holds from an earlier authentication. The advanced-session comparison exists for refresh
-   * races and must not republish that stale set in place of the tokens the IdP just issued.
+   * Retained on the input for the admin exchange caller (`oauth.js`), but inert since key custody
+   * retired `req.session.openidTokens`: there is no stale session token set to discard. A fresh
+   * login publishes over the request's own custody context, so the carried id_token comes from
+   * there rather than from the session.
    */
   discardSessionTokens?: boolean;
 }
@@ -131,7 +131,6 @@ export function createOpenIDRefreshRecoveryService(
     user,
     identityContext,
     refreshTokens,
-    publicationKeys = [],
     ttl,
   }: RevokeOpenIDRefreshTokenChainInput): Promise<string[]> {
     const userId = identityContext.appUserId;
@@ -154,7 +153,7 @@ export function createOpenIDRefreshRecoveryService(
     for (const target of frontier) {
       scheduled.add(`${target.refreshToken}\x1e${identityKey(target.identity)}`);
     }
-    let directPublicationKeys = [...new Set(publicationKeys.filter(Boolean))];
+    let directPublicationKeys: string[] = [];
 
     for (let depth = 0; frontier.length > 0 || directPublicationKeys.length > 0; depth++) {
       if (depth >= MAX_LOGOUT_REFRESH_CHAIN_DEPTH) {
@@ -275,14 +274,10 @@ export function createOpenIDRefreshRecoveryService(
     openidIssuer,
     req,
     res,
-    discardSessionTokens = false,
   }: SendOpenIDAuthResponseInput): Promise<string | undefined> {
     const userId = user._id.toString();
 
     await reloadOpenIDSessionIfPersisted(req?.session);
-    if (discardSessionTokens && req?.session?.openidTokens) {
-      delete req.session.openidTokens;
-    }
 
     const nextRefreshToken = tokenset.refresh_token || existingRefreshToken;
     if (!nextRefreshToken) {
@@ -297,33 +292,39 @@ export function createOpenIDRefreshRecoveryService(
         expires_in: Math.max(0, Math.floor((effectiveExpiresAt as number) - Date.now() / 1000)),
       };
     }
-    const preparedAppAuthToken = getOpenIDAppAuthToken(
-      authTokenset,
-      req.session?.openidTokens?.idToken,
-    );
+
+    /**
+     * A request that already opened a custody record publishes over it as a rotation under the same
+     * token key, never as a fresh record. The carried id_token used to select the app auth token
+     * comes from that opened context (the retired `req.session.openidTokens` no longer holds it);
+     * `discardSessionTokens` is now moot because no session token set is kept.
+     */
+    const context = (req as CustodyRequest).openidCustody;
+    const carriedIdToken = context?.tokens?.idToken;
+    const preparedAppAuthToken = getOpenIDAppAuthToken(authTokenset, carriedIdToken);
     if (!preparedAppAuthToken) {
       throw new Error('OpenID refresh returned no application authentication token');
     }
 
-    /**
-     * A request that already opened a custody record publishes over it as a rotation under the same
-     * token key, never as a fresh record. The refresh path (`session.ts`) is where this normally
-     * happens; this branch keeps the publication custody-native if a context is present.
-     */
-    const context = (req as CustodyRequest).openidCustody;
     if (context) {
       const rotation = await getCustody().rotateCustody({
         context,
         tokens: toCustodyPayload(authTokenset, nextRefreshToken),
       });
-      const activeContext: OpenIDCustodyContext = rotation.applied
-        ? rotation.context
-        : rotation.context;
-      reissueTokenKeyCookie(
-        res,
-        activeContext.tokenKey,
-        rotation.applied ? rotation.expiresAt : activeContext.recordExpiresAt,
-      );
+      /**
+       * This is a fresh authorization-code login publishing over the request's own just-opened
+       * record, so a `gone` outcome (the record vanished between open and rotate) is treated like a
+       * superseded one here: re-issue from whatever context the rotation reports and let the record
+       * stand. The refresh path owns the fail-closed-and-revoke behavior; this login path has no
+       * stale credential to strand.
+       */
+      if (rotation.outcome !== 'gone') {
+        reissueTokenKeyCookie(
+          res,
+          rotation.context.tokenKey,
+          rotation.outcome === 'applied' ? rotation.expiresAt : rotation.context.recordExpiresAt,
+        );
+      }
       return preparedAppAuthToken;
     }
 

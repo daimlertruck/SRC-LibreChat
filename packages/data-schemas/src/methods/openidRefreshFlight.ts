@@ -1,4 +1,3 @@
-import { setTimeout as delay } from 'node:timers/promises';
 import type { Model } from 'mongoose';
 import type {
   IOpenIDRefreshFlight,
@@ -9,13 +8,9 @@ import type {
   OpenIDRefreshFlightRevokeData,
   OpenIDRefreshFlightQuery,
   OpenIDRefreshFlightAcquireResult,
-  OpenIDRefreshFlightClaimDeliveryData,
-  OpenIDRefreshFlightReleaseDeliveryData,
 } from '~/types';
 import { createIndexesWithRetry } from '~/utils/retry';
 import logger from '~/config/winston';
-
-const DELIVERY_RELEASE_POLL_MS = 100;
 
 function hasErrorCode(error: unknown): error is { code: number } {
   return (
@@ -45,12 +40,6 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
   ) => Promise<IOpenIDRefreshFlight | null>;
   revokeOpenIDRefreshFlight: (
     data: OpenIDRefreshFlightRevokeData,
-  ) => Promise<IOpenIDRefreshFlight | null>;
-  claimOpenIDRefreshFlightDelivery: (
-    data: OpenIDRefreshFlightClaimDeliveryData,
-  ) => Promise<IOpenIDRefreshFlight | null>;
-  releaseOpenIDRefreshFlightDelivery: (
-    data: OpenIDRefreshFlightReleaseDeliveryData,
   ) => Promise<IOpenIDRefreshFlight | null>;
   findOpenIDRefreshFlight: (
     query: OpenIDRefreshFlightQuery,
@@ -115,8 +104,6 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
           $unset: {
             sealedResult: '',
             errorMessage: '',
-            deliveryId: '',
-            deliveryExpiresAt: '',
             revocationRequestedAt: '',
           },
         },
@@ -162,8 +149,6 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
           },
           $unset: {
             errorMessage: '',
-            deliveryId: '',
-            deliveryExpiresAt: '',
             revocationRequestedAt: '',
           },
         },
@@ -223,8 +208,6 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
           },
           $unset: {
             sealedResult: '',
-            deliveryId: '',
-            deliveryExpiresAt: '',
             revocationRequestedAt: '',
           },
         },
@@ -254,127 +237,6 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
     }
   }
 
-  async function claimOpenIDRefreshFlightDelivery(
-    data: OpenIDRefreshFlightClaimDeliveryData,
-  ): Promise<IOpenIDRefreshFlight | null> {
-    try {
-      const OpenIDRefreshFlight = mongoose.models
-        .OpenIDRefreshFlight as Model<IOpenIDRefreshFlight>;
-      try {
-        return await OpenIDRefreshFlight.findOneAndUpdate(
-          {
-            key: data.key,
-            ownerId: data.ownerId,
-            status: 'completed',
-            revocationRequestedAt: { $exists: false },
-            $or: [
-              { deliveryId: { $exists: false } },
-              { deliveryExpiresAt: { $exists: false } },
-              { deliveryExpiresAt: { $lte: new Date() } },
-            ],
-          },
-          {
-            $set: {
-              deliveryId: data.deliveryId,
-              deliveryExpiresAt: data.deliveryExpiresAt,
-              updatedAt: new Date(),
-            },
-            $max: { expiresAt: data.deliveryExpiresAt },
-            ...(data.createdAt
-              ? {
-                  $setOnInsert: {
-                    createdAt: data.createdAt,
-                    lockExpiresAt: data.deliveryExpiresAt,
-                  },
-                }
-              : {}),
-          },
-          { new: true, upsert: Boolean(data.createdAt) },
-        ).lean<IOpenIDRefreshFlight>();
-      } catch (error) {
-        if (isDuplicateKeyError(error)) return null;
-        throw error;
-      }
-    } catch (error) {
-      logger.debug('[claimOpenIDRefreshFlightDelivery] Error claiming delivery:', error);
-      throw error;
-    }
-  }
-
-  async function releaseOpenIDRefreshFlightDelivery(
-    data: OpenIDRefreshFlightReleaseDeliveryData,
-  ): Promise<IOpenIDRefreshFlight | null> {
-    const OpenIDRefreshFlight = mongoose.models.OpenIDRefreshFlight as Model<IOpenIDRefreshFlight>;
-    const delivery = {
-      key: data.key,
-      ownerId: data.ownerId,
-      deliveryId: data.deliveryId,
-      status: 'completed',
-    } as const;
-    try {
-      const revoked = await OpenIDRefreshFlight.findOneAndUpdate(
-        { ...delivery, revocationRequestedAt: { $exists: true } },
-        {
-          $set: {
-            ownerId: 'revoked',
-            status: 'revoked',
-            errorMessage: 'OpenID refresh was revoked by logout',
-            updatedAt: new Date(),
-          },
-          $unset: {
-            deliveryId: '',
-            deliveryExpiresAt: '',
-            revocationRequestedAt: '',
-          },
-        },
-        { new: true },
-      ).lean<IOpenIDRefreshFlight>();
-      if (revoked) return revoked;
-
-      const synthetic = await OpenIDRefreshFlight.findOneAndDelete({
-        ...delivery,
-        sealedResult: { $exists: false },
-        revocationRequestedAt: { $exists: false },
-      }).lean<IOpenIDRefreshFlight>();
-      if (synthetic) return null;
-
-      const completed = await OpenIDRefreshFlight.findOneAndUpdate(
-        {
-          ...delivery,
-          sealedResult: { $exists: true },
-          revocationRequestedAt: { $exists: false },
-        },
-        {
-          $set: { updatedAt: new Date() },
-          $unset: { deliveryId: '', deliveryExpiresAt: '' },
-        },
-        { new: true },
-      ).lean<IOpenIDRefreshFlight>();
-      if (completed) return completed;
-
-      return await OpenIDRefreshFlight.findOneAndUpdate(
-        { ...delivery, revocationRequestedAt: { $exists: true } },
-        {
-          $set: {
-            ownerId: 'revoked',
-            status: 'revoked',
-            errorMessage: 'OpenID refresh was revoked by logout',
-            updatedAt: new Date(),
-          },
-          $unset: {
-            deliveryId: '',
-            deliveryExpiresAt: '',
-            revocationRequestedAt: '',
-          },
-        },
-        { new: true },
-      ).lean<IOpenIDRefreshFlight>();
-    } catch (error) {
-      logger.debug('[releaseOpenIDRefreshFlightDelivery] Error releasing delivery:', error);
-      throw error;
-    }
-  }
-
   async function revokeOpenIDRefreshFlight(
     data: OpenIDRefreshFlightRevokeData,
   ): Promise<IOpenIDRefreshFlight | null> {
@@ -384,14 +246,7 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
     try {
       for (;;) {
         const revoked = await OpenIDRefreshFlight.findOneAndUpdate(
-          {
-            key: data.key,
-            $or: [
-              { deliveryId: { $exists: false } },
-              { deliveryExpiresAt: { $exists: false } },
-              { deliveryExpiresAt: { $lte: new Date() } },
-            ],
-          },
+          { key: data.key },
           {
             $set: {
               ownerId: 'revoked',
@@ -402,35 +257,12 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
               updatedAt: new Date(),
             },
             $unset: {
-              deliveryId: '',
-              deliveryExpiresAt: '',
               revocationRequestedAt: '',
             },
           },
           { new: true },
         ).lean<IOpenIDRefreshFlight>();
         if (revoked) return revoked;
-
-        const delivering = await OpenIDRefreshFlight.findOneAndUpdate(
-          {
-            key: data.key,
-            status: 'completed',
-            deliveryId: { $exists: true },
-            deliveryExpiresAt: { $gt: new Date() },
-          },
-          {
-            $set: {
-              revocationRequestedAt: new Date(),
-              expiresAt: data.expiresAt,
-              updatedAt: new Date(),
-            },
-          },
-          { new: true },
-        ).lean<IOpenIDRefreshFlight>();
-        if (delivering) {
-          await delay(DELIVERY_RELEASE_POLL_MS);
-          continue;
-        }
 
         try {
           return await OpenIDRefreshFlight.create({
@@ -455,12 +287,10 @@ export function createOpenIDRefreshFlightMethods(mongoose: typeof import('mongoo
 
   return {
     acquireOpenIDRefreshFlight,
-    claimOpenIDRefreshFlightDelivery,
     renewOpenIDRefreshFlight,
     completeOpenIDRefreshFlight,
     failOpenIDRefreshFlight,
     revokeOpenIDRefreshFlight,
-    releaseOpenIDRefreshFlightDelivery,
     findOpenIDRefreshFlight,
   };
 }

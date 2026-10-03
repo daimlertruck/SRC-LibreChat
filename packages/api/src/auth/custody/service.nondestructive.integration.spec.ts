@@ -106,7 +106,7 @@ const openWithOwnKey = ({ identity, tokenKey }: Seeded) =>
   service.openCustody({
     tokenKey: parseTokenKey(tokenKey) as Buffer,
     expectedUserId: identity.userId,
-    tenantId: identity.tenantId,
+    expectedTenantId: identity.tenantId ?? null,
   });
 
 const corruptStoredBlob =
@@ -126,7 +126,7 @@ const FAILURES: FailureCase[] = [
       service.openCustody({
         tokenKey: parseTokenKey(generateTokenKey()) as Buffer,
         expectedUserId: identity.userId,
-        tenantId: identity.tenantId,
+        expectedTenantId: identity.tenantId ?? null,
       }),
   },
   {
@@ -135,7 +135,7 @@ const FAILURES: FailureCase[] = [
       service.openCustody({
         tokenKey: parseTokenKey(tokenKey) as Buffer,
         expectedUserId: objectId(),
-        tenantId: identity.tenantId,
+        expectedTenantId: identity.tenantId ?? null,
       }),
   },
   { failure: 'a corrupted iv', arrange: corruptStoredBlob(1), attempt: openWithOwnKey },
@@ -153,7 +153,10 @@ const FAILURES: FailureCase[] = [
           ),
         },
       } as unknown as CustodyRequest;
-      return loadOpenIDCustody(req, { custody: service, tenantId: identity.tenantId });
+      return loadOpenIDCustody(req, {
+        custody: service,
+        expectedTenantId: identity.tenantId ?? null,
+      });
     },
   },
 ];

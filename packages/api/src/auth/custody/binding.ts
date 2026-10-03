@@ -59,8 +59,11 @@ function verifyMarker(token: string | undefined): CustodyMarker | null {
  * The cookie-pair check shared by image authorization and shared-link authorization. Parses the
  * token key cookie (`openid_token_key`), hashes the 32 bytes, verifies the marker cookie
  * (`openid_user_id`) with `JWT_REFRESH_SECRET`, compares the marker's `tokenKeyHash` claim to that
- * hash for exact string equality, then performs exactly one custody record existence-and-`userId`
- * check through `custodyExists`.
+ * hash for exact string equality, then performs exactly one custody record
+ * existence-and-`userId`-and-tenant check through `custodyExists`. `expectedTenantId` is the tenant
+ * the caller knows (`undefined` makes no tenant check, `null` requires the record to carry none, a
+ * string must match the record's own tenant); it is compared after the hash lookup, not used to
+ * find the record.
  *
  * The checks run cheapest-first so the store is never touched for a request that cannot succeed: a
  * missing or malformed key cookie, an absent or unsigned marker, a missing or mismatched claim all
@@ -75,7 +78,7 @@ function verifyMarker(token: string | undefined): CustodyMarker | null {
  */
 export async function verifyCustodyBinding(
   req: Request,
-  deps: { custody: TokenCustodyService; tenantId?: string },
+  deps: { custody: TokenCustodyService; expectedTenantId?: string | null },
 ): Promise<CustodyBindingResult | null> {
   const cookies = req.cookies as Record<string, string> | undefined;
 
@@ -93,7 +96,7 @@ export async function verifyCustodyBinding(
   const live = await deps.custody.custodyExists({
     tokenKeyHash: hash,
     expectedUserId: marker.id,
-    tenantId: deps.tenantId,
+    expectedTenantId: deps.expectedTenantId,
   });
   if (!live) {
     return null;

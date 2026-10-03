@@ -1,5 +1,10 @@
 import type { StreamableHTTPOptions } from './types';
-import { resolveDirectOpenIDBearerConfig, usesDirectOpenIDBearerRecovery } from './openid';
+import type { ParsedServerConfig } from './types';
+import {
+  resolveDirectOpenIDBearerConfig,
+  resolveOpenIDPlaceholderTokens,
+  usesDirectOpenIDBearerRecovery,
+} from './openid';
 import { MCPAuthenticationRefreshError } from './errors';
 import { OpenIDReauthRequiredError } from '~/utils/oidc';
 import { processMCPEnv } from '~/utils/env';
@@ -302,5 +307,167 @@ describe('direct OpenID bearer recovery', () => {
     expect('headers' in resolved ? resolved.headers?.Authorization : undefined).toBe(
       "Bearer opaque-$&-$`-$'",
     );
+  });
+});
+
+/**
+ * Feature: key-custody, Property 19: Custody is opened only for token-bearing placeholders.
+ *
+ * `resolveOpenIDPlaceholderTokens` calls the upstream token provider — the only path to a custody
+ * read — if and only if the config is neither plugin- nor database-sourced AND carries at least one
+ * `{{LIBRECHAT_OPENID_*}}` or `{{LIBRECHAT_GRAPH_ACCESS_TOKEN}}` placeholder. This is checked
+ * exhaustively over placeholder presence, placement (headers, env, args, url, oauth_headers) and
+ * source, rather than by random sampling, since the invariant is discrete.
+ */
+describe('resolveOpenIDPlaceholderTokens', () => {
+  const liveTokens = {
+    access_token: 'live-access',
+    id_token: 'live-id',
+    expires_at: Math.floor(Date.now() / 1000) + 3600,
+  };
+
+  const makeConfig = (
+    overrides: Partial<ParsedServerConfig>,
+    source: 'yaml' | 'config' | 'user' | 'plugin' = 'yaml',
+  ): ParsedServerConfig =>
+    ({
+      type: 'streamable-http',
+      url: 'https://mcp.example.com',
+      source,
+      ...overrides,
+    }) as ParsedServerConfig;
+
+  const PLACEHOLDERS = [
+    '{{LIBRECHAT_OPENID_ACCESS_TOKEN}}',
+    '{{LIBRECHAT_OPENID_TOKEN}}',
+    '{{LIBRECHAT_OPENID_ID_TOKEN}}',
+    '{{LIBRECHAT_OPENID_USER_ID}}',
+    '{{LIBRECHAT_OPENID_USER_EMAIL}}',
+    '{{LIBRECHAT_OPENID_USER_NAME}}',
+    '{{LIBRECHAT_OPENID_EXPIRES_AT}}',
+    '{{LIBRECHAT_GRAPH_ACCESS_TOKEN}}',
+  ];
+
+  const PLACEMENTS: Array<(value: string) => Partial<ParsedServerConfig>> = [
+    (v) => ({ headers: { Authorization: `Bearer ${v}` } }),
+    (v) => ({ env: { TOKEN: v } }),
+    (v) => ({ args: ['--token', v] }),
+    (v) => ({ url: `https://mcp.example.com/?t=${v}` }),
+    (v) => ({ oauth_headers: { 'X-Token': v } }),
+  ];
+
+  it('calls the provider for every token-bearing placeholder in every placement (yaml source)', async () => {
+    for (const placeholder of PLACEHOLDERS) {
+      for (const place of PLACEMENTS) {
+        const provider = jest.fn().mockResolvedValue(liveTokens);
+        const result = await resolveOpenIDPlaceholderTokens({
+          config: makeConfig(place(placeholder)),
+          upstreamTokenProvider: provider,
+        });
+        expect(provider).toHaveBeenCalledTimes(1);
+        expect(result).toBe(liveTokens);
+      }
+    }
+  });
+
+  it('does not call the provider when the config carries no token-bearing placeholder', async () => {
+    const provider = jest.fn().mockResolvedValue(liveTokens);
+    const result = await resolveOpenIDPlaceholderTokens({
+      config: makeConfig({
+        headers: { Authorization: 'Bearer {{MY_API_KEY}}', 'X-User': '{{LIBRECHAT_USER_EMAIL}}' },
+        url: 'https://mcp.example.com/static',
+      }),
+      upstreamTokenProvider: provider,
+    });
+    expect(provider).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
+  });
+
+  it.each(['plugin', 'user'] as const)(
+    'does not call the provider for a %s-sourced config even with a placeholder',
+    async (source) => {
+      const provider = jest.fn().mockResolvedValue(liveTokens);
+      const result = await resolveOpenIDPlaceholderTokens({
+        config: makeConfig(
+          { headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' } },
+          source,
+        ),
+        upstreamTokenProvider: provider,
+      });
+      expect(provider).not.toHaveBeenCalled();
+      expect(result).toBeUndefined();
+    },
+  );
+
+  it('returns undefined without calling anything when no provider is supplied', async () => {
+    const result = await resolveOpenIDPlaceholderTokens({
+      config: makeConfig({
+        headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+      }),
+      upstreamTokenProvider: undefined,
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it('returns undefined (snapshot fallback) when the provider resolves null', async () => {
+    const provider = jest.fn().mockResolvedValue(null);
+    const result = await resolveOpenIDPlaceholderTokens({
+      config: makeConfig({
+        headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+      }),
+      upstreamTokenProvider: provider,
+    });
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(result).toBeUndefined();
+  });
+
+  it('maps a session-missing provider rejection to OpenIDReauthRequiredError', async () => {
+    const provider = jest
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('gone'), { code: 'OPENID_SESSION_MISSING' }));
+    await expect(
+      resolveOpenIDPlaceholderTokens({
+        config: makeConfig({
+          headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+        }),
+        upstreamTokenProvider: provider,
+      }),
+    ).rejects.toBeInstanceOf(OpenIDReauthRequiredError);
+  });
+
+  it('maps a retryable provider rejection to MCPAuthenticationRefreshError', async () => {
+    const provider = jest.fn().mockRejectedValue(
+      Object.assign(new Error('temporarily unavailable'), {
+        reason: 'session_refresh_failed',
+        retryable: true,
+      }),
+    );
+    await expect(
+      resolveOpenIDPlaceholderTokens({
+        config: makeConfig({
+          headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+        }),
+        upstreamTokenProvider: provider,
+      }),
+    ).rejects.toBeInstanceOf(MCPAuthenticationRefreshError);
+  });
+
+  it('detects a placeholder reached through an env-var indirection', async () => {
+    const prev = process.env.MCP_TOKEN_TEMPLATE;
+    process.env.MCP_TOKEN_TEMPLATE = 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}';
+    try {
+      const provider = jest.fn().mockResolvedValue(liveTokens);
+      await resolveOpenIDPlaceholderTokens({
+        config: makeConfig({ headers: { Authorization: '${MCP_TOKEN_TEMPLATE}' } }),
+        upstreamTokenProvider: provider,
+      });
+      expect(provider).toHaveBeenCalledTimes(1);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.MCP_TOKEN_TEMPLATE;
+      } else {
+        process.env.MCP_TOKEN_TEMPLATE = prev;
+      }
+    }
   });
 });

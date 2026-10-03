@@ -154,7 +154,7 @@ describe('TokenCustody Methods', () => {
       );
     });
 
-    it('finds an unexpired record by hash and tenant', async () => {
+    it('finds an unexpired record by hash and returns its tenant', async () => {
       await methods.upsertTokenCustody(
         upsertData({
           tenantId: 'tenant-1',
@@ -163,12 +163,11 @@ describe('TokenCustody Methods', () => {
         }),
       );
 
-      const found = await methods.findTokenCustody({
-        tokenKeyHash: 'hash-1',
-        tenantId: 'tenant-1',
-      });
+      const found = await methods.findTokenCustody({ tokenKeyHash: 'hash-1' });
       expect(found?.sealedTokens).toBe('kc1:live');
       expect(found?.openidIssuer).toBe('https://idp.example');
+      /** The tenant is read back from the record, for the caller's post-read comparison. */
+      expect(found?.tenantId).toBe('tenant-1');
     });
 
     it('treats an unswept expired record as absent via the expiresAt > now predicate', async () => {
@@ -180,8 +179,8 @@ describe('TokenCustody Methods', () => {
     });
   });
 
-  describe('tenant filter', () => {
-    it('matches only the record for the requested tenant', async () => {
+  describe('lookup is by hash alone; the record carries its own tenant', () => {
+    it('finds the record by hash regardless of tenant and returns the stored tenant', async () => {
       await methods.upsertTokenCustody(
         upsertData({ tokenKeyHash: 'hash-t1', tenantId: 'tenant-1', sealedTokens: 'kc1:t1' }),
       );
@@ -189,34 +188,46 @@ describe('TokenCustody Methods', () => {
         upsertData({ tokenKeyHash: 'hash-t2', tenantId: 'tenant-2', sealedTokens: 'kc1:t2' }),
       );
 
-      const t1 = await methods.findTokenCustody({ tokenKeyHash: 'hash-t1', tenantId: 'tenant-1' });
+      /**
+       * The unique hash identifies the record; the tenant is not a lookup input. The caller
+       * (the custody service's `expectedTenantId`) compares the returned tenant after the read.
+       */
+      const t1 = await methods.findTokenCustody({ tokenKeyHash: 'hash-t1' });
       expect(t1?.sealedTokens).toBe('kc1:t1');
+      expect(t1?.tenantId).toBe('tenant-1');
 
-      // a wrong-tenant read finds nothing
-      await expect(
-        methods.findTokenCustody({ tokenKeyHash: 'hash-t1', tenantId: 'tenant-2' }),
-      ).resolves.toBeNull();
+      const t2 = await methods.findTokenCustody({ tokenKeyHash: 'hash-t2' });
+      expect(t2?.tenantId).toBe('tenant-2');
     });
 
-    it('a no-tenant call matches only records without a tenantId field', async () => {
+    it('returns no tenantId field for a record stored without one', async () => {
       await methods.upsertTokenCustody(
         upsertData({ tokenKeyHash: 'hash-none', sealedTokens: 'kc1:none' }),
-      );
-      await methods.upsertTokenCustody(
-        upsertData({
-          tokenKeyHash: 'hash-tenant',
-          tenantId: 'tenant-1',
-          sealedTokens: 'kc1:tenant',
-        }),
       );
 
       const none = await methods.findTokenCustody({ tokenKeyHash: 'hash-none' });
       expect(none?.sealedTokens).toBe('kc1:none');
-      // the field must be genuinely absent, not stored as undefined
+      // the field must be genuinely absent, not stored as undefined, so the caller can tell
+      // "no tenant" from a tenant value
       expect(none).not.toHaveProperty('tenantId');
+    });
 
-      // a no-tenant read never matches a tenant-stamped record
-      await expect(methods.findTokenCustody({ tokenKeyHash: 'hash-tenant' })).resolves.toBeNull();
+    it('findTokenCustodyMeta projects userId and tenantId only, never the sealed blob', async () => {
+      await methods.upsertTokenCustody(
+        upsertData({ tenantId: 'tenant-1', userId: 'user-7', sealedTokens: 'kc1:secret' }),
+      );
+
+      const meta = await methods.findTokenCustodyMeta({ tokenKeyHash: 'hash-1' });
+      expect(meta).toEqual({ userId: 'user-7', tenantId: 'tenant-1' });
+      expect(meta).not.toHaveProperty('sealedTokens');
+    });
+
+    it('findTokenCustodyMeta omits tenantId for a record without one', async () => {
+      await methods.upsertTokenCustody(upsertData({ userId: 'user-7', sealedTokens: 'kc1:x' }));
+
+      const meta = await methods.findTokenCustodyMeta({ tokenKeyHash: 'hash-1' });
+      expect(meta).toEqual({ userId: 'user-7' });
+      expect(meta).not.toHaveProperty('tenantId');
     });
   });
 
@@ -351,11 +362,9 @@ describe('TokenCustody Methods', () => {
       const result = await methods.deleteTokenCustodiesByUser({ userId: 'user-1' });
 
       expect(result.deletedCount).toBe(1);
-      const remaining = await methods.findTokenCustody({
-        tokenKeyHash: 'h-tenant',
-        tenantId: 'tenant-1',
-      });
+      const remaining = await methods.findTokenCustody({ tokenKeyHash: 'h-tenant' });
       expect(remaining?.userId).toBe('user-1');
+      expect(remaining?.tenantId).toBe('tenant-1');
     });
 
     it('reports zero deletions when no record matches', async () => {

@@ -145,7 +145,7 @@ describe('key custody without CREDS_KEY', () => {
         context,
         tokens: payload({ accessToken: 'ACCESS-TOKEN-rotated' }),
       });
-      expect(rotation.applied).toBe(true);
+      expect(rotation.outcome).toBe('applied');
       const afterRotate = (await service.openCustody({
         tokenKey: key,
         expectedUserId: IDENTITY.userId,

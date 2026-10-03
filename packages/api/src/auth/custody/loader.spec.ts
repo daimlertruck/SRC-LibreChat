@@ -145,12 +145,12 @@ describe('loadOpenIDCustody', () => {
         [OPENID_USER_ID_COOKIE]: signMarker(tokenKey),
       });
 
-      await loadOpenIDCustody(req, { custody, tenantId: 'tenant-7' });
+      await loadOpenIDCustody(req, { custody, expectedTenantId: 'tenant-7' });
 
       expect(custody.openCustody).toHaveBeenCalledWith({
         tokenKey: parseTokenKey(tokenKey),
         expectedUserId: USER_ID,
-        tenantId: 'tenant-7',
+        expectedTenantId: 'tenant-7',
       });
     });
   });

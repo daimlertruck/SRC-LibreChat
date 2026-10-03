@@ -139,7 +139,10 @@ describe('custody service integration (mongodb-memory-server, real AEAD)', () =>
         context: firstOpen as OpenIDCustodyContext,
         tokens: rotatedPayload,
       });
-      expect(rotation.applied).toBe(true);
+      expect(rotation.outcome).toBe('applied');
+      if (rotation.outcome === 'gone') {
+        throw new Error('unexpected gone outcome');
+      }
       expect(rotation.context.rotationCounter).toBe(1);
       // still exactly one record: rotation re-seals in place, it does not add a row
       expect(await countRecords()).toBe(1);
@@ -195,9 +198,13 @@ describe('custody service integration (mongodb-memory-server, real AEAD)', () =>
         }),
       ]);
 
-      // exactly one applied
-      const applied = [resultA, resultB].filter((r) => r.applied);
-      const superseded = [resultA, resultB].filter((r) => !r.applied);
+      // neither racer finds a deleted record, so both carry a context
+      if (resultA.outcome === 'gone' || resultB.outcome === 'gone') {
+        throw new Error('unexpected gone outcome');
+      }
+      // exactly one applied, one superseded
+      const applied = [resultA, resultB].filter((r) => r.outcome === 'applied');
+      const superseded = [resultA, resultB].filter((r) => r.outcome === 'superseded');
       expect(applied).toHaveLength(1);
       expect(superseded).toHaveLength(1);
 

@@ -100,7 +100,10 @@ async function runOpenIDLifecycle(token: string): Promise<void> {
     context,
     tokens: payload({ accessToken: `oidc-rot-${token}`, refreshToken: `rt-${token}` }),
   });
-  expect(rotation.applied).toBe(true);
+  expect(rotation.outcome).toBe('applied');
+  if (rotation.outcome === 'gone') {
+    throw new Error('unexpected gone outcome');
+  }
 
   clock += 60_000;
   const oboContext = (await service.openCustody({
@@ -111,7 +114,7 @@ async function runOpenIDLifecycle(token: string): Promise<void> {
     context: oboContext,
     tokens: payload({ accessToken: `oidc-obo-${token}` }),
   });
-  expect(oboRotation.applied).toBe(true);
+  expect(oboRotation.outcome).toBe('applied');
 
   await service.deleteCustody({ tokenKeyHash: rotation.context.tokenKeyHash });
 }

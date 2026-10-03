@@ -1,7 +1,7 @@
 import { logger } from '@librechat/data-schemas';
 import { extractEnvVariable } from 'librechat-data-provider';
+import type { IUser, OIDCTokens } from '@librechat/data-schemas';
 import type { MCPOptions } from 'librechat-data-provider';
-import type { IUser } from '@librechat/data-schemas';
 import type { RequestBody } from '~/types';
 import {
   OPENID_TOKEN_FIELDS,
@@ -25,6 +25,15 @@ export const MCP_PLUGIN_SOURCE = 'plugin';
  */
 export function isPluginSourced(config?: { source?: string } | null): boolean {
   return config?.source === MCP_PLUGIN_SOURCE;
+}
+
+/**
+ * Determines whether a server config is user-sourced (sandboxed placeholder resolution).
+ * When `source` is set, it is authoritative. When absent (pre-upgrade cached configs),
+ * falls back to the legacy `dbId` heuristic for backward compatibility.
+ */
+export function isUserSourced(config: { source?: string; dbId?: string }): boolean {
+  return config.source != null ? config.source === 'user' : !!config.dbId;
 }
 
 /**
@@ -300,6 +309,7 @@ function processSingleValue({
   body = undefined,
   isHeader = false,
   dbSourced = false,
+  openidTokens,
 }: {
   originalValue: string;
   customUserVars?: Record<string, string>;
@@ -308,6 +318,12 @@ function processSingleValue({
   isHeader?: boolean;
   /** When true, only resolve customUserVars — skip env vars, user/OpenID/body placeholders */
   dbSourced?: boolean;
+  /**
+   * The live token set the custody token provider resolved for this request, when a caller has one.
+   * It takes precedence over `user.federatedTokens` for the OpenID placeholders. Absent on the
+   * remote-agent and snapshot paths, where the user's `federatedTokens` is read as before.
+   */
+  openidTokens?: OIDCTokens | null;
 }): string {
   // Type guard: ensure we're working with a string
   if (typeof originalValue !== 'string') {
@@ -342,7 +358,7 @@ function processSingleValue({
 
   value = processUserPlaceholders(value, user, isHeader);
 
-  const openidTokenInfo = extractOpenIDTokenInfo(user);
+  const openidTokenInfo = extractOpenIDTokenInfo(user, openidTokens);
   if (openidTokenInfo && isOpenIDTokenValid(openidTokenInfo)) {
     value = processOpenIDPlaceholders(value, openidTokenInfo);
   } else if (openidTokenInfo) {
@@ -393,8 +409,17 @@ export function processMCPEnv(params: {
   body?: RequestBody;
   /** When true, only resolve customUserVars — skip env vars, user/OpenID/body placeholders (for DB-stored servers) */
   dbSourced?: boolean;
+  /**
+   * The live OpenID token set the custody token provider resolved for this request. When present it
+   * takes precedence over `user.federatedTokens` for the `{{LIBRECHAT_OPENID_*}}` placeholders, so a
+   * custody-login browser session (whose `federatedTokens` snapshot is empty) resolves them. Absent,
+   * the user snapshot is read exactly as before, so the remote-agent flow is unchanged. The caller
+   * resolves it lazily (`resolveOpenIDPlaceholderTokens`) only when the config actually carries a
+   * token-bearing placeholder.
+   */
+  openidTokens?: OIDCTokens | null;
 }): MCPOptions {
-  const { options, user, customUserVars, body } = params;
+  const { options, user, customUserVars, body, openidTokens } = params;
 
   if (options === null || options === undefined) {
     return options;
@@ -436,6 +461,7 @@ export function processMCPEnv(params: {
         dbSourced,
         originalValue,
         customUserVars,
+        openidTokens,
       });
     }
     newObj.env = processedEnv;
@@ -445,7 +471,7 @@ export function processMCPEnv(params: {
     const processedArgs: string[] = [];
     for (const originalValue of newObj.args) {
       processedArgs.push(
-        processSingleValue({ originalValue, customUserVars, user, body, dbSourced }),
+        processSingleValue({ originalValue, customUserVars, user, body, dbSourced, openidTokens }),
       );
     }
     newObj.args = processedArgs;
@@ -462,6 +488,7 @@ export function processMCPEnv(params: {
         dbSourced,
         originalValue,
         customUserVars,
+        openidTokens,
         isHeader: true, // Important: Enable header encoding
       });
     }
@@ -478,6 +505,7 @@ export function processMCPEnv(params: {
         dbSourced,
         originalValue,
         customUserVars,
+        openidTokens,
         isHeader: true,
       });
     }
@@ -491,6 +519,7 @@ export function processMCPEnv(params: {
       body,
       dbSourced,
       customUserVars,
+      openidTokens,
       originalValue: newObj.url,
     });
   }
@@ -513,6 +542,7 @@ export function processMCPEnv(params: {
           dbSourced,
           originalValue,
           customUserVars,
+          openidTokens,
         });
       } else {
         processedOAuth[key] = originalValue;

@@ -226,6 +226,33 @@ describe('Graph Token Utilities', () => {
       expect(result).toBe('Bearer resolved-graph-token');
     });
 
+    it('forwards the resolved openidTokens to extractOpenIDTokenInfo (custody precedence)', async () => {
+      mockExtractOpenIDTokenInfo.mockReturnValue({ accessToken: 'custody-access-token' });
+      mockIsOpenIDTokenValid.mockReturnValue(true);
+      const resolvedTokens = {
+        access_token: 'custody-access-token',
+        id_token: 'custody-id',
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      };
+
+      const value = 'Bearer {{LIBRECHAT_GRAPH_ACCESS_TOKEN}}';
+      await resolveGraphTokenPlaceholder(value, {
+        user: mockUser as Partial<IUser> as IUser,
+        graphTokenResolver: mockGraphTokenResolver,
+        openidTokens: resolvedTokens,
+      });
+
+      /** The resolved set is passed as the 2nd arg so it takes precedence over the snapshot. */
+      expect(mockExtractOpenIDTokenInfo).toHaveBeenCalledWith(mockUser, resolvedTokens);
+      /** The exchange runs against the custody-derived access token. */
+      expect(mockGraphTokenResolver).toHaveBeenCalledWith(
+        mockUser,
+        'custody-access-token',
+        expect.any(String),
+        true,
+      );
+    });
+
     it('should resolve multiple placeholders in a string', async () => {
       mockExtractOpenIDTokenInfo.mockReturnValue({ accessToken: 'access-token' });
       mockIsOpenIDTokenValid.mockReturnValue(true);

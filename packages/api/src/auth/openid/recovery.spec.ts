@@ -71,8 +71,13 @@ describe('OpenID custody-native authentication publication', () => {
     expect(deps.setOpenIDAuthTokens).toHaveBeenCalledTimes(1);
   });
 
-  it('drops the stale Express-session token set before publishing at login', async () => {
+  it('publishes the IdP token set at login and never reads the retired session token field', async () => {
     const { deps, service, input } = setup();
+    /**
+     * `req.session.openidTokens` is retired by key custody and no longer a token source. The login
+     * publishes the IdP set the caller passed via `setOpenIDAuthTokens` (a fresh custody record),
+     * and `discardSessionTokens` is inert. The service must not read or delete the field.
+     */
     const req = {
       session: {
         openidTokens: {
@@ -85,8 +90,6 @@ describe('OpenID custody-native authentication publication', () => {
     await expect(
       service.sendOpenIDAuthResponse({ ...input, req, discardSessionTokens: true }),
     ).resolves.toBe('app-token');
-    expect((req as { session: { openidTokens?: unknown } }).session.openidTokens).toBeUndefined();
-    // The IdP token set the caller passed is published, not the stale session set.
     expect(deps.setOpenIDAuthTokens).toHaveBeenCalledWith(
       expect.objectContaining({ access_token: 'access', refresh_token: 'refresh' }),
       req,
@@ -103,7 +106,7 @@ describe('OpenID custody-native authentication publication', () => {
       recordExpiresAt: new Date('2030-01-01T00:00:00Z'),
     } as unknown as OpenIDCustodyContext;
     rotateCustody.mockResolvedValue({
-      applied: true,
+      outcome: 'applied',
       context: rotatedContext,
       expiresAt: new Date('2030-01-02T00:00:00Z'),
     });
@@ -131,7 +134,7 @@ describe('OpenID custody-native authentication publication', () => {
     expect(deps.setOpenIDAuthTokens).not.toHaveBeenCalled();
   });
 
-  it('adopts the concurrent winner when rotateCustody reports applied: false', async () => {
+  it('adopts the concurrent winner when rotateCustody reports outcome: superseded', async () => {
     const { service, input, rotateCustody, setTokenKeyCookie } = setup();
     const tokenKey = Buffer.from('fedcba9876543210fedcba9876543210');
     const winner = {
@@ -139,7 +142,7 @@ describe('OpenID custody-native authentication publication', () => {
       recordExpiresAt: new Date('2031-06-01T00:00:00Z'),
     } as unknown as OpenIDCustodyContext;
     rotateCustody.mockResolvedValue({
-      applied: false,
+      outcome: 'superseded',
       context: winner,
       expiresAt: new Date('2000-01-01T00:00:00Z'),
     });
@@ -158,7 +161,7 @@ describe('OpenID custody-native authentication publication', () => {
   it('skips the cookie re-issue on the streaming path (headers already sent)', async () => {
     const { service, input, rotateCustody, setTokenKeyCookie } = setup();
     rotateCustody.mockResolvedValue({
-      applied: true,
+      outcome: 'applied',
       context: { tokenKey: Buffer.from('x'.repeat(32)) } as unknown as OpenIDCustodyContext,
       expiresAt: new Date('2030-01-02T00:00:00Z'),
     });

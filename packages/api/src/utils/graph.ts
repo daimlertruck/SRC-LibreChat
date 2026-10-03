@@ -1,5 +1,5 @@
 import { logger } from '@librechat/data-schemas';
-import type { IUser } from '@librechat/data-schemas';
+import type { IUser, OIDCTokens } from '@librechat/data-schemas';
 import {
   GRAPH_TOKEN_PLACEHOLDER,
   DEFAULT_GRAPH_SCOPES,
@@ -51,6 +51,12 @@ export interface GraphTokenOptions {
   user?: IUser;
   graphTokenResolver?: GraphTokenResolver;
   scopes?: string;
+  /**
+   * The live OpenID token set the custody token provider resolved for this request. When present it
+   * supplies the access token the Graph OBO exchange uses, taking precedence over the user's
+   * `federatedTokens` snapshot; absent, the snapshot is read as before (the remote-agent path).
+   */
+  openidTokens?: OIDCTokens | null;
 }
 
 /**
@@ -136,7 +142,7 @@ export async function resolveGraphTokenPlaceholder(
     return value;
   }
 
-  const { user, graphTokenResolver, scopes } = options;
+  const { user, graphTokenResolver, scopes, openidTokens } = options;
 
   if (!user || !graphTokenResolver) {
     logger.warn(
@@ -145,7 +151,8 @@ export async function resolveGraphTokenPlaceholder(
     return value;
   }
 
-  const tokenInfo = extractOpenIDTokenInfo(user);
+  /** The resolved live set takes precedence over the user's snapshot; absent, the snapshot is read. */
+  const tokenInfo = extractOpenIDTokenInfo(user, openidTokens);
   if (!tokenInfo || !isOpenIDTokenValid(tokenInfo)) {
     logger.warn(
       '[resolveGraphTokenPlaceholder] No valid OpenID token available for Graph token exchange',

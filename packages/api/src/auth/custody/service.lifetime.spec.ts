@@ -346,7 +346,10 @@ describe('the derived lifetime through createCustody and rotateCustody', () => {
       accessTokenExpiresAt: undefined,
     });
     const result = await service.rotateCustody({ context: context!, tokens: rotatedTokens });
-    expect(result.applied).toBe(true);
+    expect(result.outcome).toBe('applied');
+    if (result.outcome === 'gone') {
+      throw new Error('unexpected gone outcome');
+    }
 
     const expected = resolveRecordExpiry(rotatedTokens, rotateAt, FALLBACK_REFRESH_TTL_MS);
     expect(result.expiresAt.getTime()).toBe(expected.getTime());
@@ -390,7 +393,10 @@ describe('the derived lifetime through createCustody and rotateCustody', () => {
       accessTokenExpiresAt: undefined,
     });
     const result = await service.rotateCustody({ context: context!, tokens: rotatedTokens });
-    expect(result.applied).toBe(true);
+    expect(result.outcome).toBe('applied');
+    if (result.outcome === 'gone') {
+      throw new Error('unexpected gone outcome');
+    }
 
     // The new lifetime is the fallback term at the rotation's receipt time, earlier than before.
     expect(result.expiresAt.getTime()).toBe(rotateAt + FALLBACK_REFRESH_TTL_MS);

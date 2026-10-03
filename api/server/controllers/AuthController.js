@@ -1,14 +1,15 @@
 const cookies = require('cookie');
 const jwt = require('jsonwebtoken');
-const { logger, runAsSystem, tenantStorage } = require('@librechat/data-schemas');
+const { logger, runAsSystem, tenantStorage, getTenantId } = require('@librechat/data-schemas');
 const {
   isEnabled,
-  createOpenIDRefreshOwnershipError,
   isOpenIDRefreshOwnershipError,
   isOpenIDSessionMissingError,
   loadOpenIDCustody,
   parseTokenKey,
   hashTokenKey,
+  createAuthIdentityContext,
+  resolveGraphApiToken,
   OPENID_USER_ID_COOKIE,
 } = require('@librechat/api');
 const {
@@ -23,13 +24,10 @@ const {
 } = require('~/server/services/AuthService');
 const { deleteAllUserSessions, getUserById, findSession, deleteTokens } = require('~/models');
 const { getGraphApiToken } = require('~/server/services/GraphTokenService');
-const { refreshOpenIDSession } = require('~/server/services/OpenIDSessionRefresh');
 const {
-  assertOpenIDRefreshFlightDeliveryAvailable,
-  assertOpenIDRefreshSessionGenerationAvailable,
-  claimOpenIDRefreshFlightDelivery,
-  releaseOpenIDRefreshFlightDelivery,
-} = require('~/server/services/OpenIDRefreshFlight');
+  refreshOpenIDSession,
+  createOpenIDSessionTokenProvider,
+} = require('~/server/services/OpenIDSessionRefresh');
 
 const AUTH_REFRESH_USER_PROJECTION = '-password -__v -totpSecret -backupCodes -federatedTokens';
 
@@ -116,89 +114,6 @@ const getValidOpenIDReuseUserId = (parsedCookies) => {
   }
 };
 
-const assertReusableOpenIDSessionGeneration = async (openidTokens) =>
-  assertOpenIDRefreshSessionGenerationAvailable({
-    key: openidTokens?.publicationFlightKey,
-    ownerId: openidTokens?.publicationFlightOwnerId,
-  });
-
-/**
- * Serializes response delivery for one durable OpenID publication generation. A logout that
- * reaches the same flight either tombstones it before this claim or waits for the response to
- * finish before returning. The send callback keeps the final authorization check adjacent to the
- * synchronous Express write while allowing callers to do slow preparation under the lease.
- */
-const withOpenIDResponseDelivery = async ({ res, openidTokens, context }, operation) => {
-  let delivery;
-  let responseSent = false;
-  let releaseStarted = false;
-  let listenersArmed = false;
-  const releaseDelivery = async () => {
-    if (!delivery || releaseStarted) {
-      return;
-    }
-    releaseStarted = true;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await releaseOpenIDRefreshFlightDelivery(delivery);
-        return;
-      } catch (error) {
-        if (attempt === 3) {
-          logger.warn(`[${context}] Failed to release OpenID response delivery`, {
-            error: error instanceof Error ? error.message : error,
-          });
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-    }
-  };
-
-  try {
-    await assertReusableOpenIDSessionGeneration(openidTokens);
-    if (openidTokens?.publicationFlightKey && openidTokens?.publicationFlightOwnerId) {
-      const claimed = await claimOpenIDRefreshFlightDelivery({
-        key: openidTokens.publicationFlightKey,
-        ownerId: openidTokens.publicationFlightOwnerId,
-        createdAt: openidTokens.publicationFlightCreatedAt,
-      });
-      if (!claimed.deliveryId) {
-        throw new Error('OpenID response delivery claim returned no owner');
-      }
-      delivery = {
-        key: openidTokens.publicationFlightKey,
-        ownerId: openidTokens.publicationFlightOwnerId,
-        deliveryId: claimed.deliveryId,
-      };
-    }
-
-    const sendAuthorized = async (send) => {
-      if (delivery) {
-        await assertOpenIDRefreshFlightDeliveryAvailable(delivery);
-        if (!listenersArmed && typeof res.once === 'function') {
-          listenersArmed = true;
-          res.once('finish', () => void releaseDelivery());
-          res.once('close', () => void releaseDelivery());
-        }
-      } else {
-        await assertReusableOpenIDSessionGeneration(openidTokens);
-      }
-      const response = send();
-      responseSent = true;
-      if (delivery && typeof res.once !== 'function') {
-        await releaseDelivery();
-      }
-      return response;
-    };
-
-    return await operation(sendAuthorized);
-  } finally {
-    if (delivery && !responseSent) {
-      await releaseDelivery();
-    }
-  }
-};
-
 const resetPasswordRequestController = async (req, res) => {
   try {
     const resetService = await requestPasswordReset(req);
@@ -252,9 +167,16 @@ const refreshController = async (req, res) => {
 
     let custodyContext;
     try {
+      /**
+       * `/refresh` is unauthenticated and no longer carries the session copy, so it knows no
+       * tenant up front. The record is looked up by the token key hash alone and its own tenant is
+       * read back from the opened context (`custodyContext.identity.tenantId`), which the user load
+       * and the refresh then run under. Passing no `expectedTenantId` is what lets a tenant-stamped
+       * record refresh; `assertOpenIDSessionIdentityMatch` still rejects a cross-tenant record
+       * before any IdP call by comparing the record's tenant with the loaded user's.
+       */
       custodyContext = await loadOpenIDCustody(req, {
         custody: getTokenCustodyService(),
-        tenantId: req.session?.openidTokens?.tenantId,
       });
     } catch (error) {
       logger.error('[refreshController] Failed to load OpenID custody context', error);
@@ -407,42 +329,40 @@ const graphTokenController = async (req, res) => {
       });
     }
 
-    const accessToken = req.user.federatedTokens?.access_token;
-    if (!accessToken) {
-      return res.status(401).json({
-        message: 'No federated access token available for token exchange',
-      });
-    }
+    /**
+     * The upstream IdP access token comes from the custody record through the token provider, not
+     * from `req.user.federatedTokens` (empty for a custody-login browser session). The provider's
+     * identity check keeps the ownership guarantee the old session comparison gave; a session-missing
+     * rejection clears the OpenID cookies, as the ownership failure did. The `packages/api` handler
+     * also rechecks `custodyExists` right before returning, replacing the removed response-delivery
+     * guard. The thin controller only builds the provider and sends what the handler returns.
+     */
+    const tenantId = getTenantId();
+    const identityContext = createAuthIdentityContext({ user: req.user, tenantId });
+    const upstreamTokenProvider = createOpenIDSessionTokenProvider({
+      req,
+      res,
+      user: req.user,
+      identityContext,
+      tokenPreference: 'access_token',
+    });
 
-    const sessionTokens = req.session?.openidTokens;
-    const usesSessionToken = Boolean(
-      sessionTokens?.accessToken && sessionTokens.accessToken === accessToken,
-    );
-    const requestBearer = req.headers?.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
-    if (req.session && !usesSessionToken && requestBearer !== accessToken) {
-      throw createOpenIDRefreshOwnershipError('OpenID session tokens are no longer available');
-    }
-    const exchangeAndSend = async (sendAuthorized) => {
-      const tokenResponse = await getGraphApiToken(req.user, accessToken, scopes);
-      return sendAuthorized(() => res.json(tokenResponse));
-    };
-    if (usesSessionToken) {
-      return await withOpenIDResponseDelivery(
-        {
-          res,
-          openidTokens: sessionTokens,
-          context: 'graphTokenController',
-        },
-        exchangeAndSend,
-      );
-    }
-    return await exchangeAndSend((send) => send());
+    const result = await resolveGraphApiToken({
+      req,
+      res,
+      user: req.user,
+      scopes,
+      upstreamTokenProvider,
+      graphTokenResolver: (user, accessToken, graphScopes) =>
+        getGraphApiToken(user, accessToken, graphScopes),
+      custody: getTokenCustodyService(),
+      clearAuthCookies: () =>
+        clearOpenIDAuthTokens(req, res, req.user?.id ?? req.user?._id?.toString?.(), tenantId),
+      logger,
+    });
+
+    return res.status(result.status).json(result.body);
   } catch (error) {
-    if (isOpenIDRefreshOwnershipError(error)) {
-      const userId = req.user?.id ?? req.user?._id?.toString?.();
-      clearOpenIDAuthTokens(req, res, userId, req.session?.openidTokens?.tenantId);
-      return res.status(401).json({ message: 'OpenID session is no longer authorized' });
-    }
     logger.error('[graphTokenController] Failed to obtain Graph API token:', error);
     return res.status(500).json({
       message: 'Failed to obtain Microsoft Graph token',

@@ -157,7 +157,8 @@ describe('createImageAuthorizationMiddleware', () => {
     expect(deps.custody.custodyExists).toHaveBeenCalledWith({
       tokenKeyHash,
       expectedUserId: VIEWER_ID,
-      tenantId: undefined,
+      /** No ambient tenant: the record must carry no tenant either. */
+      expectedTenantId: null,
     });
     expect(deps.findSession).not.toHaveBeenCalled();
   });
@@ -262,7 +263,7 @@ describe('createImageAuthorizationMiddleware', () => {
     expect(deps.custody.custodyExists).toHaveBeenCalledWith({
       tokenKeyHash,
       expectedUserId: VIEWER_ID,
-      tenantId: 'tenant-a',
+      expectedTenantId: 'tenant-a',
     });
   });
 

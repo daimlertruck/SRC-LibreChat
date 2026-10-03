@@ -76,6 +76,7 @@ interface Harness {
   setTokenKeyCookie: jest.Mock;
   clearTokenKeyCookie: jest.Mock;
   refreshTokenGrant: jest.Mock;
+  revokeRefreshToken: jest.Mock;
 }
 
 function buildHarness(context: OpenIDCustodyContext | null): Harness {
@@ -93,6 +94,7 @@ function buildHarness(context: OpenIDCustodyContext | null): Harness {
   const setTokenKeyCookie = jest.fn();
   const clearTokenKeyCookie = jest.fn();
   const refreshTokenGrant = jest.fn();
+  const revokeRefreshToken = jest.fn().mockResolvedValue(undefined);
 
   const service = createOpenIDSessionRefreshService({
     jwt: { decode: () => null, verify: () => ({}) },
@@ -118,6 +120,7 @@ function buildHarness(context: OpenIDCustodyContext | null): Harness {
     loadOpenIDCustody,
     setTokenKeyCookie,
     clearTokenKeyCookie,
+    revokeRefreshToken,
   });
 
   return {
@@ -127,6 +130,7 @@ function buildHarness(context: OpenIDCustodyContext | null): Harness {
     setTokenKeyCookie,
     clearTokenKeyCookie,
     refreshTokenGrant,
+    revokeRefreshToken,
   };
 }
 
@@ -239,7 +243,7 @@ describe('session.ts custody refresh', () => {
         recordExpiresAt: rotatedExpiresAt,
       });
       h.custody.rotateCustody.mockResolvedValue({
-        applied: true,
+        outcome: 'applied',
         context: rotatedContext,
         expiresAt: rotatedExpiresAt,
       });
@@ -276,7 +280,7 @@ describe('session.ts custody refresh', () => {
       });
       const rotatedExpiresAt = new Date(Date.now() + 7_200_000);
       h.custody.rotateCustody.mockResolvedValue({
-        applied: true,
+        outcome: 'applied',
         context: makeContext({ rotationCounter: 8, recordExpiresAt: rotatedExpiresAt }),
         expiresAt: rotatedExpiresAt,
       });
@@ -308,7 +312,7 @@ describe('session.ts custody refresh', () => {
         recordExpiresAt: winnerExpiresAt,
       });
       h.custody.rotateCustody.mockResolvedValue({
-        applied: false,
+        outcome: 'superseded',
         context: winnerContext,
         expiresAt: winnerExpiresAt,
       });
@@ -326,6 +330,70 @@ describe('session.ts custody refresh', () => {
       expect(result).toMatchObject({ access_token: 'access-winner' });
       const [, , cookieExpires] = h.setTokenKeyCookie.mock.calls[0];
       expect(cookieExpires).toBe(winnerExpiresAt);
+    });
+
+    it('fails closed and revokes the just-granted token when rotateCustody reports gone', async () => {
+      const context = makeContext();
+      const h = buildHarness(context);
+      h.refreshTokenGrant.mockResolvedValue({
+        access_token: 'access-new',
+        id_token: 'id-new',
+        refresh_token: 'refresh-new',
+        expires_in: 3600,
+      });
+      /** The record was deleted (logout/ban) while the grant was in flight. */
+      h.custody.rotateCustody.mockResolvedValue({ outcome: 'gone' });
+
+      const res = makeRes(false);
+
+      await expect(
+        h.service.refreshOpenIDSession(makeReq(), res, makeUser(), 'access_token'),
+      ).rejects.toMatchObject({ code: 'OPENID_SESSION_MISSING' });
+
+      // One grant, one rotation attempt; no cookie re-issued, no winner adopted.
+      expect(h.refreshTokenGrant).toHaveBeenCalledTimes(1);
+      expect(h.custody.rotateCustody).toHaveBeenCalledTimes(1);
+      expect(h.setTokenKeyCookie).not.toHaveBeenCalled();
+      // Exactly one best-effort revocation, carrying the refresh token the IdP just granted.
+      expect(h.revokeRefreshToken).toHaveBeenCalledTimes(1);
+      expect(h.revokeRefreshToken.mock.calls[0][0]).toMatchObject({ refreshToken: 'refresh-new' });
+    });
+
+    it('still fails closed when the orphan-token revocation itself rejects', async () => {
+      const context = makeContext();
+      const h = buildHarness(context);
+      h.refreshTokenGrant.mockResolvedValue({
+        access_token: 'access-new',
+        refresh_token: 'refresh-new',
+        expires_in: 3600,
+      });
+      h.custody.rotateCustody.mockResolvedValue({ outcome: 'gone' });
+      h.revokeRefreshToken.mockRejectedValue(new Error('IdP unreachable'));
+
+      await expect(
+        h.service.refreshOpenIDSession(makeReq(), makeRes(false), makeUser(), 'access_token'),
+      ).rejects.toMatchObject({ code: 'OPENID_SESSION_MISSING' });
+      expect(h.revokeRefreshToken).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not revoke the token on a superseded rotation (reuse-detection safety)', async () => {
+      const context = makeContext();
+      const h = buildHarness(context);
+      h.refreshTokenGrant.mockResolvedValue({
+        access_token: 'access-new',
+        refresh_token: 'refresh-new',
+        expires_in: 3600,
+      });
+      const winnerExpiresAt = new Date(Date.now() + 5_400_000);
+      h.custody.rotateCustody.mockResolvedValue({
+        outcome: 'superseded',
+        context: makeContext({ rotationCounter: 9, recordExpiresAt: winnerExpiresAt }),
+        expiresAt: winnerExpiresAt,
+      });
+
+      await h.service.refreshOpenIDSession(makeReq(), makeRes(false), makeUser(), 'access_token');
+
+      expect(h.revokeRefreshToken).not.toHaveBeenCalled();
     });
   });
 
@@ -414,7 +482,7 @@ describe('session.ts custody refresh', () => {
       );
       const rotatedExpiresAt = new Date(Date.now() + 7_200_000);
       h.custody.rotateCustody.mockResolvedValue({
-        applied: true,
+        outcome: 'applied',
         context: makeContext({ rotationCounter: 8, recordExpiresAt: rotatedExpiresAt }),
         expiresAt: rotatedExpiresAt,
       });

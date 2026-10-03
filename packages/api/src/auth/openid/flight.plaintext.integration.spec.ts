@@ -79,8 +79,6 @@ function buildService() {
       failOpenIDRefreshFlight: methods.failOpenIDRefreshFlight,
       revokeOpenIDRefreshFlight: methods.revokeOpenIDRefreshFlight,
       findOpenIDRefreshFlight: methods.findOpenIDRefreshFlight,
-      claimOpenIDRefreshFlightDelivery: methods.claimOpenIDRefreshFlightDelivery,
-      releaseOpenIDRefreshFlightDelivery: methods.releaseOpenIDRefreshFlightDelivery,
     },
     logger,
   });

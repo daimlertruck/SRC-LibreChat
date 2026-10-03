@@ -42,6 +42,7 @@ import {
 import {
   isDirectOpenIDBearerRecoveryEnabled,
   resolveDirectOpenIDBearerConfig,
+  resolveOpenIDPlaceholderTokens,
   usesDirectOpenIDBearerRecovery,
 } from './openid';
 import {
@@ -328,15 +329,34 @@ export class MCPConnectionFactory {
       (usesDirectOpenIDBearerRecovery(basic.serverConfig)
         ? (basic.serverConfig as t.ParsedServerConfig)
         : undefined);
+
+    /**
+     * Resolve the live OpenID token set lazily — only when the config carries an OpenID/Graph
+     * placeholder and a provider is available — and carry it onto `basic.openidTokens` so the
+     * synchronous constructor's `processMCPEnv` pass resolves `{{LIBRECHAT_OPENID_*}}` from custody.
+     * It also feeds the Graph pre-pass below. One memoized custody read, shared with the
+     * direct-bearer resolution above.
+     */
+    const openidTokens =
+      basic.openidTokens ??
+      (await resolveOpenIDPlaceholderTokens({
+        /** The bearer-resolved config: a bearer-only server needs no second provider read. */
+        config: bearerConfig as t.ParsedServerConfig,
+        upstreamTokenProvider: options?.upstreamTokenProvider,
+        signal: options?.signal,
+      }));
+
     const preparedBasic =
       bearerConfig === basic.serverConfig &&
-      directBearerSourceConfig === basic.directBearerSourceConfig
+      directBearerSourceConfig === basic.directBearerSourceConfig &&
+      openidTokens == null
         ? basic
         : {
             ...basic,
             serverConfig: bearerConfig,
             serverDefinition: basic.serverDefinition ?? basic.serverConfig,
             directBearerSourceConfig,
+            ...(openidTokens != null && { openidTokens }),
           };
 
     if (basic.dbSourced || !options?.graphTokenResolver) {
@@ -347,6 +367,7 @@ export class MCPConnectionFactory {
       user: options.user,
       graphTokenResolver: options.graphTokenResolver,
       scopes: process.env.GRAPH_API_SCOPES,
+      openidTokens,
     });
 
     return serverConfig === preparedBasic.serverConfig
@@ -621,6 +642,9 @@ export class MCPConnectionFactory {
           dbSourced: basic.dbSourced,
           options: basic.serverConfig,
           customUserVars: options?.customUserVars,
+          /** Resolved by the async create path (`prepareBasicConnectionOptions`); lets the OpenID
+           *  placeholders resolve from custody in this synchronous pass. */
+          openidTokens: basic.openidTokens,
         });
     this.serverName = basic.serverName;
     this.useSSRFProtection = basic.useSSRFProtection === true;

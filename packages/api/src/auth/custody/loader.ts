@@ -72,12 +72,18 @@ function verifyMarker(token: string | undefined): CustodyMarker | null {
  * missing claim, or a mismatched claim all return null with zero store reads. The returned context
  * (or the null) is cached so subsequent calls in the same request are free.
  *
+ * `expectedTenantId` is the tenant the caller knows, compared against the record's own tenant after
+ * the read (the record is looked up by hash alone): `undefined` on an unauthenticated request that
+ * knows no tenant (the refresh controller) makes no tenant check, so a tenant-stamped record still
+ * opens; an authenticated caller passes `req.user.tenantId ?? null`, so a cross-tenant key fails
+ * closed. The custody service, not the lookup, enforces the comparison.
+ *
  * The token key and the context live only on the request object; nothing here writes them to a log,
  * a cookie, the session store or a store document.
  */
 export async function loadOpenIDCustody(
   req: CustodyRequest,
-  deps: { custody: TokenCustodyService; tenantId?: string },
+  deps: { custody: TokenCustodyService; expectedTenantId?: string | null },
 ): Promise<OpenIDCustodyContext | null> {
   if (req.openidCustody !== undefined) {
     return req.openidCustody;
@@ -99,7 +105,7 @@ export async function loadOpenIDCustody(
   req.openidCustody = await deps.custody.openCustody({
     tokenKey: key,
     expectedUserId: marker.id,
-    tenantId: deps.tenantId,
+    expectedTenantId: deps.expectedTenantId,
   });
   return req.openidCustody;
 }

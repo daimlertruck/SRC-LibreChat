@@ -44,7 +44,6 @@ const DEFAULT_LOCK_TTL_MS = 30 * 1000;
 const DEFAULT_WAIT_TIMEOUT_MS = DEFAULT_FLIGHT_TTL_MS;
 const DEFAULT_WAIT_INTERVAL_MS = 100;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 10 * 1000;
-const DEFAULT_DELIVERY_TTL_MS = 30 * 1000;
 const INTERNAL_PREDECESSOR_REFRESH_TOKEN_FIELD = '__predecessorRefreshToken';
 const INTERNAL_PREDECESSOR_ACCESS_TOKEN_FIELD = '__predecessorAccessToken';
 const INTERNAL_DEFERRED_PUBLICATION_FIELD = '__deferredPublication';
@@ -89,12 +88,6 @@ interface FlightFailData extends FlightOwnerData {
   errorMessage: string;
 }
 
-interface FlightDeliveryData {
-  key: string;
-  ownerId: string;
-  deliveryId: string;
-}
-
 export interface OpenIDRefreshFlightService {
   acquireOpenIDRefreshFlight: (args: {
     key?: string | null;
@@ -127,19 +120,6 @@ export interface OpenIDRefreshFlightService {
     key?: string | null;
     ownerId?: string;
   }) => Promise<RefreshFlightRecord | boolean>;
-  assertOpenIDRefreshSessionGenerationAvailable: (args: {
-    key?: string | null;
-    ownerId?: string;
-  }) => Promise<RefreshFlightRecord | boolean>;
-  claimOpenIDRefreshFlightDelivery: (args: {
-    key: string;
-    ownerId: string;
-    createdAt?: number;
-    deliveryId?: string;
-    ttl?: number;
-  }) => Promise<RefreshFlightRecord>;
-  assertOpenIDRefreshFlightDeliveryAvailable: (args: FlightDeliveryData) => Promise<void>;
-  releaseOpenIDRefreshFlightDelivery: (args: FlightDeliveryData) => Promise<void>;
   revokeOpenIDRefreshFlights: (args: {
     keys?: Array<string | null | undefined>;
     seal: CustodyFlightSeal;
@@ -172,7 +152,6 @@ export interface OpenIDRefreshFlightService {
     DEFAULT_WAIT_TIMEOUT_MS: number;
     DEFAULT_WAIT_INTERVAL_MS: number;
     DEFAULT_HEARTBEAT_INTERVAL_MS: number;
-    DEFAULT_DELIVERY_TTL_MS: number;
     INTERNAL_PREDECESSOR_REFRESH_TOKEN_FIELD: string;
     getRenewedWaitDeadline: (deadline: number, flight: RefreshFlightRecord | null) => number;
   };
@@ -191,12 +170,6 @@ export interface OpenIDRefreshFlightDeps {
       expiresAt: Date;
     }) => Promise<RefreshFlightRecord | null>;
     findOpenIDRefreshFlight: (data: { key: string }) => Promise<RefreshFlightRecord | null>;
-    claimOpenIDRefreshFlightDelivery: (
-      data: FlightDeliveryData & { deliveryExpiresAt: Date; createdAt?: Date },
-    ) => Promise<RefreshFlightRecord | null>;
-    releaseOpenIDRefreshFlightDelivery: (
-      data: FlightDeliveryData,
-    ) => Promise<RefreshFlightRecord | null>;
   };
   logger: Pick<OpenIDLogger, 'warn'>;
 }
@@ -359,112 +332,6 @@ export function createOpenIDRefreshFlightService({
     throw createOpenIDRefreshOwnershipError(
       'OpenID refresh result is no longer available for publication',
     );
-  }
-
-  /**
-   * Validates a generation already installed in an Express session. Completed-flight rows may
-   * expire before the session reuse window, so absence is acceptable; an extant row must still
-   * name the same completed generation. Logout tombstones and replacement generations fail closed.
-   */
-  async function assertOpenIDRefreshSessionGenerationAvailable({
-    key,
-    ownerId,
-  }: {
-    key?: string | null;
-    ownerId?: string;
-  }): Promise<RefreshFlightRecord | boolean> {
-    if (!key && !ownerId) return true;
-    if (!key || !ownerId) {
-      throw createOpenIDRefreshOwnershipError(
-        'OpenID session publication generation is incomplete',
-      );
-    }
-    const flight = await db.findOpenIDRefreshFlight({ key });
-    if (
-      !flight ||
-      (flight.status === 'completed' && flight.ownerId === ownerId && !flight.revocationRequestedAt)
-    ) {
-      return flight ?? true;
-    }
-    throw createOpenIDRefreshOwnershipError(
-      'OpenID session publication generation is no longer available',
-    );
-  }
-
-  async function claimOpenIDRefreshFlightDelivery({
-    key,
-    ownerId,
-    createdAt,
-    deliveryId = crypto.randomUUID(),
-    ttl = DEFAULT_DELIVERY_TTL_MS,
-  }: {
-    key: string;
-    ownerId: string;
-    createdAt?: number;
-    deliveryId?: string;
-    ttl?: number;
-  }): Promise<RefreshFlightRecord> {
-    const deadline = Date.now() + ttl;
-    while (Date.now() <= deadline) {
-      const deliveryExpiresAt = new Date(Date.now() + ttl);
-      const delivery = await db.claimOpenIDRefreshFlightDelivery({
-        key,
-        ownerId,
-        deliveryId,
-        deliveryExpiresAt,
-        ...(Number.isFinite(createdAt) ? { createdAt: new Date(createdAt as number) } : {}),
-      });
-      if (delivery) return delivery;
-
-      const current = await db.findOpenIDRefreshFlight({ key });
-      if (!current && Number.isFinite(createdAt)) {
-        await delay(DEFAULT_WAIT_INTERVAL_MS);
-        continue;
-      }
-      if (
-        current?.status !== 'completed' ||
-        current.ownerId !== ownerId ||
-        current.revocationRequestedAt
-      ) {
-        throw createOpenIDRefreshOwnershipError(
-          'OpenID refresh generation is unavailable for response delivery',
-        );
-      }
-      await delay(DEFAULT_WAIT_INTERVAL_MS);
-    }
-    throw new Error('Timed out waiting to deliver the OpenID refresh generation');
-  }
-
-  async function assertOpenIDRefreshFlightDeliveryAvailable({
-    key,
-    ownerId,
-    deliveryId,
-  }: FlightDeliveryData): Promise<void> {
-    const delivery = await db.findOpenIDRefreshFlight({ key });
-    const deliveryExpiresAt = delivery?.deliveryExpiresAt
-      ? new Date(delivery.deliveryExpiresAt).getTime()
-      : NaN;
-    if (
-      delivery?.status === 'completed' &&
-      delivery.ownerId === ownerId &&
-      delivery.deliveryId === deliveryId &&
-      !delivery.revocationRequestedAt &&
-      Number.isFinite(deliveryExpiresAt) &&
-      deliveryExpiresAt > Date.now()
-    ) {
-      return;
-    }
-    throw createOpenIDRefreshOwnershipError(
-      'OpenID refresh response delivery authorization was revoked',
-    );
-  }
-
-  async function releaseOpenIDRefreshFlightDelivery({
-    key,
-    ownerId,
-    deliveryId,
-  }: FlightDeliveryData): Promise<void> {
-    await db.releaseOpenIDRefreshFlightDelivery({ key, ownerId, deliveryId });
   }
 
   async function withOpenIDRefreshFlightLease<T>({
@@ -744,15 +611,11 @@ export function createOpenIDRefreshFlightService({
 
   return {
     acquireOpenIDRefreshFlight,
-    assertOpenIDRefreshFlightDeliveryAvailable,
     assertOpenIDRefreshFlightAvailable,
-    assertOpenIDRefreshSessionGenerationAvailable,
-    claimOpenIDRefreshFlightDelivery,
     completeOpenIDRefreshFlight,
     createOpenIDRefreshFlightKey,
     failOpenIDRefreshFlight,
     renewOpenIDRefreshFlight,
-    releaseOpenIDRefreshFlightDelivery,
     revokeOpenIDRefreshFlights,
     waitForOpenIDRefreshFlight,
     withOpenIDRefreshFlightLease,
@@ -764,7 +627,6 @@ export function createOpenIDRefreshFlightService({
       DEFAULT_WAIT_TIMEOUT_MS,
       DEFAULT_WAIT_INTERVAL_MS,
       DEFAULT_HEARTBEAT_INTERVAL_MS,
-      DEFAULT_DELIVERY_TTL_MS,
       INTERNAL_PREDECESSOR_REFRESH_TOKEN_FIELD,
       getRenewedWaitDeadline,
     },

@@ -198,7 +198,7 @@ describe('verifyCustodyBinding', () => {
       const req = { cookies } as Request;
       const result = await verifyCustodyBinding(req, {
         custody: service,
-        tenantId: identity.tenantId,
+        expectedTenantId: identity.tenantId ?? null,
       });
 
       expect(result).toEqual(

@@ -38,7 +38,8 @@ const logoutController = async (req, res) => {
   const custody = isOpenIdUser
     ? await loadOpenIDCustody(req, {
         custody: getTokenCustodyService(),
-        tenantId: req.user?.tenantId,
+        /** Authenticated: the logged-in user's tenant is the one we know. */
+        expectedTenantId: req.user?.tenantId ?? null,
       })
     : null;
 
@@ -73,7 +74,6 @@ const logoutController = async (req, res) => {
             user: req.user,
             identityContext: refreshIdentity,
             refreshTokens: [...logoutTokens],
-            publicationKeys: [],
             ttl: math(process.env.REFRESH_TOKEN_EXPIRY, DEFAULT_REFRESH_TOKEN_EXPIRY),
           });
           logoutTokens.push(...revokedRefreshTokens);
@@ -89,8 +89,12 @@ const logoutController = async (req, res) => {
         userId,
         tenantId: req.user?.tenantId,
       });
+      /**
+       * `req.session.openidTokens` is retired by key custody and no longer written, so there is
+       * nothing to delete here. `openidLogoutIdToken` is unrelated (the end-session id_token hint
+       * for `OPENID_USE_END_SESSION_ENDPOINT`) and is still cleared.
+       */
       if (req.session) {
-        delete req.session.openidTokens;
         delete req.session.openidLogoutIdToken;
       }
     }

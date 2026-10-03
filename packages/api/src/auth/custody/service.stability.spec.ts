@@ -111,7 +111,7 @@ describe('custody lookup key under rotation', () => {
         service.openCustody({
           tokenKey: key,
           expectedUserId: identity.userId,
-          tenantId: identity.tenantId,
+          expectedTenantId: identity.tenantId ?? null,
         });
 
       let context = (await open()) as OpenIDCustodyContext;
@@ -119,15 +119,15 @@ describe('custody lookup key under rotation', () => {
 
       for (const tokens of sequence) {
         const result = await service.rotateCustody({ context, tokens });
-        expect(result.applied).toBe(true);
+        expect(result.outcome).toBe('applied');
+        if (result.outcome === 'gone') {
+          throw new Error('unexpected gone outcome');
+        }
         expect(result.context.tokenKeyHash).toBe(originalHash);
         context = result.context;
       }
 
-      const stored = await methods.findTokenCustody({
-        tokenKeyHash: originalHash,
-        tenantId: identity.tenantId,
-      });
+      const stored = await methods.findTokenCustody({ tokenKeyHash: originalHash });
       expect(stored?.tokenKeyHash).toBe(originalHash);
       expect(stored?.rotationCounter).toBe(sequence.length);
       expect(await mongoose.models.TokenCustody.countDocuments()).toBe(1);

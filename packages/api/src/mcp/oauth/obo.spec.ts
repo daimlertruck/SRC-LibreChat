@@ -87,8 +87,25 @@ describe('resolveOboToken', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockIsOpenIDTokenValid.mockReturnValue(true);
-    /** Default: no federated-token fallback unless a test opts in. */
-    mockExtractOpenIDTokenInfo.mockReturnValue(null);
+    /**
+     * `buildUpstreamTokenInfo` delegates to `extractOpenIDTokenInfo(user, resolvedTokens)`: the
+     * resolved live set takes precedence, else the user snapshot. Mirror that precedence here —
+     * when a resolved set is passed, derive the info from it; otherwise return null so a test opts
+     * into the federated-token fallback by overriding this mock.
+     */
+    mockExtractOpenIDTokenInfo.mockImplementation((user, resolvedTokens) => {
+      if (resolvedTokens) {
+        return {
+          accessToken: resolvedTokens.access_token,
+          idToken: resolvedTokens.id_token,
+          expiresAt: resolvedTokens.expires_at,
+          userId: user?.openidId || user?.id,
+          userEmail: user?.email,
+          userName: user?.name || user?.username,
+        };
+      }
+      return null;
+    });
     (liveProvider as jest.Mock).mockResolvedValue(liveTokens);
     (mockResolver as jest.Mock).mockResolvedValue({
       access_token: 'exchanged-mcp-token',
@@ -235,7 +252,8 @@ describe('resolveOboToken', () => {
 
     const result = await resolveOboToken(mockUser as IUser, oboConfig, mockResolver, nullProvider);
 
-    expect(mockExtractOpenIDTokenInfo).toHaveBeenCalledWith(mockUser);
+    /** Provider returned null, so the snapshot path runs: `extractOpenIDTokenInfo(user, null)`. */
+    expect(mockExtractOpenIDTokenInfo).toHaveBeenCalledWith(mockUser, null);
     expect(mockResolver).toHaveBeenCalledWith(
       mockUser,
       'federated-access-token',

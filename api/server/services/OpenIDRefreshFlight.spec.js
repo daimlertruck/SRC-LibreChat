@@ -25,13 +25,11 @@ jest.mock('@librechat/api', () => ({
 
 jest.mock('~/models', () => ({
   acquireOpenIDRefreshFlight: jest.fn(),
-  claimOpenIDRefreshFlightDelivery: jest.fn(),
   completeOpenIDRefreshFlight: jest.fn(),
   failOpenIDRefreshFlight: jest.fn(),
   findOpenIDRefreshFlight: jest.fn(),
   revokeOpenIDRefreshFlight: jest.fn(),
   renewOpenIDRefreshFlight: jest.fn(),
-  releaseOpenIDRefreshFlightDelivery: jest.fn(),
 }));
 
 const { sealTokens, openTokens } = require('@librechat/api');
@@ -39,14 +37,10 @@ const db = require('~/models');
 const {
   acquireOpenIDRefreshFlight,
   assertOpenIDRefreshFlightAvailable,
-  assertOpenIDRefreshFlightDeliveryAvailable,
-  assertOpenIDRefreshSessionGenerationAvailable,
-  claimOpenIDRefreshFlightDelivery,
   completeOpenIDRefreshFlight,
   createOpenIDRefreshFlightKey,
   failOpenIDRefreshFlight,
   renewOpenIDRefreshFlight,
-  releaseOpenIDRefreshFlightDelivery,
   revokeOpenIDRefreshFlights,
   waitForOpenIDRefreshFlight,
   withOpenIDRefreshFlightLease,
@@ -67,16 +61,10 @@ describe('OpenIDRefreshFlight', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     db.acquireOpenIDRefreshFlight.mockResolvedValue({ acquired: true, flight: null });
-    db.claimOpenIDRefreshFlightDelivery.mockResolvedValue({
-      status: 'completed',
-      ownerId: 'owner-1',
-      deliveryId: 'delivery-1',
-    });
     db.completeOpenIDRefreshFlight.mockResolvedValue({});
     db.failOpenIDRefreshFlight.mockResolvedValue({});
     db.findOpenIDRefreshFlight.mockResolvedValue(null);
     db.renewOpenIDRefreshFlight.mockResolvedValue({ ownerId: 'owner-1', status: 'pending' });
-    db.releaseOpenIDRefreshFlightDelivery.mockResolvedValue({ status: 'completed' });
     db.revokeOpenIDRefreshFlight.mockResolvedValue({ status: 'revoked' });
   });
 
@@ -112,105 +100,6 @@ describe('OpenIDRefreshFlight', () => {
     db.findOpenIDRefreshFlight.mockResolvedValueOnce({ status: 'completed', ownerId: 'owner-2' });
     await expect(
       assertOpenIDRefreshFlightAvailable({ key: 'flight-key', ownerId: 'owner-1' }),
-    ).rejects.toMatchObject({ code: 'OPENID_REFRESH_OWNERSHIP_LOST' });
-  });
-
-  it('rejects tombstoned or replaced session generations but permits expired records', async () => {
-    db.findOpenIDRefreshFlight.mockResolvedValueOnce({ status: 'revoked', ownerId: 'owner-1' });
-    await expect(
-      assertOpenIDRefreshSessionGenerationAvailable({ key: 'flight-key', ownerId: 'owner-1' }),
-    ).rejects.toMatchObject({ code: 'OPENID_REFRESH_OWNERSHIP_LOST' });
-
-    db.findOpenIDRefreshFlight.mockResolvedValueOnce({ status: 'completed', ownerId: 'owner-2' });
-    await expect(
-      assertOpenIDRefreshSessionGenerationAvailable({ key: 'flight-key', ownerId: 'owner-1' }),
-    ).rejects.toMatchObject({ code: 'OPENID_REFRESH_OWNERSHIP_LOST' });
-
-    db.findOpenIDRefreshFlight.mockResolvedValueOnce(null);
-    await expect(
-      assertOpenIDRefreshSessionGenerationAvailable({ key: 'flight-key', ownerId: 'owner-1' }),
-    ).resolves.toBe(true);
-  });
-
-  it('claims and releases a durable response-delivery lease for the exact generation', async () => {
-    const createdAt = Date.now() - 1000;
-    const claimed = await claimOpenIDRefreshFlightDelivery({
-      key: 'flight-key',
-      ownerId: 'owner-1',
-      createdAt,
-      deliveryId: 'delivery-1',
-      ttl: 5000,
-    });
-
-    expect(claimed.deliveryId).toBe('delivery-1');
-    expect(db.claimOpenIDRefreshFlightDelivery).toHaveBeenCalledWith({
-      key: 'flight-key',
-      ownerId: 'owner-1',
-      deliveryId: 'delivery-1',
-      deliveryExpiresAt: expect.any(Date),
-      createdAt: new Date(createdAt),
-    });
-
-    await releaseOpenIDRefreshFlightDelivery({
-      key: 'flight-key',
-      ownerId: 'owner-1',
-      deliveryId: 'delivery-1',
-    });
-    expect(db.releaseOpenIDRefreshFlightDelivery).toHaveBeenCalledWith({
-      key: 'flight-key',
-      ownerId: 'owner-1',
-      deliveryId: 'delivery-1',
-    });
-  });
-
-  it('retries an expired synthetic generation when its previous delivery releases between reads', async () => {
-    db.claimOpenIDRefreshFlightDelivery.mockResolvedValueOnce(null).mockResolvedValueOnce({
-      status: 'completed',
-      ownerId: 'owner-1',
-      deliveryId: 'delivery-2',
-    });
-    db.findOpenIDRefreshFlight.mockResolvedValueOnce(null);
-
-    await expect(
-      claimOpenIDRefreshFlightDelivery({
-        key: 'flight-key',
-        ownerId: 'owner-1',
-        createdAt: Date.now() - 1000,
-        deliveryId: 'delivery-2',
-        ttl: 1000,
-      }),
-    ).resolves.toMatchObject({ deliveryId: 'delivery-2' });
-    expect(db.claimOpenIDRefreshFlightDelivery).toHaveBeenCalledTimes(2);
-  });
-
-  it('authorizes only the active, unrevoked response-delivery lease', async () => {
-    db.findOpenIDRefreshFlight.mockResolvedValueOnce({
-      status: 'completed',
-      ownerId: 'owner-1',
-      deliveryId: 'delivery-1',
-      deliveryExpiresAt: new Date(Date.now() + 5000),
-    });
-    await expect(
-      assertOpenIDRefreshFlightDeliveryAvailable({
-        key: 'flight-key',
-        ownerId: 'owner-1',
-        deliveryId: 'delivery-1',
-      }),
-    ).resolves.toBeUndefined();
-
-    db.findOpenIDRefreshFlight.mockResolvedValueOnce({
-      status: 'completed',
-      ownerId: 'owner-1',
-      deliveryId: 'delivery-1',
-      deliveryExpiresAt: new Date(Date.now() + 5000),
-      revocationRequestedAt: new Date(),
-    });
-    await expect(
-      assertOpenIDRefreshFlightDeliveryAvailable({
-        key: 'flight-key',
-        ownerId: 'owner-1',
-        deliveryId: 'delivery-1',
-      }),
     ).rejects.toMatchObject({ code: 'OPENID_REFRESH_OWNERSHIP_LOST' });
   });
 

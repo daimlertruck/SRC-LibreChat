@@ -15,7 +15,7 @@ import type {
   TokenPreference,
 } from './types';
 import type { OpenIDCustodyContext, TokenCustodyService } from '~/auth/custody/service';
-import type { CustodyTokenPayload } from '~/auth/custody/aead';
+import type { CustodyTokenPayload, TokenCustodyIdentity } from '~/auth/custody/aead';
 import type { CustodyRequest } from '~/auth/custody/loader';
 import { toOpenIDLogArgument } from './errors';
 
@@ -74,7 +74,7 @@ interface OpenIDSessionRefreshDeps {
    */
   loadOpenIDCustody: (
     req: CustodyRequest,
-    deps: { custody: TokenCustodyService; tenantId?: string },
+    deps: { custody: TokenCustodyService; expectedTenantId?: string | null },
   ) => Promise<OpenIDCustodyContext | null>;
   /**
    * Re-issues the token key cookie with the record's derived `expires`. The value is the unchanged
@@ -84,6 +84,18 @@ interface OpenIDSessionRefreshDeps {
   setTokenKeyCookie: (res: OpenIDResponse, tokenKey: string, expires: Date) => void;
   /** Drops the token key cookie, used when an `invalid_grant` retires the custody record. */
   clearTokenKeyCookie: (res: OpenIDResponse) => void;
+  /**
+   * Best-effort IdP revocation of a single refresh token, called when a rotation finds its custody
+   * record already deleted (logout, ban) so the just-issued token would otherwise be stranded live
+   * at the IdP. Optional: when unwired the `gone` path still fails closed, it simply skips the
+   * revocation. The /api wrapper points this at the same `revokeOpenIDRefreshTokenChain` the
+   * logout controller uses.
+   */
+  revokeRefreshToken?: (args: {
+    req: OpenIDRequest;
+    refreshToken: string;
+    identity: TokenCustodyIdentity;
+  }) => Promise<void>;
 }
 
 type MarkedOIDCTokens = OIDCTokens;
@@ -153,6 +165,7 @@ export function createOpenIDSessionRefreshService(
     loadOpenIDCustody,
     setTokenKeyCookie,
     clearTokenKeyCookie,
+    revokeRefreshToken,
   } = deps;
 
   /**
@@ -181,8 +194,6 @@ export function createOpenIDSessionRefreshService(
    *                                               from the IdP `tokenset.expires_in` so opaque
    *                                               access tokens can still be reused without
    *                                               redundant refreshes.
-   * @property {string} [publicationFlightKey]  — durable publication key authorizing this state.
-   * @property {string} [publicationFlightOwnerId] — exact completed generation for that key.
    */
 
   /**
@@ -470,7 +481,9 @@ export function createOpenIDSessionRefreshService(
   ): Promise<OpenIDCustodyContext | null> {
     return loadOpenIDCustody(req as unknown as CustodyRequest, {
       custody: getCustody(),
-      tenantId: identityContext?.tenantId,
+      /** An authenticated OBO/tool request: the identity context's tenant is the one the caller
+       *  knows, so a cross-tenant key fails closed; `null` when the identity carries no tenant. */
+      expectedTenantId: identityContext?.tenantId ?? null,
     });
   }
 
@@ -580,9 +593,12 @@ export function createOpenIDSessionRefreshService(
    *   3. on an applied rotation, the token key cookie is re-issued with the rotation's `expiresAt`
    *      when headers have not been sent; otherwise the record update stands and the next
    *      non-streaming request re-issues it;
-   *   4. an `applied: false` result means a concurrent worker already rotated: adopt the winner's
+   *   4. a `superseded` result means a concurrent worker already rotated: adopt the winner's
    *      token set with no second grant and no write;
-   *   5. an `invalid_grant` is handled by `recoverFromInvalidGrant`.
+   *   5. a `gone` result means the record was deleted (logout, ban) while this request worked:
+   *      reject session-missing, re-issue no cookie, and make one best-effort IdP revocation of
+   *      the refresh token this request just obtained, since nothing will ever use it;
+   *   6. an `invalid_grant` is handled by `recoverFromInvalidGrant`.
    *
    * When the custody store is unavailable the grant or rotation rejects and the tool call fails;
    * there is no plaintext or `CREDS_KEY` fallback.
@@ -611,7 +627,18 @@ export function createOpenIDSessionRefreshService(
     signal?.throwIfAborted();
     const rotation = await getCustody().rotateCustody({ context, tokens: payload });
 
-    if (rotation.applied) {
+    if (rotation.outcome === 'gone') {
+      /**
+       * The record was deleted (logout, ban) or expired while this request held the grant in
+       * flight. Fail closed rather than reviving the pre-rotation session: re-issue no cookie,
+       * return no token, and make one best-effort IdP revocation of the refresh token this request
+       * just obtained, since the rotation never persisted it and nothing else will revoke it.
+       */
+      await revokeOrphanedRefreshToken(req, context, payload.refreshToken);
+      throw createOpenIDSessionMissingError('record-gone-during-rotation');
+    }
+
+    if (rotation.outcome === 'applied') {
       reissueTokenKeyCookie(res, rotation.context.tokenKey, rotation.expiresAt);
       return buildOIDCTokensFromCustody(
         rotation.context.tokens,
@@ -621,12 +648,39 @@ export function createOpenIDSessionRefreshService(
     }
 
     /**
-     * Lost the compare-and-set: a concurrent worker already rotated. The winner's record is
-     * authoritative for both the token set and the lifetime, so adopt it with no second grant and
-     * no write. Re-issue the cookie from the winner's `recordExpiresAt` when headers allow.
+     * `superseded`: lost the compare-and-set, a concurrent worker already rotated. The winner's
+     * record is authoritative for both the token set and the lifetime, so adopt it with no second
+     * grant and no write — and no revocation, because at IdPs with refresh-token reuse detection
+     * revoking this request's token can revoke the whole family and kill the winner's session.
+     * Re-issue the cookie from the winner's `recordExpiresAt` when headers allow.
      */
     reissueTokenKeyCookie(res, rotation.context.tokenKey, rotation.context.recordExpiresAt);
     return buildOIDCTokensFromCustody(rotation.context.tokens, tokenPreference);
+  }
+
+  /**
+   * Best-effort revocation of a refresh token the IdP just issued to a request whose custody record
+   * was deleted mid-rotation. The rotation never persisted the token, so no other path will ever
+   * revoke it; leaving it live would strand a usable credential at the IdP after a logout. A failed,
+   * timed-out or unreachable revocation is logged at `warn` with no token material and does not
+   * change the session-missing rejection. A no-op when no revocation dependency is wired.
+   */
+  async function revokeOrphanedRefreshToken(
+    req: OpenIDRequest,
+    context: OpenIDCustodyContext,
+    refreshToken: string | undefined,
+  ): Promise<void> {
+    if (!revokeRefreshToken || !refreshToken) {
+      return;
+    }
+    try {
+      await revokeRefreshToken({ req, refreshToken, identity: context.identity });
+    } catch (error) {
+      logger.warn(
+        '[OpenIDSessionRefresh] Failed to revoke the orphaned refresh token after a record-gone rotation',
+        toOpenIDLogArgument(error),
+      );
+    }
   }
 
   /**

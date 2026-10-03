@@ -442,7 +442,8 @@ describe('validateImageRequest middleware', () => {
       expect(custody.custodyExists).toHaveBeenCalledWith({
         tokenKeyHash,
         expectedUserId: validObjectId,
-        tenantId: undefined,
+        // No ambient tenant: the record must carry no tenant either.
+        expectedTenantId: null,
       });
       expect(findSession).not.toHaveBeenCalled();
     });
@@ -571,7 +572,7 @@ describe('validateImageRequest middleware', () => {
       expect(custody.custodyExists).toHaveBeenCalledWith({
         tokenKeyHash,
         expectedUserId: validObjectId,
-        tenantId: 'tenant-a',
+        expectedTenantId: 'tenant-a',
       });
     });
 

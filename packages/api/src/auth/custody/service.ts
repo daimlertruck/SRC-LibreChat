@@ -48,15 +48,12 @@ export interface OpenIDCustodyContext {
 export interface TokenCustodyDeps {
   db: {
     upsertTokenCustody: (data: TokenCustodyUpsert) => Promise<ITokenCustodyView>;
-    findTokenCustody: (query: {
-      tokenKeyHash: string;
-      tenantId?: string;
-    }) => Promise<ITokenCustodyView | null>;
+    /** Reads by hash alone; the record's own `tenantId` is returned, never a lookup input. */
+    findTokenCustody: (query: { tokenKeyHash: string }) => Promise<ITokenCustodyView | null>;
     /** Projected read for the file-authorization paths: never returns `sealedTokens`. */
     findTokenCustodyMeta: (query: {
       tokenKeyHash: string;
-      tenantId?: string;
-    }) => Promise<{ userId: string } | null>;
+    }) => Promise<{ userId: string; tenantId?: string } | null>;
     updateTokenCustodyIfCurrent: (data: TokenCustodyRotation) => Promise<ITokenCustodyView | null>;
     deleteTokenCustody: (query: { tokenKeyHash: string }) => Promise<{ deletedCount: number }>;
     deleteTokenCustodiesByUser: (query: {
@@ -85,32 +82,46 @@ export interface TokenCustodyService {
     identity: TokenCustodyIdentity;
   }) => Promise<{ tokenKey: string; tokenKeyHash: string; expiresAt: Date }>;
 
-  /** Opens the record a request's cookie points at. */
+  /**
+   * Opens the record a request's cookie points at. Reads by hash alone and compares the record's
+   * own `tenantId` against `expectedTenantId` after the read: `undefined` makes no tenant check
+   * (an unauthenticated refresh with no trusted tenant), `null` requires the record to carry no
+   * tenant, a string must equal the record's tenant.
+   */
   openCustody: (args: {
     tokenKey: Buffer;
     expectedUserId?: string;
-    tenantId?: string;
+    expectedTenantId?: string | null;
   }) => Promise<OpenIDCustodyContext | null>;
 
   /**
-   * Existence-and-identity check for the file-authorization paths: same expiry and tenant
-   * predicates as `openCustody`, no AEAD, no key material. This is the revocation check.
+   * Existence-and-identity check for the file-authorization paths and the Graph pre-send recheck:
+   * same expiry predicate and the same post-read user and tenant comparison as `openCustody`, no
+   * AEAD, no key material. This is the revocation check.
    */
   custodyExists: (args: {
     tokenKeyHash: string;
     expectedUserId?: string;
-    tenantId?: string;
+    expectedTenantId?: string | null;
   }) => Promise<boolean>;
 
   /**
    * Re-seals under the SAME key; compare-and-set on `rotationCounter`. Recomputes `expiresAt` from
    * the new token set and returns it, so the caller re-issues the cookie with the record's value
    * rather than deriving one.
+   *
+   * `applied` is a fresh rotation this call wrote; `superseded` is a lost race adopted from the
+   * winner's record. `gone` means the compare-and-set matched nothing AND the reload found no live
+   * record: the session was deleted (logout, ban) while this request worked, and the caller must
+   * fail closed rather than fall back to the pre-rotation context.
    */
   rotateCustody: (args: {
     context: OpenIDCustodyContext;
     tokens: CustodyTokenPayload;
-  }) => Promise<{ applied: boolean; context: OpenIDCustodyContext; expiresAt: Date }>;
+  }) => Promise<
+    | { outcome: 'applied' | 'superseded'; context: OpenIDCustodyContext; expiresAt: Date }
+    | { outcome: 'gone' }
+  >;
 
   /** Re-reads after an `invalid_grant`, in place of the removed bridge lookup. */
   reloadAfterInvalidGrant: (args: {
@@ -165,6 +176,24 @@ export function createTokenCustodyService(deps: TokenCustodyDeps): TokenCustodyS
   const now = deps.now ?? (() => Date.now());
 
   /**
+   * The post-read cross-tenant guard. `expected` is what the caller knows: `undefined` means the
+   * caller knows no tenant (an unauthenticated refresh without a trusted `X-Tenant-Id`), so no
+   * comparison is made; `null` means the subject has no tenant, so the record must carry none; a
+   * string must equal the record's stored tenant. `recordTenantId` is the record's own column
+   * (absent → `undefined`). A record copied onto another tenant by a database editor is rejected
+   * here, and would also fail to open because the AAD is built from the record's stored columns.
+   */
+  function tenantMatches(expected: string | null | undefined, recordTenantId?: string): boolean {
+    if (expected === undefined) {
+      return true;
+    }
+    if (expected === null) {
+      return recordTenantId == null;
+    }
+    return recordTenantId === expected;
+  }
+
+  /**
    * Mints one token key, computes its hash, seals the token set under the AAD for that hash and
    * identity, and writes exactly one custody record with `rotationCounter` 0. The record's
    * `expiresAt` comes from `resolveRecordExpiry` against the mint time, and that same value is
@@ -215,12 +244,12 @@ export function createTokenCustodyService(deps: TokenCustodyDeps): TokenCustodyS
   async function openCustody(args: {
     tokenKey: Buffer;
     expectedUserId?: string;
-    tenantId?: string;
+    expectedTenantId?: string | null;
   }): Promise<OpenIDCustodyContext | null> {
-    const { tokenKey, expectedUserId, tenantId } = args;
+    const { tokenKey, expectedUserId, expectedTenantId } = args;
 
     const tokenKeyHash = hashTokenKey(tokenKey);
-    const record = await db.findTokenCustody({ tokenKeyHash, tenantId });
+    const record = await db.findTokenCustody({ tokenKeyHash });
 
     if (record === null) {
       deps.logger.debug('[openCustody] custody record absent or expired');
@@ -229,6 +258,11 @@ export function createTokenCustodyService(deps: TokenCustodyDeps): TokenCustodyS
 
     if (expectedUserId !== undefined && record.userId !== expectedUserId) {
       deps.logger.warn('[openCustody] custody identity mismatch');
+      return null;
+    }
+
+    if (!tenantMatches(expectedTenantId, record.tenantId)) {
+      deps.logger.warn('[openCustody] custody tenant mismatch');
       return null;
     }
 
@@ -275,14 +309,18 @@ export function createTokenCustodyService(deps: TokenCustodyDeps): TokenCustodyS
   async function custodyExists(args: {
     tokenKeyHash: string;
     expectedUserId?: string;
-    tenantId?: string;
+    expectedTenantId?: string | null;
   }): Promise<boolean> {
-    const { tokenKeyHash, expectedUserId, tenantId } = args;
-    const record = await db.findTokenCustodyMeta({ tokenKeyHash, tenantId });
+    const { tokenKeyHash, expectedUserId, expectedTenantId } = args;
+    const record = await db.findTokenCustodyMeta({ tokenKeyHash });
     if (record === null) {
       return false;
     }
     if (expectedUserId !== undefined && record.userId !== expectedUserId) {
+      return false;
+    }
+    if (!tenantMatches(expectedTenantId, record.tenantId)) {
+      deps.logger.warn('[custodyExists] custody tenant mismatch');
       return false;
     }
     return true;
@@ -296,17 +334,22 @@ export function createTokenCustodyService(deps: TokenCustodyDeps): TokenCustodyS
    * is returned so the caller re-issues the cookie with the record's `expires` rather than a second
    * computation.
    *
-   * A null result means a concurrent writer already advanced the counter: its record is
-   * authoritative for both the token set and the lifetime, so this reloads and returns
-   * `applied: false` with the winner's context and the winner's `recordExpiresAt`, performing no
-   * IdP grant, no retry and no other write. The locally computed `expiresAt` is discarded rather
-   * than written or handed to a cookie. A store error rejects with the underlying error rather than
-   * reporting `applied: true`, and no fallback copy is written anywhere.
+   * A null compare-and-set means either a concurrent writer advanced the counter or the record is
+   * gone. The reload tells them apart: a live record is a lost race (`superseded`) whose context is
+   * authoritative for both the token set and the lifetime, adopted with no IdP grant, no retry and
+   * no other write; no live record means the session was deleted (logout, ban) or expired while
+   * this request worked, reported as `gone` so the caller fails closed rather than reviving the
+   * pre-rotation context. The locally computed `expiresAt` is discarded in both cases. A store
+   * error rejects with the underlying error rather than reporting a success, and no fallback copy
+   * is written anywhere.
    */
   async function rotateCustody(args: {
     context: OpenIDCustodyContext;
     tokens: CustodyTokenPayload;
-  }): Promise<{ applied: boolean; context: OpenIDCustodyContext; expiresAt: Date }> {
+  }): Promise<
+    | { outcome: 'applied' | 'superseded'; context: OpenIDCustodyContext; expiresAt: Date }
+    | { outcome: 'gone' }
+  > {
     const { context, tokens } = args;
 
     const receivedAt = now();
@@ -329,14 +372,17 @@ export function createTokenCustodyService(deps: TokenCustodyDeps): TokenCustodyS
     });
 
     if (updated === null) {
-      deps.logger.info('[rotateCustody] custody rotation superseded; reloading');
       const fresh = await reloadCustody(context);
-      const winner = fresh ?? context;
-      return { applied: false, context: winner, expiresAt: winner.recordExpiresAt };
+      if (fresh === null) {
+        deps.logger.info('[rotateCustody] custody record gone during rotation; failing closed');
+        return { outcome: 'gone' };
+      }
+      deps.logger.info('[rotateCustody] custody rotation superseded; adopting the winner');
+      return { outcome: 'superseded', context: fresh, expiresAt: fresh.recordExpiresAt };
     }
 
     return {
-      applied: true,
+      outcome: 'applied',
       context: {
         ...context,
         tokens,
@@ -349,17 +395,14 @@ export function createTokenCustodyService(deps: TokenCustodyDeps): TokenCustodyS
 
   /**
    * The reload body, reused after a rotation loses the compare-and-set and after an `invalid_grant`.
-   * One read by the context's hash and tenant, opened with the context's key without re-reading the
-   * cookie. Returns null on an absent, expired or unopenable record without deleting anything, and
-   * carries the read record's `expiresAt` as the reloaded context's `recordExpiresAt`.
+   * One read by the context's hash, opened with the context's key without re-reading the cookie.
+   * Returns null on an absent, expired or unopenable record without deleting anything, and carries
+   * the read record's `expiresAt` as the reloaded context's `recordExpiresAt`.
    */
   async function reloadCustody(
     context: OpenIDCustodyContext,
   ): Promise<OpenIDCustodyContext | null> {
-    const record = await db.findTokenCustody({
-      tokenKeyHash: context.tokenKeyHash,
-      tenantId: context.identity.tenantId,
-    });
+    const record = await db.findTokenCustody({ tokenKeyHash: context.tokenKeyHash });
 
     if (record === null) {
       deps.logger.debug('[reloadCustody] custody record absent or expired');
@@ -398,8 +441,8 @@ export function createTokenCustodyService(deps: TokenCustodyDeps): TokenCustodyS
 
   /**
    * Re-reads the record after an `invalid_grant`, in place of the removed bridge lookup: one read by
-   * the context's hash and tenant, opened with the context's key. Returns null on an absent, expired
-   * or unopenable record without deleting anything.
+   * the context's hash, opened with the context's key. Returns null on an absent, expired or
+   * unopenable record without deleting anything.
    */
   function reloadAfterInvalidGrant(args: {
     context: OpenIDCustodyContext;

@@ -28,9 +28,13 @@ import {
   requiresOAuthMachinery,
   resolveServerInstructions,
 } from './utils';
+import {
+  resolveDirectOpenIDBearerConfig,
+  resolveOpenIDPlaceholderTokens,
+  usesDirectOpenIDBearerRecovery,
+} from './openid';
 import { getMCPAppToolsPublicationGeneration, getMCPToolsChangedGeneration } from './toolsChanged';
 import { MCPAuthenticationRejectedError, isMCPTransportAuthenticationError } from './errors';
-import { resolveDirectOpenIDBearerConfig, usesDirectOpenIDBearerRecovery } from './openid';
 import { createLazyOboUpstreamTokenProvider, awaitOboOperation } from '~/mcp/oauth/obo';
 import { MCPServersInitializer } from './registry/MCPServersInitializer';
 import { OboTokenResolutionError, resolveOboToken } from '~/mcp/oauth';
@@ -1276,28 +1280,43 @@ Please follow these instructions when using tools from the respective MCP server
         const ephemeralConnection = !!userId && requiresEphemeralUserConnection(rawConfig);
         disposeAfterCall = ephemeralConnection && !requestScopedConnections;
 
-        /** Plugin-authored placeholders must not resolve against the user's Graph token. */
-        const graphProcessedConfig =
-          isDbSourced || isPluginSourced(rawConfig)
-            ? (rawConfig as t.MCPOptions)
-            : await preProcessGraphTokens(rawConfig as t.MCPOptions, {
-                user,
-                graphTokenResolver,
-                scopes: process.env.GRAPH_API_SCOPES,
-              });
         const directBearerRecovery = usesDirectOpenIDBearerRecovery(rawConfig);
         const bearerConfig = await resolveDirectOpenIDBearerConfig({
-          config: graphProcessedConfig,
+          config: rawConfig,
           upstreamTokenProvider,
           resolvedConfig: directBearerRecoveryState.resolvedConfig,
           signal: options?.signal,
         });
+        /**
+         * Resolve the live OpenID token set lazily, after the direct bearer: only when the config
+         * still carries an OpenID/Graph placeholder and is neither plugin- nor db-sourced. Scanning
+         * the bearer-resolved config means a bearer-only server (or one reusing a recovered
+         * bearer) performs no second provider read. The resolved set feeds both the Graph pre-pass
+         * and `processMCPEnv`, so `{{LIBRECHAT_OPENID_*}}` / `{{LIBRECHAT_GRAPH_*}}` resolve from
+         * custody rather than the empty `federatedTokens` snapshot.
+         */
+        const openidTokens = await resolveOpenIDPlaceholderTokens({
+          config: bearerConfig as t.ParsedServerConfig,
+          upstreamTokenProvider,
+          signal: options?.signal,
+        });
+        /** Plugin-authored placeholders must not resolve against the user's Graph token. */
+        const graphProcessedConfig =
+          isDbSourced || isPluginSourced(rawConfig)
+            ? (bearerConfig as t.MCPOptions)
+            : await preProcessGraphTokens(bearerConfig as t.MCPOptions, {
+                user,
+                graphTokenResolver,
+                scopes: process.env.GRAPH_API_SCOPES,
+                openidTokens,
+              });
         const currentOptions = processMCPEnv({
           user,
           body: requestBody,
           dbSourced: isDbSourced,
-          options: bearerConfig,
+          options: graphProcessedConfig,
           customUserVars,
+          openidTokens,
         });
 
         const resolvedHeaders: Record<string, string> =

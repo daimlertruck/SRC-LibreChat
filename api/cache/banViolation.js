@@ -58,16 +58,17 @@ const banViolation = async (req, res, errorMessage) => {
     tenantId: req.user?.tenantId,
   });
 
-  /** Clear OpenID session tokens if present */
-  if (req.session?.openidTokens) {
-    delete req.session.openidTokens;
-  }
-
+  /**
+   * `req.session.openidTokens` is retired by key custody; the deleteAllForUser call above removes
+   * the sealed custody records, which is what revokes the OpenID session now. The cookie clears
+   * stay as defensive cleanup for any cookies a pre-rollout session may still carry.
+   */
   res.clearCookie('refreshToken');
   res.clearCookie('openid_access_token');
   res.clearCookie('openid_id_token');
   res.clearCookie('openid_user_id');
   res.clearCookie('token_provider');
+  res.clearCookie('openid_token_key');
 
   const banLogs = getLogStores(ViolationTypes.BAN);
   const duration = errorMessage.duration || banLogs.opts.ttl;

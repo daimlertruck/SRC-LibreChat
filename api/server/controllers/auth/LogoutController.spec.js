@@ -284,7 +284,7 @@ describe('LogoutController', () => {
 
       expect(mockLoadOpenIDCustody).toHaveBeenCalledWith(
         req,
-        expect.objectContaining({ tenantId: 'tenantA' }),
+        expect.objectContaining({ expectedTenantId: 'tenantA' }),
       );
       expect(mockDeleteAllForUser).toHaveBeenCalledWith({
         userId: 'user1',
@@ -300,7 +300,6 @@ describe('LogoutController', () => {
           openidIssuer: undefined,
         },
         refreshTokens: ['srt'],
-        publicationKeys: [],
         ttl: 7 * 24 * 60 * 60 * 1000,
       });
       /** Open, revoke, THEN delete: deleting first would discard the only copy of the token to revoke. */

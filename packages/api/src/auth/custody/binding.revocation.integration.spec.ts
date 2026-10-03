@@ -111,12 +111,15 @@ describe('custody revocation', () => {
       }
 
       const bind = () =>
-        verifyCustodyBinding(req, { custody: service, tenantId: identity.tenantId });
+        verifyCustodyBinding(req, {
+          custody: service,
+          expectedTenantId: identity.tenantId ?? null,
+        });
       const open = () =>
         service.openCustody({
           tokenKey: key,
           expectedUserId: identity.userId,
-          tenantId: identity.tenantId,
+          expectedTenantId: identity.tenantId ?? null,
         });
       const revoke = () =>
         mode === 'deleteCustody'

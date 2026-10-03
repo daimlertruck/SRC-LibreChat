@@ -5,16 +5,20 @@ import type {
   TokenCustodyUpsert,
   TokenCustodyRotation,
   TokenCustodyQuery,
+  TokenCustodyMeta,
   TokenCustodyUserQuery,
 } from '~/types';
 import { createIndexesWithRetry } from '~/utils/retry';
 import logger from '~/config/winston';
 
 /**
- * Every read and update is tenant-scoped: a call carrying a `tenantId`
- * matches only records stamped with that same value, and a call without one matches only records
- * that carry no `tenantId` field. An absent tenant is `{ $exists: false }`, never the value
- * `undefined`, so the two are distinguishable.
+ * The by-user delete filter: a call carrying a `tenantId` matches only records stamped with that
+ * same value, and a call without one matches only records that carry no `tenantId` field. An absent
+ * tenant is `{ $exists: false }`, never the value `undefined`, so the two are distinguishable. This
+ * is the only method that filters on tenant: reads and the single-record delete address a record by
+ * its unique `tokenKeyHash`, and the caller compares the returned `tenantId` after the read
+ * (`expectedTenantId` in the custody service), so a record cannot be looked up with the wrong tenant
+ * input while still being rejected cross-tenant.
  */
 function tenantFilter(tenantId?: string): FilterQuery<ITokenCustody> {
   return { tenantId: tenantId ?? { $exists: false } };
@@ -23,7 +27,7 @@ function tenantFilter(tenantId?: string): FilterQuery<ITokenCustody> {
 export function createTokenCustodyMethods(mongoose: typeof import('mongoose')): {
   upsertTokenCustody: (data: TokenCustodyUpsert) => Promise<ITokenCustodyView>;
   findTokenCustody: (query: TokenCustodyQuery) => Promise<ITokenCustodyView | null>;
-  findTokenCustodyMeta: (query: TokenCustodyQuery) => Promise<{ userId: string } | null>;
+  findTokenCustodyMeta: (query: TokenCustodyQuery) => Promise<TokenCustodyMeta | null>;
   updateTokenCustodyIfCurrent: (data: TokenCustodyRotation) => Promise<ITokenCustodyView | null>;
   deleteTokenCustody: (query: { tokenKeyHash: string }) => Promise<{ deletedCount: number }>;
   deleteTokenCustodiesByUser: (query: TokenCustodyUserQuery) => Promise<{ deletedCount: number }>;
@@ -106,16 +110,17 @@ export function createTokenCustodyMethods(mongoose: typeof import('mongoose')): 
   }
 
   /**
-   * Reads the record for a hash within the caller's tenant, matching only records whose `expiresAt`
-   * is strictly after the current time. An unswept expired record (the TTL monitor runs on its own
-   * schedule) is therefore returned as absent.
+   * Reads the record for a hash, matching only records whose `expiresAt` is strictly after the
+   * current time. An unswept expired record (the TTL monitor runs on its own schedule) is therefore
+   * returned as absent. The lookup is by `tokenKeyHash` alone — the unique index identifies at most
+   * one record, and the record's own `tenantId` is returned for the caller to compare — so a tenant
+   * is never a lookup input here.
    */
   async function findTokenCustody(query: TokenCustodyQuery): Promise<ITokenCustodyView | null> {
     try {
       const TokenCustody = getTokenCustodyModel();
       return await TokenCustody.findOne({
         tokenKeyHash: query.tokenKeyHash,
-        ...tenantFilter(query.tenantId),
         expiresAt: { $gt: new Date() },
       }).lean<ITokenCustodyView>();
     } catch (error) {
@@ -125,26 +130,29 @@ export function createTokenCustodyMethods(mongoose: typeof import('mongoose')): 
   }
 
   /**
-   * The existence-and-identity read behind `verifyCustodyBinding`: projects to `userId` only, so a
-   * `sealedTokens` blob never leaves the store on the file-authorization paths. Applies the same
-   * `expiresAt > now` reader predicate and tenant filter as `findTokenCustody`, so a revoked,
-   * logged-out or expired record reads as absent. Returns `{ userId }` when a live record exists for
-   * the hash within the tenant, or null otherwise.
+   * The existence-and-identity read behind `verifyCustodyBinding`: projects to `userId` and
+   * `tenantId` only, so a `sealedTokens` blob never leaves the store on the file-authorization
+   * paths. Applies the same `expiresAt > now` reader predicate and the same lookup-by-hash as
+   * `findTokenCustody`, so a revoked, logged-out or expired record reads as absent. Returns
+   * `{ userId, tenantId? }` when a live record exists for the hash, or null otherwise; the caller
+   * compares the returned `tenantId` against any tenant it knows.
    */
-  async function findTokenCustodyMeta(
-    query: TokenCustodyQuery,
-  ): Promise<{ userId: string } | null> {
+  async function findTokenCustodyMeta(query: TokenCustodyQuery): Promise<TokenCustodyMeta | null> {
     try {
       const TokenCustody = getTokenCustodyModel();
       const record = await TokenCustody.findOne(
         {
           tokenKeyHash: query.tokenKeyHash,
-          ...tenantFilter(query.tenantId),
           expiresAt: { $gt: new Date() },
         },
-        { userId: 1, _id: 0 },
-      ).lean<{ userId: string }>();
-      return record ? { userId: record.userId } : null;
+        { userId: 1, tenantId: 1, _id: 0 },
+      ).lean<{ userId: string; tenantId?: string }>();
+      if (!record) {
+        return null;
+      }
+      return record.tenantId != null
+        ? { userId: record.userId, tenantId: record.tenantId }
+        : { userId: record.userId };
     } catch (error) {
       logger.debug('[findTokenCustodyMeta] Error finding custody record:', error);
       throw error;

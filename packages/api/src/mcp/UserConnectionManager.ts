@@ -1,5 +1,6 @@
 import { logger } from '@librechat/data-schemas';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import type { OIDCTokens } from '@librechat/data-schemas';
 import type * as t from './types';
 import {
   applyRequestHeaders,
@@ -18,7 +19,11 @@ import {
   notifyMCPToolsChanged,
   renewMCPToolsChangedGeneration,
 } from '~/mcp/toolsChanged';
-import { resolveDirectOpenIDBearerConfig, usesDirectOpenIDBearerRecovery } from '~/mcp/openid';
+import {
+  resolveDirectOpenIDBearerConfig,
+  resolveOpenIDPlaceholderTokens,
+  usesDirectOpenIDBearerRecovery,
+} from '~/mcp/openid';
 import { MCPServersRegistry } from '~/mcp/registry/MCPServersRegistry';
 import { ConnectionsRepository } from '~/mcp/ConnectionsRepository';
 import { MCPConnectionFactory } from '~/mcp/MCPConnectionFactory';
@@ -771,12 +776,24 @@ export abstract class UserConnectionManager {
       if (usesDirectOpenIDBearerRecovery(config)) {
         directBearerRecoveryState.resolvedConfig = bearerConfig;
       }
+      /**
+       * Resolve the live OpenID token set once here (where the provider and config are in scope),
+       * then thread it through runtime-config validation so `{{LIBRECHAT_OPENID_*}}` resolve from
+       * custody, and carry it onto `basic.openidTokens` so the connection constructor's
+       * `processMCPEnv` reuses it instead of resolving again.
+       */
+      const openidTokens = await resolveOpenIDPlaceholderTokens({
+        config: bearerConfig as t.ParsedServerConfig,
+        upstreamTokenProvider,
+        signal,
+      });
       const runtimeConfig = await this.applyRuntimeOAuthDetection({
         config: bearerConfig,
         user,
         customUserVars,
         requestBody,
         graphTokenResolver,
+        openidTokens,
       });
       const registry = MCPServersRegistry.getInstance();
       const { allowedDomains, allowedAddresses, useSSRFProtection } =
@@ -787,12 +804,16 @@ export abstract class UserConnectionManager {
         customUserVars,
         requestBody,
         graphTokenResolver,
+        openidTokens,
         allowedDomains,
         allowedAddresses,
         logPrefix: `[MCP][User: ${userId}]`,
       });
       const basic: t.BasicConnectionOptions = {
         serverConfig: runtimeConfig,
+        /** Carry the already-resolved live token set so the connection constructor's `processMCPEnv`
+         * reuses it instead of resolving again. */
+        ...(openidTokens != null && { openidTokens }),
         /** Runtime OAuth detection enriches the connection config. Keep the durable definition
          * separate so callback liveness compares against the config that actually owns it. */
         serverDefinition: declaredConfig,
@@ -1080,12 +1101,15 @@ export abstract class UserConnectionManager {
     customUserVars,
     requestBody,
     graphTokenResolver,
+    openidTokens,
   }: {
     config: t.ParsedServerConfig;
     user?: t.UserMCPConnectionOptions['user'];
     customUserVars?: Record<string, string>;
     requestBody?: t.UserMCPConnectionOptions['requestBody'];
     graphTokenResolver?: t.UserMCPConnectionOptions['graphTokenResolver'];
+    /** The live OpenID token set resolved once by `getUserConnection`; feeds both passes. */
+    openidTokens?: OIDCTokens | null;
   }): Promise<t.ParsedServerConfig> {
     /** Mirrors the factory's entry-point normalization; without it this
      *  validation pass would inspect a different header map than the one the
@@ -1100,6 +1124,7 @@ export abstract class UserConnectionManager {
             user,
             graphTokenResolver,
             scopes: process.env.GRAPH_API_SCOPES,
+            openidTokens,
           });
 
     return processMCPEnv({
@@ -1108,6 +1133,7 @@ export abstract class UserConnectionManager {
       dbSourced,
       options: graphProcessedConfig,
       customUserVars,
+      openidTokens,
     }) as t.ParsedServerConfig;
   }
 
@@ -1117,6 +1143,7 @@ export abstract class UserConnectionManager {
     customUserVars,
     requestBody,
     graphTokenResolver,
+    openidTokens,
     allowedDomains,
     allowedAddresses,
     logPrefix,
@@ -1126,6 +1153,7 @@ export abstract class UserConnectionManager {
     customUserVars?: Record<string, string>;
     requestBody?: t.UserMCPConnectionOptions['requestBody'];
     graphTokenResolver?: t.UserMCPConnectionOptions['graphTokenResolver'];
+    openidTokens?: OIDCTokens | null;
     allowedDomains?: string[] | null;
     allowedAddresses?: string[] | null;
     logPrefix: string;
@@ -1136,6 +1164,7 @@ export abstract class UserConnectionManager {
       customUserVars,
       requestBody,
       graphTokenResolver,
+      openidTokens,
     });
 
     if (!resolvedConfig.url) {
@@ -1166,12 +1195,14 @@ export abstract class UserConnectionManager {
     customUserVars,
     requestBody,
     graphTokenResolver,
+    openidTokens,
   }: {
     config: t.ParsedServerConfig;
     user?: t.UserMCPConnectionOptions['user'];
     customUserVars?: Record<string, string>;
     requestBody?: t.UserMCPConnectionOptions['requestBody'];
     graphTokenResolver?: t.UserMCPConnectionOptions['graphTokenResolver'];
+    openidTokens?: OIDCTokens | null;
   }): Promise<t.ParsedServerConfig> {
     if (
       config.requiresOAuth != null ||
@@ -1187,6 +1218,7 @@ export abstract class UserConnectionManager {
       customUserVars,
       requestBody,
       graphTokenResolver,
+      openidTokens,
     });
 
     if (!resolvedConfig.url || hasRuntimeUrlPlaceholders(resolvedConfig)) {

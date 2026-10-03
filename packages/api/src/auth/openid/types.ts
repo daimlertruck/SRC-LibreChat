@@ -11,12 +11,6 @@ export type AsyncVoidCallback = (error?: Error | null) => void;
 export type LeaseAssertion = () => Promise<object | null | boolean>;
 export type LogArgument = string | number | boolean | Error | object | null | undefined;
 
-export interface OpenIDPublicationGeneration {
-  key: string;
-  ownerId: string;
-  createdAt?: number;
-}
-
 export interface OpenIDClaims {
   sub: string;
   oid?: string;
@@ -63,10 +57,6 @@ export interface SessionOpenIDTokens {
   tenantId?: string;
   openidIssuer?: string;
   accessTokenExpiresAt?: number;
-  /** Durable coordination generation that authorized this session publication. */
-  publicationFlightKey?: string;
-  publicationFlightOwnerId?: string;
-  publicationFlightCreatedAt?: number;
 }
 
 export interface OpenIDSession {
@@ -134,8 +124,6 @@ export interface RefreshFlightRecord {
   status?: 'pending' | 'completed' | 'failed' | 'revoked';
   ownerId?: string;
   createdAt?: Date | string;
-  deliveryId?: string;
-  deliveryExpiresAt?: Date | string;
   revocationRequestedAt?: Date | string;
   sealedResult?: string;
   errorMessage?: string;

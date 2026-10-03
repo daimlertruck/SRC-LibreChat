@@ -10,8 +10,8 @@ import {
 import type { AgentToolOptions, MCPOptions } from 'librechat-data-provider';
 import type { ParsedServerConfig } from '~/mcp/types';
 import type { RequestBody } from '~/types';
+import { ALLOWED_BODY_FIELDS, isPluginSourced, isUserSourced } from '~/utils/env';
 import { isDirectOpenIDBearerRecoveryEnabled } from '~/mcp/openid';
-import { ALLOWED_BODY_FIELDS, isPluginSourced } from '~/utils/env';
 import { isApiKeyHeaderOverridden } from './headers';
 import { isEnabled } from '~/utils/common';
 
@@ -671,14 +671,8 @@ export function getMissingCustomUserVars(
   });
 }
 
-/**
- * Determines whether a server config is user-sourced (sandboxed placeholder resolution).
- * When `source` is set, it is authoritative. When absent (pre-upgrade cached configs),
- * falls back to the legacy `dbId` heuristic for backward compatibility.
- */
-export function isUserSourced(config: Pick<ParsedServerConfig, 'source' | 'dbId'>): boolean {
-  return config.source != null ? config.source === 'user' : !!config.dbId;
-}
+/** Lives in `~/utils/env` so `mcp/openid` can use it without importing this module back. */
+export { isUserSourced };
 
 /**
  * Resolves the instructions text for a server, mirroring how the inspector fills them:

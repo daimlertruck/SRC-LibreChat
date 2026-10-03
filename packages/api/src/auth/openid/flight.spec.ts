@@ -39,8 +39,6 @@ describe('OpenID completion write boundary', () => {
         failOpenIDRefreshFlight: jest.fn(),
         revokeOpenIDRefreshFlight: jest.fn(),
         findOpenIDRefreshFlight: jest.fn(),
-        claimOpenIDRefreshFlightDelivery: jest.fn(),
-        releaseOpenIDRefreshFlightDelivery: jest.fn(),
       },
       logger: { warn: jest.fn() },
     });
@@ -86,8 +84,6 @@ describe('sealed flight round-trip', () => {
         failOpenIDRefreshFlight: jest.fn(),
         revokeOpenIDRefreshFlight: jest.fn(),
         findOpenIDRefreshFlight: jest.fn(async () => flightDoc as never),
-        claimOpenIDRefreshFlightDelivery: jest.fn(),
-        releaseOpenIDRefreshFlightDelivery: jest.fn(),
       },
       logger: { warn: jest.fn() },
     });
@@ -138,8 +134,6 @@ describe('sealed flight round-trip', () => {
         failOpenIDRefreshFlight: jest.fn(),
         revokeOpenIDRefreshFlight: jest.fn(),
         findOpenIDRefreshFlight: jest.fn(async () => flightDoc as never),
-        claimOpenIDRefreshFlightDelivery: jest.fn(),
-        releaseOpenIDRefreshFlightDelivery: jest.fn(),
       },
       logger: { warn },
     });

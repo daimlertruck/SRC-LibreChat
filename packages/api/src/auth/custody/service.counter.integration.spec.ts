@@ -103,7 +103,7 @@ describe('rotateCustody counter', () => {
 
       let context = (await service.openCustody({
         tokenKey: key,
-        tenantId: identity.tenantId,
+        expectedTenantId: identity.tenantId ?? null,
       })) as OpenIDCustodyContext;
       expect(context.rotationCounter).toBe(0);
 
@@ -117,19 +117,26 @@ describe('rotateCustody counter', () => {
           ),
         );
 
-        const winners = results.filter((r) => r.applied);
+        const winners = results.filter((r) => r.outcome === 'applied');
         expect(winners).toHaveLength(1);
 
         const winner = winners[0];
+        /** None of the racers finds a deleted record, so every result carries a context. */
+        for (const result of results) {
+          expect(result.outcome).not.toBe('gone');
+        }
+        if (winner.outcome === 'gone') {
+          throw new Error('unexpected gone outcome');
+        }
         expect(winner.context.rotationCounter).toBe(counterBefore + 1);
         for (const result of results) {
+          if (result.outcome === 'gone') {
+            continue;
+          }
           expect(result.context.rotationCounter).toBe(winner.context.rotationCounter);
         }
 
-        const stored = await methods.findTokenCustody({
-          tokenKeyHash: created.tokenKeyHash,
-          tenantId: identity.tenantId,
-        });
+        const stored = await methods.findTokenCustody({ tokenKeyHash: created.tokenKeyHash });
         expect(stored?.rotationCounter).toBe(counterBefore + 1);
 
         context = winner.context;
@@ -155,7 +162,10 @@ describe('rotateCustody counter', () => {
       tokens: { accessToken: 'access-1', refreshToken: 'refresh-1', issuedAt: FIXED_NOW },
     });
 
-    expect(result.applied).toBe(true);
+    expect(result.outcome).toBe('applied');
+    if (result.outcome === 'gone') {
+      throw new Error('unexpected gone outcome');
+    }
     expect(result.context.rotationCounter).toBe(1);
     expect(result.expiresAt.getTime()).toBe(FIXED_NOW + FALLBACK_REFRESH_TTL_MS);
     expect(result.expiresAt.getTime()).toBeLessThan(created.expiresAt.getTime());

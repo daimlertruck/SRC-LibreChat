@@ -8,8 +8,6 @@ export interface IOpenIDRefreshFlight extends Document {
   status: OpenIDRefreshFlightStatus;
   sealedResult?: string;
   errorMessage?: string;
-  deliveryId?: string;
-  deliveryExpiresAt?: Date;
   revocationRequestedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -48,20 +46,6 @@ export interface OpenIDRefreshFlightFailData {
 export interface OpenIDRefreshFlightRevokeData {
   key: string;
   expiresAt: Date;
-}
-
-export interface OpenIDRefreshFlightClaimDeliveryData {
-  key: string;
-  ownerId: string;
-  deliveryId: string;
-  deliveryExpiresAt: Date;
-  createdAt?: Date;
-}
-
-export interface OpenIDRefreshFlightReleaseDeliveryData {
-  key: string;
-  ownerId: string;
-  deliveryId: string;
 }
 
 export interface OpenIDRefreshFlightQuery {

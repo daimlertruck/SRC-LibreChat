@@ -254,17 +254,13 @@ function buildUpstreamTokenInfo(
   user: IUser,
   liveTokens: OIDCTokens | null,
 ): OpenIDTokenInfo | null {
-  if (liveTokens) {
-    return {
-      accessToken: liveTokens.access_token,
-      idToken: liveTokens.id_token,
-      expiresAt: liveTokens.expires_at,
-      userId: user.openidId || user.id,
-      userEmail: user.email,
-      userName: user.name || user.username,
-    };
-  }
-  return extractOpenIDTokenInfo(user);
+  /**
+   * `extractOpenIDTokenInfo` owns the precedence: when `liveTokens` is present it supplies the
+   * access token, id token and expiry; otherwise the user's snapshot is read. Delegating here keeps
+   * one implementation of that rule and additionally parses the id token's claims for the identity
+   * fields, which the previous hand-rolled branch did not.
+   */
+  return extractOpenIDTokenInfo(user, liveTokens);
 }
 
 /**

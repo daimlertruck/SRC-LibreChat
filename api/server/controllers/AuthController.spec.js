@@ -21,6 +21,7 @@ jest.mock('@librechat/data-schemas', () => ({
   logger: { error: jest.fn(), debug: jest.fn(), warn: jest.fn(), info: jest.fn() },
   runAsSystem: (fn) => mockRunAsSystem(fn),
   tenantStorage: { run: (context, fn) => mockTenantStorageRun(context, fn) },
+  getTenantId: jest.fn(() => undefined),
 }));
 jest.mock('~/server/services/GraphTokenService', () => ({
   getGraphApiToken: jest.fn(),
@@ -49,20 +50,17 @@ jest.mock('~/models', () => ({
 }));
 jest.mock('~/server/services/OpenIDRefreshFlight', () => ({
   acquireOpenIDRefreshFlight: jest.fn(),
-  assertOpenIDRefreshFlightDeliveryAvailable: jest.fn(),
   assertOpenIDRefreshFlightAvailable: jest.fn(),
-  assertOpenIDRefreshSessionGenerationAvailable: jest.fn(),
-  claimOpenIDRefreshFlightDelivery: jest.fn(),
   completeOpenIDRefreshFlight: jest.fn(),
   createOpenIDRefreshFlightKey: jest.fn(),
   failOpenIDRefreshFlight: jest.fn(),
-  releaseOpenIDRefreshFlightDelivery: jest.fn(),
   revokeOpenIDRefreshFlights: jest.fn(),
   waitForOpenIDRefreshFlight: jest.fn(),
   withOpenIDRefreshFlightLease: jest.fn(),
 }));
 jest.mock('~/server/services/OpenIDSessionRefresh', () => ({
   refreshOpenIDSession: jest.fn(),
+  createOpenIDSessionTokenProvider: jest.fn(),
 }));
 jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
@@ -128,14 +126,13 @@ const {
 } = require('~/server/services/AuthService');
 const { getUserById, findSession, deleteTokens } = require('~/models');
 const {
-  assertOpenIDRefreshFlightDeliveryAvailable,
-  assertOpenIDRefreshSessionGenerationAvailable,
-  claimOpenIDRefreshFlightDelivery,
   createOpenIDRefreshFlightKey,
-  releaseOpenIDRefreshFlightDelivery,
   revokeOpenIDRefreshFlights,
 } = require('~/server/services/OpenIDRefreshFlight');
-const { refreshOpenIDSession } = require('~/server/services/OpenIDSessionRefresh');
+const {
+  refreshOpenIDSession,
+  createOpenIDSessionTokenProvider,
+} = require('~/server/services/OpenIDSessionRefresh');
 const { revokeOpenIDRefreshTokenChain } = require('~/server/services/OpenIDRefreshRecovery');
 
 const ORIGINAL_JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;
@@ -201,13 +198,12 @@ describe('OpenID logout refresh chain', () => {
         user,
         identityContext,
         refreshTokens: ['rt-predecessor'],
-        publicationKeys: ['recorded-publication-key'],
         ttl: 60_000,
       }),
     ).resolves.toEqual(['rt-predecessor', 'rt-successor-1', 'rt-successor-2']);
 
     expect(revokeOpenIDRefreshFlights).toHaveBeenNthCalledWith(1, {
-      keys: ['recorded-publication-key', 'session:subject-1:rt-predecessor'],
+      keys: ['session:subject-1:rt-predecessor'],
       seal: expectedSeal,
       ttl: 60_000,
     });
@@ -225,31 +221,47 @@ describe('OpenID logout refresh chain', () => {
 });
 
 describe('graphTokenController', () => {
-  let req, res;
+  let req, res, upstreamTokenProvider, custody;
+
+  /** The live upstream token set the custody-backed provider resolves (its access token is the
+   *  OBO assertion). The exercised `resolveGraphApiToken` is the real `@librechat/api` export. */
+  const liveTokens = {
+    access_token: 'custody-access-token',
+    id_token: 'custody-id-token',
+    expires_at: Math.floor(Date.now() / 1000) + 3600,
+  };
+
+  const sessionMissingError = () =>
+    Object.assign(new Error('OpenID session is no longer available'), {
+      code: 'OPENID_SESSION_MISSING',
+    });
 
   beforeEach(() => {
     jest.clearAllMocks();
     isEnabled.mockReturnValue(true);
-    assertOpenIDRefreshSessionGenerationAvailable.mockResolvedValue(true);
-    claimOpenIDRefreshFlightDelivery.mockResolvedValue({
-      status: 'completed',
-      ownerId: 'publication-owner',
-      deliveryId: 'delivery-1',
-    });
-    assertOpenIDRefreshFlightDeliveryAvailable.mockResolvedValue(undefined);
-    releaseOpenIDRefreshFlightDelivery.mockResolvedValue(undefined);
+
+    /** The provider the controller builds; default resolves the live custody token set. */
+    upstreamTokenProvider = jest.fn().mockResolvedValue(liveTokens);
+    createOpenIDSessionTokenProvider.mockReturnValue(upstreamTokenProvider);
+
+    /** The custody liveness recheck before the response; default: still live. */
+    custody = { custodyExists: jest.fn().mockResolvedValue(true) };
+    getTokenCustodyService.mockReturnValue(custody);
 
     req = {
       user: {
+        id: 'user-123',
         openidId: 'oid-123',
         provider: 'openid',
-        federatedTokens: {
-          access_token: 'federated-access-token',
-          id_token: 'federated-id-token',
-        },
+        tenantId: undefined,
       },
       headers: { authorization: 'Bearer app-jwt-which-is-id-token' },
       query: { scopes: 'https://graph.microsoft.com/.default' },
+      /** The provider loads this; the recheck reads the hash and identity from it. */
+      openidCustody: {
+        tokenKeyHash: 'hash-abc',
+        identity: { userId: 'user-123', tenantId: undefined },
+      },
     };
 
     res = {
@@ -264,12 +276,12 @@ describe('graphTokenController', () => {
     });
   });
 
-  it('should pass federatedTokens.access_token as OBO assertion, not the auth header bearer token', async () => {
+  it('exchanges the custody-provided access token as the OBO assertion, not the header bearer', async () => {
     await graphTokenController(req, res);
 
     expect(getGraphApiToken).toHaveBeenCalledWith(
       req.user,
-      'federated-access-token',
+      'custody-access-token',
       'https://graph.microsoft.com/.default',
     );
     expect(getGraphApiToken).not.toHaveBeenCalledWith(
@@ -279,9 +291,18 @@ describe('graphTokenController', () => {
     );
   });
 
+  it('builds the provider with access_token preference', async () => {
+    await graphTokenController(req, res);
+
+    expect(createOpenIDSessionTokenProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ user: req.user, tokenPreference: 'access_token' }),
+    );
+  });
+
   it('should return the graph token response on success', async () => {
     await graphTokenController(req, res);
 
+    expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       access_token: 'graph-access-token',
       token_type: 'Bearer',
@@ -289,97 +310,55 @@ describe('graphTokenController', () => {
     });
   });
 
-  it('leases the session generation across a Graph OBO exchange and response delivery', async () => {
-    req.user.federatedTokens.access_token = 'session-access-token';
-    req.session = {
-      openidTokens: {
-        accessToken: 'session-access-token',
-        appUserId: 'user-1',
-        tenantId: 'tenant-1',
-        publicationFlightKey: 'publication-key',
-        publicationFlightOwnerId: 'publication-owner',
-        publicationFlightCreatedAt: 1000,
-      },
-    };
-
-    await graphTokenController(req, res);
-
-    expect(claimOpenIDRefreshFlightDelivery).toHaveBeenCalledWith({
-      key: 'publication-key',
-      ownerId: 'publication-owner',
-      createdAt: 1000,
-    });
-    expect(assertOpenIDRefreshFlightDeliveryAvailable).toHaveBeenCalledWith({
-      key: 'publication-key',
-      ownerId: 'publication-owner',
-      deliveryId: 'delivery-1',
-    });
-    expect(getGraphApiToken).toHaveBeenCalled();
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ access_token: 'graph-access-token' }),
-    );
-    expect(releaseOpenIDRefreshFlightDelivery).toHaveBeenCalledWith({
-      key: 'publication-key',
-      ownerId: 'publication-owner',
-      deliveryId: 'delivery-1',
-    });
-  });
-
-  it('does not exchange a session-backed Graph token after logout tombstones its generation', async () => {
-    req.user.federatedTokens.access_token = 'session-access-token';
-    req.session = {
-      openidTokens: {
-        accessToken: 'session-access-token',
-        appUserId: 'user-1',
-        tenantId: 'tenant-1',
-        publicationFlightKey: 'publication-key',
-        publicationFlightOwnerId: 'publication-owner',
-      },
-    };
-    assertOpenIDRefreshSessionGenerationAvailable.mockRejectedValueOnce(
-      ownershipLost('revoked by logout'),
-    );
-
-    await graphTokenController(req, res);
-
-    expect(getGraphApiToken).not.toHaveBeenCalled();
-    expect(clearOpenIDAuthTokens).toHaveBeenCalledWith(req, res, undefined, 'tenant-1');
-    expect(res.status).toHaveBeenCalledWith(401);
-  });
-
-  it('does not fall back to a stale Graph token snapshot after the Express session is cleared', async () => {
-    req.session = {};
+  it('returns 401 and clears the OpenID cookies when the session is missing', async () => {
+    upstreamTokenProvider.mockRejectedValue(sessionMissingError());
 
     await graphTokenController(req, res);
 
     expect(getGraphApiToken).not.toHaveBeenCalled();
     expect(clearOpenIDAuthTokens).toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ code: 'OPENID_SESSION_MISSING' });
   });
 
-  it('withholds a minted Graph token when logout revokes its delivery lease', async () => {
-    req.user.federatedTokens.access_token = 'session-access-token';
-    req.session = {
-      openidTokens: {
-        accessToken: 'session-access-token',
-        appUserId: 'user-1',
-        tenantId: 'tenant-1',
-        publicationFlightKey: 'publication-key',
-        publicationFlightOwnerId: 'publication-owner',
-      },
-    };
-    assertOpenIDRefreshFlightDeliveryAvailable.mockRejectedValueOnce(
-      ownershipLost('logout requested revocation'),
+  it('falls back to the request bearer (remote-agent) when the provider resolves null', async () => {
+    upstreamTokenProvider.mockResolvedValue(null);
+    req.user.federatedTokens = { access_token: 'remote-agent-bearer' };
+    /** No custody record backs this request, so the pre-send recheck is skipped. */
+    delete req.openidCustody;
+
+    await graphTokenController(req, res);
+
+    expect(getGraphApiToken).toHaveBeenCalledWith(
+      req.user,
+      'remote-agent-bearer',
+      'https://graph.microsoft.com/.default',
     );
+    expect(custody.custodyExists).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('returns 401 when the provider resolves null and no request bearer is present', async () => {
+    upstreamTokenProvider.mockResolvedValue(null);
+    delete req.openidCustody;
+
+    await graphTokenController(req, res);
+
+    expect(getGraphApiToken).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it('fails closed when the custody record is deleted before the Graph response', async () => {
+    custody.custodyExists.mockResolvedValue(false);
 
     await graphTokenController(req, res);
 
     expect(getGraphApiToken).toHaveBeenCalled();
-    expect(res.json).not.toHaveBeenCalledWith(
-      expect.objectContaining({ access_token: 'graph-access-token' }),
+    expect(custody.custodyExists).toHaveBeenCalledWith(
+      expect.objectContaining({ tokenKeyHash: 'hash-abc', expectedUserId: 'user-123' }),
     );
-    expect(releaseOpenIDRefreshFlightDelivery).toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ code: 'OPENID_SESSION_MISSING' });
   });
 
   it('should return 403 when user is not authenticated via Entra ID', async () => {
@@ -407,24 +386,6 @@ describe('graphTokenController', () => {
     await graphTokenController(req, res);
 
     expect(res.status).toHaveBeenCalledWith(400);
-    expect(getGraphApiToken).not.toHaveBeenCalled();
-  });
-
-  it('should return 401 when federatedTokens.access_token is missing', async () => {
-    req.user.federatedTokens = {};
-
-    await graphTokenController(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(getGraphApiToken).not.toHaveBeenCalled();
-  });
-
-  it('should return 401 when federatedTokens is absent entirely', async () => {
-    req.user.federatedTokens = undefined;
-
-    await graphTokenController(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(401);
     expect(getGraphApiToken).not.toHaveBeenCalled();
   });
 

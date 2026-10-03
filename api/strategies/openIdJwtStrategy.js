@@ -22,15 +22,6 @@ const {
 const { updateUser, findUser, isAgentTriggerPrincipalActive } = require('~/models');
 const getLogStores = require('~/cache/getLogStores');
 
-function decodeJwtExpiry(token) {
-  try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
-    return typeof payload.exp === 'number' ? payload.exp : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 const parseOpenIdAudiences = () =>
   (process.env.OPENID_AUDIENCE ?? '')
     .split(',')
@@ -234,46 +225,36 @@ const openIdJwtLogin = (openIdConfig) => {
             }
           }
 
-          /** Read tokens from session (server-side) to avoid large cookie issues */
-          const sessionTokens = req.session?.openidTokens;
-          let accessToken = sessionTokens?.accessToken;
-          let idToken = sessionTokens?.idToken;
-          let refreshToken = sessionTokens?.refreshToken;
-
-          /** Fallback to cookies for backward compatibility */
-          if (!accessToken || !refreshToken || !idToken) {
-            accessToken = accessToken || parsedCookies.openid_access_token;
-            idToken = idToken || parsedCookies.openid_id_token;
-            refreshToken = refreshToken || parsedCookies.refreshToken;
-          }
-
           /**
-           * The raw bearer only stands in for a missing stored access token when it is
-           * identifiable as one. It cleared this strategy's audience check, but an ID token
-           * clears the same check, and an ID token used as the OBO assertion is rejected by the
-           * IdP (Entra answers `AADSTS240002`). An unrecognised token is left unset so
-           * `isOpenIDTokenValid` fails closed with an actionable error instead.
+           * Key custody retired the server-readable token copies this strategy used to read —
+           * `req.session.openidTokens` and the `openid_access_token` / `openid_id_token` /
+           * `refreshToken` cookies are no longer written for the OpenID-reuse path. Token-dependent
+           * features now resolve the live set from the custody record through the token provider, so
+           * this strategy only populates `federatedTokens` from the request's own verified bearer
+           * when that bearer is identifiable as an access token.
+           *
+           * The raw bearer stands in for the access token only when it is identifiable as one. It
+           * cleared this strategy's audience check, but an ID token clears the same check, and an ID
+           * token used as the OBO assertion is rejected by the IdP (Entra answers `AADSTS240002`). An
+           * unrecognised token is left unset so a consumer that needs it fails closed with an
+           * actionable error. This is the remote-agent / verified-bearer path; a custody-login
+           * browser session carries the id_token as its bearer, so `federatedTokens` is left empty
+           * and the custody token provider supplies the tokens instead.
            */
-          let reusableRawToken;
-          if (!accessToken) {
-            reusableRawToken = isAccessTokenJwt(rawToken, payload, audienceConfig)
-              ? rawToken
-              : undefined;
-            if (!reusableRawToken) {
-              /** Per-request on the reuse path, so the actionable warning is left to the consumer that actually needs the credential */
-              logger.debug(
-                '[openIdJwtLogin] No stored OpenID access token, and the request bearer is not identifiable as one; leaving it unset',
-              );
-            }
+          const reusableRawToken = isAccessTokenJwt(rawToken, payload, audienceConfig)
+            ? rawToken
+            : undefined;
+          if (!reusableRawToken) {
+            logger.debug(
+              '[openIdJwtLogin] Request bearer is not identifiable as an access token; leaving federatedTokens access token unset (custody supplies tokens on the reuse path)',
+            );
           }
 
-          const resolvedAccessToken = accessToken || reusableRawToken;
           user.federatedTokens = {
-            access_token: resolvedAccessToken,
-            id_token: idToken,
-            refresh_token: refreshToken,
-            expires_at:
-              resolvedAccessToken === rawToken ? payload.exp : decodeJwtExpiry(resolvedAccessToken),
+            access_token: reusableRawToken,
+            id_token: undefined,
+            refresh_token: undefined,
+            expires_at: reusableRawToken ? payload.exp : undefined,
           };
 
           done(null, user);

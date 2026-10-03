@@ -23,6 +23,8 @@ jest.mock('openid-client', () => ({
 const mockCustodyHolder = { service: null };
 const mockRefreshHolder = { refreshOpenIDSession: null };
 const mockClearOpenIDAuthTokens = jest.fn();
+/** The orphaned-token revocation the `gone` branch runs; a spy so the test asserts its argument. */
+const mockRevokeRefreshToken = jest.fn().mockResolvedValue(undefined);
 
 jest.mock('~/strategies/openidStrategy', () => ({
   getOpenIdConfig: jest.fn(() => ({})),
@@ -71,14 +73,8 @@ jest.mock('~/server/services/OpenIDSessionRefresh', () => ({
   refreshOpenIDSession: (...args) => mockRefreshHolder.refreshOpenIDSession(...args),
 }));
 
-/** The controller also requires these; the refresh path never touches them, so plain stubs. */
+/** The controller also requires this; the refresh path never touches it, so a plain stub. */
 jest.mock('~/server/services/GraphTokenService', () => ({ getGraphApiToken: jest.fn() }));
-jest.mock('~/server/services/OpenIDRefreshFlight', () => ({
-  assertOpenIDRefreshFlightDeliveryAvailable: jest.fn(),
-  assertOpenIDRefreshSessionGenerationAvailable: jest.fn(),
-  claimOpenIDRefreshFlightDelivery: jest.fn(),
-  releaseOpenIDRefreshFlightDelivery: jest.fn(),
-}));
 
 const api = require('@librechat/api');
 const {
@@ -199,6 +195,7 @@ beforeAll(async () => {
     loadOpenIDCustody,
     setTokenKeyCookie,
     clearTokenKeyCookie,
+    revokeRefreshToken: (...args) => mockRevokeRefreshToken(...args),
   });
   mockRefreshHolder.refreshOpenIDSession = refreshService.refreshOpenIDSession;
 
@@ -214,6 +211,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  /**
+   * `refreshController` fires `clearOpenIDAuthTokens` without awaiting it on its session-missing and
+   * ownership-error branches, so a background custody delete can still be in flight when a test
+   * returns. Drain the microtask/timer queue before disconnecting so that delete does not run
+   * against a closed Mongo client and surface as a post-teardown error.
+   */
+  await new Promise((resolve) => setTimeout(resolve, 50));
   await mongoose.disconnect();
   await mongoServer?.stop();
 });
@@ -574,5 +578,121 @@ describe('refreshController — single-flight coalescing at the route level', ()
     expect(await countRecords()).toBe(1);
     const record = await findRecord(tokenKeyHash);
     expect(record.rotationCounter).toBe(1);
+  });
+});
+
+/**
+ * Requirement 29: the custody record supplies the tenant. Login stamps the record's `tenantId` from
+ * the authenticated user; `/refresh` is unauthenticated and no longer carries the session copy, so
+ * the lookup must address the record by hash alone and read the tenant back from the opened record,
+ * rather than requiring the caller to supply the tenant up front. This block mints a tenant-stamped
+ * record and drives `/refresh` with no tenant header; it must succeed exactly as the no-tenant case
+ * does.
+ */
+describe('refreshController — tenant-scoped custody records (Requirement 29)', () => {
+  const TENANT = 'tenant-a';
+  const TENANT_IDENTITY = {
+    userId: USER_ID,
+    tenantId: TENANT,
+    openidIssuer: ISSUER,
+    openidSubject: SUBJECT,
+  };
+  const TENANT_USER = { ...REFRESH_USER, tenantId: TENANT };
+
+  /** Mints a tenant-stamped record, mirroring `login()` but with a tenant on the identity. */
+  async function loginTenant() {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const created = await custodyService.createCustody({
+      tokens: {
+        accessToken: 'access-login',
+        idToken: 'id-login',
+        refreshToken: 'refresh-login',
+        accessTokenExpiresAt: nowSeconds - 60,
+        issuedAt: Date.now(),
+      },
+      identity: TENANT_IDENTITY,
+    });
+    return created;
+  }
+
+  it('refreshes a tenant-stamped record with no tenant header', async () => {
+    models.getUserById.mockResolvedValue({ ...TENANT_USER });
+    const { tokenKey, tokenKeyHash } = await loginTenant();
+    mockRefreshTokenGrant.mockResolvedValue(
+      grantResponse({ expiresIn: 3600, refreshExpiresIn: 7 * 24 * 3600 }),
+    );
+    const { req, res } = makeReqRes(tokenKey);
+
+    await refreshController(req, res);
+
+    expect(mockRefreshTokenGrant).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.token).toBeTruthy();
+    const record = await findRecord(tokenKeyHash);
+    expect(record.rotationCounter).toBe(1);
+    expect(record.tenantId).toBe(TENANT);
+  });
+});
+
+/**
+ * Requirement 30: a rotation that finds its record deleted fails closed. When a logout, ban or
+ * account deletion removes the custody record while a refresh holds the IdP grant in flight, the
+ * rotation's compare-and-set matches nothing and the reload finds nothing live. The refresh must
+ * then reject session-missing rather than revive the pre-rotation session, re-issue no token key
+ * cookie, return no token, and make one best-effort IdP revocation of the refresh token it just
+ * obtained (which the rotation never persisted and nothing else will revoke).
+ */
+describe('refreshController — record deleted mid-rotation (Requirement 30)', () => {
+  it('fails closed, re-issues no cookie, and revokes the just-granted refresh token', async () => {
+    const { tokenKey, tokenKeyHash } = await login();
+
+    /**
+     * The IdP grant succeeds, but the record is deleted (a concurrent logout) between the grant and
+     * the rotation's compare-and-set. The granted refresh token is the one the orphan-revocation
+     * must target.
+     */
+    mockRefreshTokenGrant.mockImplementation(async () => {
+      await custodyService.deleteCustody({ tokenKeyHash });
+      return grantResponse({ expiresIn: 3600, refreshExpiresIn: 7 * 24 * 3600 });
+    });
+
+    const { req, res } = makeReqRes(tokenKey);
+    await refreshController(req, res);
+
+    // The IdP was contacted exactly once; no second grant was attempted.
+    expect(mockRefreshTokenGrant).toHaveBeenCalledTimes(1);
+
+    // Fails closed: 401 session-missing, no token in the body.
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toEqual({ code: 'OPENID_SESSION_MISSING' });
+
+    // No token key cookie was re-issued.
+    expect(tokenKeyCookieCall(res)).toBeUndefined();
+
+    // The record stays gone; the pre-rotation context was not revived into a new record.
+    expect(await countRecords()).toBe(0);
+
+    // Exactly one best-effort revocation, carrying the refresh token the IdP just granted.
+    expect(mockRevokeRefreshToken).toHaveBeenCalledTimes(1);
+    expect(mockRevokeRefreshToken.mock.calls[0][0]).toMatchObject({
+      refreshToken: 'refresh-new',
+    });
+  });
+
+  it('still fails closed when the orphan-token revocation itself rejects', async () => {
+    const { tokenKey, tokenKeyHash } = await login();
+    mockRevokeRefreshToken.mockRejectedValueOnce(new Error('IdP unreachable'));
+    mockRefreshTokenGrant.mockImplementation(async () => {
+      await custodyService.deleteCustody({ tokenKeyHash });
+      return grantResponse({ expiresIn: 3600, refreshExpiresIn: 7 * 24 * 3600 });
+    });
+
+    const { req, res } = makeReqRes(tokenKey);
+    await refreshController(req, res);
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toEqual({ code: 'OPENID_SESSION_MISSING' });
+    expect(tokenKeyCookieCall(res)).toBeUndefined();
+    expect(mockRevokeRefreshToken).toHaveBeenCalledTimes(1);
   });
 });

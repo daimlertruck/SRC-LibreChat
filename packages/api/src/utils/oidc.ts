@@ -152,8 +152,21 @@ export class OpenIDReauthRequiredError extends Error {
   }
 }
 
+/**
+ * Builds the token info a placeholder/Graph resolver reads. `resolvedTokens`, when provided, is the
+ * live token set the custody token provider returned for this request; it takes precedence over the
+ * user's `federatedTokens`/`openidTokens` snapshot for the access token, id token and expiry.
+ *
+ * This is the single precedence rule: a caller holding a live set passes it here instead of writing
+ * it onto `user.federatedTokens`, and the OBO path (`buildUpstreamTokenInfo` in `mcp/oauth/obo.ts`)
+ * delegates to this function rather than keeping its own copy. When `resolvedTokens` is absent the
+ * behavior is exactly as before — the snapshot is read — so the remote-agent flow, whose
+ * `federatedTokens` is populated by `remoteAgentAuth`, is unchanged. Identity fields and ID-token
+ * claim parsing always run against whichever id token wins.
+ */
 export function extractOpenIDTokenInfo(
   user: Partial<IUser> | null | undefined,
+  resolvedTokens?: OIDCTokens | null,
 ): OpenIDTokenInfo | null {
   if (!user) {
     return null;
@@ -169,7 +182,16 @@ export function extractOpenIDTokenInfo(
     const federated = user.federatedTokens;
     const openid = user.openidTokens;
 
-    if (federated && isFederatedTokens(federated)) {
+    if (resolvedTokens && isFederatedTokens(resolvedTokens)) {
+      logger.debug('[extractOpenIDTokenInfo] Using resolved live token set', {
+        has_access_token: !!resolvedTokens.access_token,
+        has_id_token: !!resolvedTokens.id_token,
+        expires_at: resolvedTokens.expires_at,
+      });
+      tokenInfo.accessToken = resolvedTokens.access_token;
+      tokenInfo.idToken = resolvedTokens.id_token;
+      tokenInfo.expiresAt = resolvedTokens.expires_at;
+    } else if (federated && isFederatedTokens(federated)) {
       logger.debug('[extractOpenIDTokenInfo] Found federatedTokens:', {
         has_access_token: !!federated.access_token,
         has_id_token: !!federated.id_token,

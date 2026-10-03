@@ -2645,3 +2645,128 @@ describe('processMCPEnv OpenID re-authentication signalling', () => {
     }
   });
 });
+
+/**
+ * The lazy-custody contract (Requirement 28): a custody-login browser session has an empty
+ * `federatedTokens` snapshot, and the caller passes the live token set it resolved from custody as
+ * `openidTokens`. `processMCPEnv` must resolve every `{{LIBRECHAT_OPENID_*}}` placeholder from that
+ * resolved set, taking precedence over the snapshot, and must behave exactly as before when no
+ * `openidTokens` is supplied (the remote-agent snapshot path).
+ */
+describe('processMCPEnv openidTokens (resolved custody tokens)', () => {
+  const validSeconds = Math.floor(Date.now() / 1000) + 3600;
+
+  /** The empty-snapshot shape a custody-login browser session carries after the JWT strategy runs. */
+  function emptySnapshotUser(): IUser {
+    return {
+      ...createTestUser({ id: 'user-123', provider: 'openid' }),
+      openidId: 'oidc-sub-456',
+      email: 'picker@example.com',
+      name: 'Picker User',
+      federatedTokens: {
+        access_token: undefined,
+        id_token: undefined,
+        refresh_token: undefined,
+        expires_at: undefined,
+      },
+    } as unknown as IUser;
+  }
+
+  /** A current id token so the ID_TOKEN placeholder resolves rather than raising. */
+  const currentIdToken = `h.${Buffer.from(
+    JSON.stringify({ sub: 'oidc-sub-456', exp: validSeconds }),
+  ).toString('base64')}.s`;
+
+  const resolvedTokens = {
+    access_token: 'custody-access-token',
+    id_token: currentIdToken,
+    expires_at: validSeconds,
+  };
+
+  it('resolves access, token, expires-at and user placeholders from openidTokens over the empty snapshot', () => {
+    const options: MCPOptions = {
+      type: 'streamable-http',
+      url: 'https://api.example.com',
+      headers: {
+        Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}',
+        'X-Generic': '{{LIBRECHAT_OPENID_TOKEN}}',
+        'X-Expires': '{{LIBRECHAT_OPENID_EXPIRES_AT}}',
+        'X-User-Id': '{{LIBRECHAT_OPENID_USER_ID}}',
+        'X-User-Email': '{{LIBRECHAT_OPENID_USER_EMAIL}}',
+        'X-User-Name': '{{LIBRECHAT_OPENID_USER_NAME}}',
+      },
+    };
+
+    const result = processMCPEnv({
+      options,
+      user: emptySnapshotUser(),
+      openidTokens: resolvedTokens,
+    });
+
+    if (!isStreamableHTTPOptions(result)) {
+      throw new Error('Expected streamable-http options');
+    }
+    expect(result.headers?.Authorization).toBe('Bearer custody-access-token');
+    expect(result.headers?.['X-Generic']).toBe('custody-access-token');
+    expect(result.headers?.['X-Expires']).toBe(String(validSeconds));
+    expect(result.headers?.['X-User-Id']).toBe('oidc-sub-456');
+    expect(result.headers?.['X-User-Email']).toBe('picker@example.com');
+    expect(result.headers?.['X-User-Name']).toBe('Picker User');
+  });
+
+  it('resolves the ID_TOKEN placeholder from the resolved current id token', () => {
+    const options: MCPOptions = {
+      type: 'streamable-http',
+      url: 'https://api.example.com',
+      headers: { 'X-Id': '{{LIBRECHAT_OPENID_ID_TOKEN}}' },
+    };
+
+    const result = processMCPEnv({
+      options,
+      user: emptySnapshotUser(),
+      openidTokens: resolvedTokens,
+    });
+
+    if (!isStreamableHTTPOptions(result)) {
+      throw new Error('Expected streamable-http options');
+    }
+    expect(result.headers?.['X-Id']).toBe(currentIdToken);
+  });
+
+  it('raises re-auth for the access placeholder when no openidTokens is supplied and the snapshot is empty', () => {
+    const options: MCPOptions = {
+      type: 'streamable-http',
+      url: 'https://api.example.com',
+      headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+    };
+
+    /** No openidTokens, empty snapshot: the custody-login regression this change fixes end-to-end. */
+    expect(() => processMCPEnv({ options, user: emptySnapshotUser() })).toThrow(
+      'OpenID token is expired or unavailable; re-authentication is required to resolve {{LIBRECHAT_OPENID_ACCESS_TOKEN}}',
+    );
+  });
+
+  it('prefers openidTokens over a populated federatedTokens snapshot', () => {
+    const user = {
+      ...createTestUser({ id: 'user-123', provider: 'openid' }),
+      openidId: 'oidc-sub-456',
+      federatedTokens: {
+        access_token: 'snapshot-access-token',
+        id_token: 'snapshot-id',
+        expires_at: validSeconds,
+      },
+    } as unknown as IUser;
+    const options: MCPOptions = {
+      type: 'streamable-http',
+      url: 'https://api.example.com',
+      headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+    };
+
+    const result = processMCPEnv({ options, user, openidTokens: resolvedTokens });
+
+    if (!isStreamableHTTPOptions(result)) {
+      throw new Error('Expected streamable-http options');
+    }
+    expect(result.headers?.Authorization).toBe('Bearer custody-access-token');
+  });
+});

@@ -197,7 +197,9 @@ async function getSignedOpenIdUserId(
   const binding = await runAsSystem(() =>
     verifyCustodyBinding({ cookies: parsed } as unknown as Request, {
       custody: deps.custody,
-      tenantId: deps.getTenantId?.(),
+      /** The viewer's tenant context: a string in a multi-tenant deployment, `null` (record must
+       *  carry no tenant) in single-tenant mode where `getTenantId` is undefined. */
+      expectedTenantId: deps.getTenantId?.() ?? null,
     }),
   );
   return binding?.userId ?? null;

@@ -279,10 +279,18 @@ describe('openIdJwtStrategy – token source handling', () => {
     openIdJwtLogin(mockOpenIdConfig);
   });
 
-  it('should read all tokens from session when available', async () => {
+  /**
+   * Key custody retired `req.session.openidTokens` and the `openid_access_token` /
+   * `openid_id_token` / `refreshToken` cookies as token sources, so the strategy no longer reads
+   * them. The former "read from session" / "fall back to cookies" cases are gone; the custody token
+   * provider supplies tokens on the reuse path, and this strategy only fills `federatedTokens` from
+   * a request bearer identifiable as an access token (the remote-agent path, covered below).
+   */
+  it('leaves federatedTokens empty when the bearer is the id_token and no session/cookies are read', async () => {
     const req = {
       headers: { authorization: 'Bearer raw-bearer-token' },
       session: {
+        /** Present but must be ignored: custody retired this field as a token source. */
         openidTokens: {
           accessToken: 'session-access',
           idToken: 'session-id',
@@ -294,14 +302,14 @@ describe('openIdJwtStrategy – token source handling', () => {
     const { user } = await invokeVerify(req, payload);
 
     expect(user.federatedTokens).toEqual({
-      access_token: 'session-access',
-      id_token: 'session-id',
-      refresh_token: 'session-refresh',
+      access_token: undefined,
+      id_token: undefined,
+      refresh_token: undefined,
       expires_at: undefined,
     });
   });
 
-  it('should fall back to cookies when session is absent', async () => {
+  it('ignores the legacy openid_access_token / openid_id_token / refreshToken cookies', async () => {
     const req = {
       headers: {
         authorization: 'Bearer raw-bearer-token',
@@ -313,34 +321,9 @@ describe('openIdJwtStrategy – token source handling', () => {
     const { user } = await invokeVerify(req, payload);
 
     expect(user.federatedTokens).toEqual({
-      access_token: 'cookie-access',
-      id_token: 'cookie-id',
-      refresh_token: 'cookie-refresh',
-      expires_at: undefined,
-    });
-  });
-
-  it('should fall back to cookie for idToken only when session lacks it', async () => {
-    const req = {
-      headers: {
-        authorization: 'Bearer raw-bearer-token',
-        cookie: 'openid_id_token=cookie-id',
-      },
-      session: {
-        openidTokens: {
-          accessToken: 'session-access',
-          // idToken intentionally missing
-          refreshToken: 'session-refresh',
-        },
-      },
-    };
-
-    const { user } = await invokeVerify(req, payload);
-
-    expect(user.federatedTokens).toEqual({
-      access_token: 'session-access',
-      id_token: 'cookie-id',
-      refresh_token: 'session-refresh',
+      access_token: undefined,
+      id_token: undefined,
+      refresh_token: undefined,
       expires_at: undefined,
     });
   });
@@ -355,6 +338,7 @@ describe('openIdJwtStrategy – token source handling', () => {
     const req = {
       headers: {
         authorization: 'Bearer raw-bearer-token',
+        /** Legacy cookies are ignored now; they must not populate federatedTokens. */
         cookie: 'openid_id_token=cookie-id; refreshToken=cookie-refresh',
       },
     };
@@ -362,8 +346,8 @@ describe('openIdJwtStrategy – token source handling', () => {
     const { user } = await invokeVerify(req, payload);
 
     expect(user.federatedTokens.access_token).toBeUndefined();
-    expect(user.federatedTokens.id_token).toBe('cookie-id');
-    expect(user.federatedTokens.refresh_token).toBe('cookie-refresh');
+    expect(user.federatedTokens.id_token).toBeUndefined();
+    expect(user.federatedTokens.refresh_token).toBeUndefined();
     expect(user.federatedTokens.expires_at).toBeUndefined();
   });
 
@@ -446,82 +430,6 @@ describe('openIdJwtStrategy – token source handling', () => {
     const { user } = await invokeVerify(req, claims);
 
     expect(user.federatedTokens.access_token).toBeUndefined();
-  });
-
-  it('should decode expires_at from a session access token that is itself a JWT', async () => {
-    const sessionAccessExp = 1234567890;
-    const sessionAccessToken = `header.${Buffer.from(
-      JSON.stringify({ sub: 'oidc-123', exp: sessionAccessExp }),
-    ).toString('base64')}.signature`;
-    const req = {
-      headers: { authorization: 'Bearer raw-bearer-token' },
-      session: {
-        openidTokens: {
-          accessToken: sessionAccessToken,
-          idToken: 'session-id',
-          refreshToken: 'session-refresh',
-        },
-      },
-    };
-
-    const { user } = await invokeVerify(req, payload);
-
-    expect(user.federatedTokens.access_token).toBe(sessionAccessToken);
-    expect(user.federatedTokens.expires_at).toBe(sessionAccessExp);
-    expect(user.federatedTokens.expires_at).not.toBe(payload.exp);
-  });
-
-  it('should store an opaque session access token with no expiry alongside a decodable stale ID token', async () => {
-    const staleIdToken = `header.${Buffer.from(
-      JSON.stringify({ sub: 'oidc-123', exp: Math.floor(Date.now() / 1000) - 3600 }),
-    ).toString('base64')}.signature`;
-    const req = {
-      headers: { authorization: 'Bearer raw-bearer-token' },
-      session: {
-        openidTokens: {
-          accessToken: 'opaque-session-access',
-          idToken: staleIdToken,
-          refreshToken: 'session-refresh',
-        },
-      },
-    };
-
-    const { user } = await invokeVerify(req, payload);
-
-    expect(user.federatedTokens.access_token).toBe('opaque-session-access');
-    expect(user.federatedTokens.id_token).toBe(staleIdToken);
-    expect(user.federatedTokens.expires_at).toBeUndefined();
-  });
-
-  it('should set id_token to undefined when not available in session or cookies', async () => {
-    const req = {
-      headers: {
-        authorization: 'Bearer raw-bearer-token',
-        cookie: 'openid_access_token=cookie-access; refreshToken=cookie-refresh',
-      },
-    };
-
-    const { user } = await invokeVerify(req, payload);
-
-    expect(user.federatedTokens.access_token).toBe('cookie-access');
-    expect(user.federatedTokens.id_token).toBeUndefined();
-    expect(user.federatedTokens.refresh_token).toBe('cookie-refresh');
-  });
-
-  it('should keep id_token and access_token as distinct values from cookies', async () => {
-    const req = {
-      headers: {
-        authorization: 'Bearer raw-bearer-token',
-        cookie:
-          'openid_access_token=the-access-token; openid_id_token=the-id-token; refreshToken=the-refresh',
-      },
-    };
-
-    const { user } = await invokeVerify(req, payload);
-
-    expect(user.federatedTokens.access_token).toBe('the-access-token');
-    expect(user.federatedTokens.id_token).toBe('the-id-token');
-    expect(user.federatedTokens.access_token).not.toBe(user.federatedTokens.id_token);
   });
 });
 
