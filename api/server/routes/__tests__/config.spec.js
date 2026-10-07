@@ -181,6 +181,7 @@ describe('GET /api/config', () => {
       expect(response.body).not.toHaveProperty('conversationImportMaxFileSize');
       expect(response.body).not.toHaveProperty('insightsEnabled');
       expect(response.body).not.toHaveProperty('pullRequestsEnabled');
+      expect(response.body).not.toHaveProperty('pullRequestsBatchVersion');
       expect(response.body).not.toHaveProperty('mcpApps');
     });
 
@@ -683,8 +684,25 @@ describe('GET /api/config', () => {
         });
         const response = await request(createApp(mockUser)).get('/api/config');
         expect(response.body.pullRequestsEnabled).toBe(expected);
+        /** The batch route's version rides with the flag, so a client never sees one without the other. */
+        if (expected) {
+          expect(response.body.pullRequestsBatchVersion).toBe(1);
+          expect(response.body.pullRequestsMaxConcurrentLookups).toBe(4);
+        } else {
+          expect(response.body).not.toHaveProperty('pullRequestsBatchVersion');
+          expect(response.body).not.toHaveProperty('pullRequestsMaxConcurrentLookups');
+        }
       },
     );
+
+    it('advertises the configured lookup limit so a fallback client can keep to it', async () => {
+      mockGetAppConfig.mockResolvedValue({
+        ...baseAppConfig,
+        endpoints: { agents: { pullRequests: { enabled: true, maxConcurrentLookups: 2 } } },
+      });
+      const response = await request(createApp(mockUser)).get('/api/config');
+      expect(response.body.pullRequestsMaxConcurrentLookups).toBe(2);
+    });
 
     it('should not advertise pull requests for a config with no endpoints', async () => {
       mockGetAppConfig.mockResolvedValue(baseAppConfig);
