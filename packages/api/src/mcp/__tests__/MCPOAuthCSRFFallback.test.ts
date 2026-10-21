@@ -16,15 +16,16 @@
  */
 
 import { Keyv } from 'keyv';
-import { FlowStateManager, PENDING_STALE_MS } from '~/flow/manager';
 import type { Request, Response } from 'express';
 import {
   generateOAuthCsrfToken,
   OAUTH_SESSION_COOKIE,
+  setOAuthSessionCookie,
   validateOAuthSession,
   OAUTH_CSRF_COOKIE,
   validateOAuthCsrf,
 } from '~/oauth/csrf';
+import { FlowStateManager, PENDING_STALE_MS } from '~/flow/manager';
 import { MockKeyv } from './helpers/oauthTestServer';
 
 jest.mock('@librechat/data-schemas', () => ({
@@ -51,6 +52,24 @@ function makeRes(): Response {
     clearCookie: jest.fn(),
   } as unknown as Response;
   return res;
+}
+
+/**
+ * Mints the value the `oauth_session` cookie now carries for `userId`: a signed
+ * HS256 `{ id, exp }` token, produced by the same `setOAuthSessionCookie` the
+ * application uses so the value is exactly what `validateOAuthSession` accepts.
+ * Captures the value from a `res.cookie` call rather than reconstructing the
+ * digest inline, which the old keyed-digest form did.
+ */
+function mintOAuthSessionCookie(userId: string): string {
+  let value = '';
+  const res = {
+    cookie: (_name: string, cookieValue: string) => {
+      value = cookieValue;
+    },
+  } as unknown as Response;
+  setOAuthSessionCookie(res, userId);
+  return value;
 }
 
 /**
@@ -89,12 +108,14 @@ describe('OAuth Callback CSRF Fallback', () => {
 
   beforeEach(() => {
     process.env.JWT_SECRET = 'test-secret-for-csrf';
+    process.env.JWT_REFRESH_SECRET = 'test-refresh-secret-for-oauth-session';
     const store = new MockKeyv();
     flowManager = new FlowStateManager(store as unknown as Keyv, { ttl: 300000, ci: true });
   });
 
   afterEach(() => {
     delete process.env.JWT_SECRET;
+    delete process.env.JWT_REFRESH_SECRET;
     jest.clearAllMocks();
   });
 
@@ -122,7 +143,7 @@ describe('OAuth Callback CSRF Fallback', () => {
   describe('Session cookie validation (mechanism 2)', () => {
     it('should accept valid session cookie when CSRF is absent', async () => {
       const flowId = 'user1:test-server';
-      const sessionToken = generateOAuthCsrfToken('user1', 'test-secret-for-csrf');
+      const sessionToken = mintOAuthSessionCookie('user1');
       const req = makeReq({ [OAUTH_SESSION_COOKIE]: sessionToken });
       const res = makeRes();
 
@@ -223,7 +244,7 @@ describe('OAuth Callback CSRF Fallback', () => {
       const flowId = 'user1:test-server';
       await flowManager.initFlow(flowId, 'mcp_oauth', { serverName: 'test-server' });
 
-      const sessionToken = generateOAuthCsrfToken('user1', 'test-secret-for-csrf');
+      const sessionToken = mintOAuthSessionCookie('user1');
       const req = makeReq({ [OAUTH_SESSION_COOKIE]: sessionToken });
       const res = makeRes();
 

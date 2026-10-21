@@ -32,14 +32,12 @@ const {
 } = require('@librechat/api');
 const {
   findUser,
-  findToken,
   createUser,
   updateUser,
   countUsers,
+  authTokens,
   getUserById,
   findSession,
-  createToken,
-  deleteTokens,
   deleteSession,
   createSession,
   generateToken,
@@ -103,7 +101,7 @@ const invalidEmailVerificationMessage = 'Invalid or expired email verification t
 const OPENID_SESSION_ID_TOKEN_EXPIRY_BUFFER_SECONDS = 30;
 
 const findPasswordResetToken = async (userId) => {
-  const typedToken = await findToken(
+  const typedToken = await authTokens.findToken(
     {
       userId,
       type: AuthTokenTypes.PASSWORD_RESET,
@@ -115,7 +113,7 @@ const findPasswordResetToken = async (userId) => {
     return typedToken;
   }
 
-  return await findToken(
+  return await authTokens.findToken(
     {
       userId,
       email: null,
@@ -127,7 +125,7 @@ const findPasswordResetToken = async (userId) => {
 };
 
 const findEmailVerificationToken = async (user) => {
-  const typedToken = await findToken(
+  const typedToken = await authTokens.findToken(
     {
       userId: user._id,
       email: user.email,
@@ -140,7 +138,7 @@ const findEmailVerificationToken = async (user) => {
     return typedToken;
   }
 
-  return await findToken(
+  return await authTokens.findToken(
     {
       userId: user._id,
       email: user.email,
@@ -153,12 +151,12 @@ const findEmailVerificationToken = async (user) => {
 
 const deleteEmailVerificationTokens = (user) =>
   Promise.all([
-    deleteTokens({
+    authTokens.deleteTokens({
       userId: user._id,
       email: user.email,
       type: AuthTokenTypes.EMAIL_VERIFICATION,
     }),
-    deleteTokens({
+    authTokens.deleteTokens({
       userId: user._id,
       email: user.email,
       identifier: null,
@@ -334,7 +332,7 @@ const sendVerificationEmail = async (user) => {
     template: 'verifyEmail.handlebars',
   });
 
-  await createToken({
+  await authTokens.createToken({
     userId: user._id,
     email,
     type: AuthTokenTypes.EMAIL_VERIFICATION,
@@ -404,7 +402,7 @@ const verifyEmail = async (req) => {
   }
 
   if (user.emailVerified) {
-    await deleteTokens(getEmailVerificationTokenDeleteQuery(emailVerificationData));
+    await authTokens.deleteTokens(getEmailVerificationTokenDeleteQuery(emailVerificationData));
     logger.info(`[verifyEmail] Email already verified [Email: ${decodedEmail}]`);
     return { message: 'Email verification was successful', status: 'success' };
   }
@@ -416,7 +414,7 @@ const verifyEmail = async (req) => {
     return new Error(invalidEmailVerificationMessage);
   }
 
-  await deleteTokens(getEmailVerificationTokenDeleteQuery(emailVerificationData));
+  await authTokens.deleteTokens(getEmailVerificationTokenDeleteQuery(emailVerificationData));
   logger.info(`[verifyEmail] Email verification successful [Email: ${decodedEmail}]`);
   return { message: 'Email verification was successful', status: 'success' };
 };
@@ -574,13 +572,13 @@ const requestPasswordReset = async (req) => {
   }
 
   await Promise.all([
-    deleteTokens({ userId: user._id, type: AuthTokenTypes.PASSWORD_RESET }),
-    deleteTokens({ userId: user._id, email: null, identifier: null, type: null }),
+    authTokens.deleteTokens({ userId: user._id, type: AuthTokenTypes.PASSWORD_RESET }),
+    authTokens.deleteTokens({ userId: user._id, email: null, identifier: null, type: null }),
   ]);
 
   const [resetToken, hash] = createTokenHash();
 
-  await createToken({
+  await authTokens.createToken({
     userId: user._id,
     type: AuthTokenTypes.PASSWORD_RESET,
     token: hash,
@@ -654,7 +652,7 @@ const resetPassword = async (userId, token, password) => {
     });
   }
 
-  await deleteTokens(getPasswordResetTokenDeleteQuery(passwordResetToken));
+  await authTokens.deleteTokens(getPasswordResetTokenDeleteQuery(passwordResetToken));
   logger.info(`[resetPassword] Password reset successful. [Email: ${user.email}]`);
   return { message: 'Password reset was successful' };
 };
@@ -1014,7 +1012,7 @@ const resendVerificationEmail = async (req) => {
       template: 'verifyEmail.handlebars',
     });
 
-    await createToken({
+    await authTokens.createToken({
       userId: user._id,
       email: user.email,
       type: AuthTokenTypes.EMAIL_VERIFICATION,
