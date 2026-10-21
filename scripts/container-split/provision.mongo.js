@@ -50,7 +50,7 @@
  *     login and OAuth paths, `/api/config`, `/api/banner`, and the SPA. Its
  *     grant reaches exactly twelve collections: read-write on `users`,
  *     `sessions`, `authtokens`, `balances`, `bans`, `groups`,
- *     `refreshtokenbridges`, and `openidrefreshflights`; read-only on `roles`,
+ *     `tokencustodies`, and `openidrefreshflights`; read-only on `roles`,
  *     `configs`, `systemgrants`, and `banners`. Read-write here includes
  *     `createIndex`, because the auth surface's own request paths build
  *     indexes on collections it writes — see `WRITE_ACTIONS` below. The action
@@ -116,10 +116,11 @@ const adminDb = db.getSiblingDB(ADMIN_DB);
  * `openid` provider. Deployments without it can move `groups` to the read-only
  * list below, where the admin login paths' capability checks still work.
  *
- * `refreshtokenbridges` and `openidrefreshflights` are read-write, not
- * read-only. Both are written *primarily* by the auth surface's own refresh
- * and logout paths (`/api/auth/refresh` and `/api/auth/logout`) — the
- * `RefreshTokenBridge` rotation bridge and the `OpenIDRefreshFlight`
+ * `tokencustodies` and `openidrefreshflights` are read-write, not read-only.
+ * Both are written *primarily* by the auth surface's own login, refresh and
+ * logout paths (`/oauth/openid/callback`, `/api/auth/refresh` and
+ * `/api/auth/logout`) — the sealed `TokenCustody` record, created on login,
+ * rotated on refresh and deleted on logout, and the `OpenIDRefreshFlight`
  * cross-worker inline-refresh coordination — so the auth surface must be able
  * to write both. The API container also writes both on its OBO inline-refresh
  * path when a tool call's access token has expired, but that shared write does
@@ -134,7 +135,7 @@ const AUTH_READ_WRITE = [
   'balances',
   'bans',
   'groups',
-  'refreshtokenbridges',
+  'tokencustodies',
   'openidrefreshflights',
 ];
 
@@ -174,7 +175,8 @@ const READ_ACTIONS = ['find'];
  * memoized per process, before their first write:
  *
  *   - `sessions` — `createSession` and `upsertSession`, so every login
- *   - `refreshtokenbridges` — `storeRefreshTokenBridge`, on `/api/auth/refresh`
+ *   - `tokencustodies` — `upsertTokenCustody`, on every OpenID login with
+ *     `OPENID_REUSE_TOKENS`
  *   - `openidrefreshflights` — `acquireOpenIDRefreshFlight` on the refresh path
  *     and `revokeOpenIDRefreshFlight` on `/api/auth/logout`
  *

@@ -282,7 +282,7 @@ attributed to `librechat_auth_surface@admin` inside the boot window is exactly z
   on a credential no deployment uses can break for reasons unrelated to the property, the legitimate
   request-path `createIndex` below among them.
 - **Carve-out, explicitly:** a request-path `createIndex` — the memoized `Model.createIndexes()` that
-  `sessions`, `refreshtokenbridges` and `openidrefreshflights` issue on login, refresh and logout — is
+  `sessions`, `tokencustodies` and `openidrefreshflights` issue on login, refresh and logout — is
   outside the boot window and is **not** a violation of this property. The Auth_Surface is the
   container that indexes those collections by design, and the grant carries `createIndex` for that
   reason. A boot-write check that flags it is a broken check, not a finding.
@@ -807,7 +807,7 @@ check exists to catch. The window is a superset of Requirement 3.9's 60-second s
 
 **A request-path `createIndex` is outside the window and is not a violation.** `MONGO_AUTO_INDEX=false`
 suppresses Mongoose's automatic build at model registration; it does not suppress an explicit
-`Model.createIndexes()`, and the `sessions`, `refreshtokenbridges` and `openidrefreshflights` method
+`Model.createIndexes()`, and the `sessions`, `tokencustodies` and `openidrefreshflights` method
 layers issue exactly that, memoized per process, before their first write — on login, on
 `/api/auth/refresh`, and on `/api/auth/logout`. All three sit on paths routed to the Auth_Surface. So
 the Auth_Surface *is* the container that indexes those collections, by design, and the grant carries
@@ -970,7 +970,7 @@ assertion has a sentinel rather than depending on whatever the boot happened to 
 credentials to `/api/auth/login` **through the Front_Proxy ingress client**, and attached to every
 exercise of a session-gated path. It is obtained inside stage 11, ordered after the boot-window checks
 have closed, for the reason the Boot-Write Observation section already fixes: login triggers the memoized
-`Model.createIndexes()` on `sessions`, `refreshtokenbridges` and `openidrefreshflights`, and the runner
+`Model.createIndexes()` on `sessions`, `tokencustodies` and `openidrefreshflights`, and the runner
 issues no ingress request until the boot window has closed. NC6 is the control that keeps this honest in
 the other direction — `BOOT-NOWRITE-23` must **pass** under a login inside the window, because the window
 is bounded by boot events.

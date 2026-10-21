@@ -38,7 +38,7 @@
 //
 // == When it is minted ==
 // Inside stage 11, and only after the boot window has closed. Login triggers the memoized
-// `Model.createIndexes()` on `sessions`, `refreshtokenbridges` and `openidrefreshflights`, and
+// `Model.createIndexes()` on `sessions`, `tokencustodies` and `openidrefreshflights`, and
 // BOOT-NOWRITE-23 counts write commands attributed to the Auth_Surface inside
 // `[bootStart, readyAt + 60s]` — an in-window login would put a legitimate index build inside the
 // count. `awaitBootWindowClosed` below is what enforces the ordering, deliberately as a property of
@@ -209,7 +209,7 @@ export async function mintSessionFixture({
   }
 
   // Ordering, enforced here rather than assumed from Jest's file order: login builds indexes on
-  // `sessions`, `refreshtokenbridges` and `openidrefreshflights`, and BOOT-NOWRITE-23 counts writes
+  // `sessions`, `tokencustodies` and `openidrefreshflights`, and BOOT-NOWRITE-23 counts writes
   // inside [bootStart, readyAt + 60s].
   const { waitedMs } = await awaitBootWindowClosed(readyAtMs, { now, sleep, tailMs });
 

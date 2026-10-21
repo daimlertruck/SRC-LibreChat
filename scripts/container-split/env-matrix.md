@@ -66,8 +66,8 @@ container.
 `MONGO_AUTO_INDEX=false` is a statement about boot, not about the process. It suppresses
 Mongoose's automatic build at model registration and leaves an explicit `Model.createIndexes()`
 untouched, and three method layers the auth surface reaches on request issue exactly that before
-their first write: `sessions` on every login, `refreshtokenbridges` on `/api/auth/refresh`, and
-`openidrefreshflights` on the refresh and logout paths. So the auth surface is the container that
+their first write: `sessions` on every login, `tokencustodies` on every OpenID login with
+`OPENID_REUSE_TOKENS`, and `openidrefreshflights` on the refresh and logout paths. So the auth surface is the container that
 indexes those collections, by design — indexing before the first write is what keeps them out of
 the first-boot ordering window described for `authtokens` in the design document. The provisioned
 grant therefore permits `createIndex` on all eight of its read-write collections, and on nothing
@@ -270,8 +270,13 @@ is the same value both containers already hold (see the `JWT_SECRET`, `JWT_REFRE
 above), additionally provisioned to the gate.
 
 - **Asset-pair exemptions** — `/images/*` and `/api/share/:shareId/files/:file_id` with its
-  `/preview` and `/download` variants — are validated by verifying the `refreshToken` and
-  `openid_user_id` cookies directly against `JWT_REFRESH_SECRET`.
+  `/preview` and `/download` variants — admit a request when either pair validates:
+  - Local-shaped sessions (local, social, OpenID without `OPENID_REUSE_TOKENS`): the `refreshToken`
+    cookie verifies directly against `JWT_REFRESH_SECRET`.
+  - OpenID with `OPENID_REUSE_TOKENS`: the `openid_user_id` cookie, carrying
+    `{ id, tokenKeyHash, exp }`, verifies directly against `JWT_REFRESH_SECRET`, and the unpadded
+    base64url SHA-256 of the 32 bytes the `openid_token_key` cookie decodes to (base64url) equals
+    `tokenKeyHash`. These browsers carry no `refreshToken` cookie.
 - **Callback-pair exemptions** — `/api/mcp/:serverName/oauth/callback` and
   `/api/actions/:action_id/oauth/callback` — are validated by verifying the `oauth_session` cookie
   against the Session_Cookie_Key, which the gate derives from `JWT_REFRESH_SECRET` via HKDF-SHA256

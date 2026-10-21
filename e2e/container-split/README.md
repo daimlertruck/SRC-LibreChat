@@ -177,7 +177,7 @@ the resolved env files must set no key to an empty value that the application pa
     the refresh cookie and the access token the application returns are carried back on every
     session-gated exercise the way a browser would carry them. The mint waits for the boot window's
     right edge itself rather than relying on Jest's file order, because login builds indexes on
-    `sessions`, `refreshtokenbridges` and `openidrefreshflights` and those writes must land outside the
+    `sessions`, `tokencustodies` and `openidrefreshflights` and those writes must land outside the
     window `BOOT-NOWRITE-23` counts over. Nothing about the session is minted, decoded or re-signed by
     the harness — it holds no signing key and performs no crypto, which is the same property that makes
     a commodity reverse proxy an adequate Front_Proxy here (NG6). A session-gated path exercised with

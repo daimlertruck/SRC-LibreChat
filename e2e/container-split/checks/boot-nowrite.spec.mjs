@@ -27,7 +27,7 @@
 //     mode; this assertion catches a roll that happened anyway.
 //   * Request-path `createIndex` carve-out: `MONGO_AUTO_INDEX=false` suppresses Mongoose's automatic
 //     build at model registration but NOT an explicit `Model.createIndexes()`, which the `sessions`,
-//     `refreshtokenbridges` and `openidrefreshflights` method layers issue (memoized per process) on
+//     `tokencustodies` and `openidrefreshflights` method layers issue (memoized per process) on
 //     login, refresh and logout — all paths routed to the Auth_Surface, so the Auth_Surface is the
 //     container that indexes them by design and the grant carries `createIndex` for that reason. A
 //     boot-write check that fires on a login is a broken check, not a finding. Two mechanisms keep it

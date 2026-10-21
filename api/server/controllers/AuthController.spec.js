@@ -46,7 +46,7 @@ jest.mock('~/models', () => ({
   findSession: jest.fn(),
   updateUser: jest.fn(),
   findUser: jest.fn(),
-  deleteTokens: jest.fn(),
+  authTokens: { deleteTokens: jest.fn() },
 }));
 jest.mock('~/server/services/OpenIDRefreshFlight', () => ({
   acquireOpenIDRefreshFlight: jest.fn(),
@@ -124,7 +124,8 @@ const {
   setAuthTokens,
   registerUser,
 } = require('~/server/services/AuthService');
-const { getUserById, findSession, deleteTokens } = require('~/models');
+const { getUserById, findSession, authTokens } = require('~/models');
+const { deleteTokens } = authTokens;
 const {
   createOpenIDRefreshFlightKey,
   revokeOpenIDRefreshFlights,

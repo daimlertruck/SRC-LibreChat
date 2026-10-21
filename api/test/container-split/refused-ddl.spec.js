@@ -91,7 +91,7 @@ describeContainerSplit('GRANT-DENY-DDL-07: DDL on the read-write collections is 
         'balances',
         'bans',
         'groups',
-        'refreshtokenbridges',
+        'tokencustodies',
         'openidrefreshflights',
       ].sort(),
     );

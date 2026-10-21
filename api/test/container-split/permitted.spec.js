@@ -62,7 +62,7 @@ describeContainerSplit('GRANT-ALLOW-WRITE-05: writes to the eight read-write col
    * The grant carries `createIndex` for exactly this reason, and each must be
    * permitted to `createIndex` under the Container_1_Grant.
    */
-  const CREATE_INDEX_COLLECTIONS = ['sessions', 'refreshtokenbridges', 'openidrefreshflights'];
+  const CREATE_INDEX_COLLECTIONS = ['sessions', 'tokencustodies', 'openidrefreshflights'];
 
   it('grants exactly the eight expected read-write collections', () => {
     // Guards this spec against a silent change to the ownership matrix: if the
@@ -75,8 +75,8 @@ describeContainerSplit('GRANT-ALLOW-WRITE-05: writes to the eight read-write col
         'bans',
         'groups',
         'openidrefreshflights',
-        'refreshtokenbridges',
         'sessions',
+        'tokencustodies',
         'users',
       ].sort(),
     );

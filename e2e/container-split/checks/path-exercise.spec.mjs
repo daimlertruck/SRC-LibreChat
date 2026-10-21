@@ -197,7 +197,7 @@ function harnessContext() {
   // The two MUST travel together. `msUntilBootWindowClosed` treats a non-number `readyAtMs` as zero
   // wait, so forwarding `seededAccount` without `readyAtMs` would let the login mint proceed INSIDE
   // the boot window — putting legitimate Model.createIndexes() writes on
-  // sessions/refreshtokenbridges/openidrefreshflights into the window BOOT-NOWRITE-23 asserts is
+  // sessions/tokencustodies/openidrefreshflights into the window BOOT-NOWRITE-23 asserts is
   // empty, turning a loud fixture failure into a wrong verdict on a currently-passing check.
   return {
     ingress,
@@ -1320,7 +1320,7 @@ describe('Session_Fixture', () => {
   });
 
   test('the mint waits for the boot window to close before issuing any ingress request', async () => {
-    // Login triggers the memoized Model.createIndexes() on `sessions`, `refreshtokenbridges` and
+    // Login triggers the memoized Model.createIndexes() on `sessions`, `tokencustodies` and
     // `openidrefreshflights`, and BOOT-NOWRITE-23 counts writes attributed to the Auth_Surface inside
     // [bootStart, readyAt + 60s]. The wait is a property of the FIXTURE rather than of Jest's file
     // order, because Jest picks its own order and a mint that depended on running after

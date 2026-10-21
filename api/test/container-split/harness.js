@@ -69,7 +69,7 @@ const AUTH_READ_WRITE = [
   'balances',
   'bans',
   'groups',
-  'refreshtokenbridges',
+  'tokencustodies',
   'openidrefreshflights',
 ];
 
