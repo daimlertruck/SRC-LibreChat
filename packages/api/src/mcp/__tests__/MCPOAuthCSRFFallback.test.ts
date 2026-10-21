@@ -108,12 +108,14 @@ describe('OAuth Callback CSRF Fallback', () => {
 
   beforeEach(() => {
     process.env.JWT_SECRET = 'test-secret-for-csrf';
+    process.env.JWT_REFRESH_SECRET = 'test-refresh-secret-for-oauth-session';
     const store = new MockKeyv();
     flowManager = new FlowStateManager(store as unknown as Keyv, { ttl: 300000, ci: true });
   });
 
   afterEach(() => {
     delete process.env.JWT_SECRET;
+    delete process.env.JWT_REFRESH_SECRET;
     jest.clearAllMocks();
   });
 
