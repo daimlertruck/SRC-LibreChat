@@ -181,6 +181,7 @@ export const DEPLOYMENT_ONLY_CONFIG_PATHS: Readonly<Record<string, DeploymentOnl
   'endpoints.agents.backgroundTasks.completionResultBatchSize': 'startup',
   'endpoints.agents.backgroundTasks.completionReceiptBatching': 'startup',
   'endpoints.agents.toolApproval.hooks': 'operator',
+  'mcpSettings.oauthFailureRetentionMs': 'startup',
   'mcpSettings.catalogRecovery.maxStateEntries': 'startup',
   'mcpSettings.catalogRecovery.maxDetachedDiscoveries': 'startup',
   'mcpSettings.catalogRecovery.authorizationFenceRetryIntervalMs': 'startup',
@@ -2714,6 +2715,12 @@ export const outboundTimeoutsSchema = z.object({
   imageFetchMs: outboundTimeoutMs,
 });
 
+/** Retention for the write-only GENERAL violation log kept per user. */
+export const violationLogSchema = z.object({
+  /** Newest entries kept per user; older ones are dropped on the next append. */
+  maxEntries: z.number().int().positive().optional(),
+});
+
 export type TOutboundTimeouts = z.infer<typeof outboundTimeoutsSchema>;
 
 export const rateLimitSchema = z.object({
@@ -4525,6 +4532,14 @@ export const configSchema = z.object({
     .object({
       allowedDomains: z.array(z.string()).optional(),
       allowedAddresses: allowedAddressesSchema,
+      /** How long a failed OAuth reconnection is remembered before its attempt count resets.
+       * Defaults to 24 hours. */
+      oauthFailureRetentionMs: z
+        .number()
+        .int()
+        .positive()
+        .max(30 * 24 * 60 * 60_000)
+        .optional(),
       catalogRecovery: z
         .object({
           discoveryBackoffMs: z
@@ -4642,6 +4657,7 @@ export const configSchema = z.object({
     })
     .optional(),
   timeouts: outboundTimeoutsSchema.optional(),
+  violationLog: violationLogSchema.optional(),
   fileConfig: fileConfigSchema.optional(),
   modelSpecs: specsConfigSchema.optional(),
   filters: filtersConfigSchema.optional(),
