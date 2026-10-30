@@ -1,166 +1,150 @@
-jest.mock(
-  '@librechat/data-schemas',
-  () => ({
-    logger: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
-    runAsSystem: (callback) => callback(),
-    getTenantId: jest.fn(() => undefined),
-    DEFAULT_SESSION_EXPIRY: 900000,
-    DEFAULT_REFRESH_TOKEN_EXPIRY: 604800000,
-  }),
-  { virtual: true },
-);
-jest.mock(
-  'librechat-data-provider',
-  () => ({
-    ErrorTypes: {},
-    SystemRoles: { USER: 'USER', ADMIN: 'ADMIN' },
-    errorsToString: jest.fn(),
-  }),
-  { virtual: true },
-);
-jest.mock(
-  '@librechat/api',
-  () => {
-    const crypto = require('node:crypto');
-    const shouldUseSecureCookie = jest.fn(() => false);
-    const TOKEN_KEY_COOKIE = 'openid_token_key';
-    /** base64url of 32 bytes is 43 chars; the parser accepts exactly that shape. */
-    const TOKEN_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-    const parseTokenKey = jest.fn((value) => {
-      if (typeof value !== 'string' || !TOKEN_KEY_PATTERN.test(value)) {
-        return null;
-      }
-      const buffer = Buffer.from(value, 'base64url');
-      return buffer.length === 32 ? buffer : null;
+jest.mock('@librechat/data-schemas', () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
+  runAsSystem: (callback) => callback(),
+  getTenantId: jest.fn(() => undefined),
+  DEFAULT_SESSION_EXPIRY: 900000,
+  DEFAULT_REFRESH_TOKEN_EXPIRY: 604800000,
+}));
+jest.mock('librechat-data-provider', () => ({
+  ErrorTypes: {},
+  SystemRoles: { USER: 'USER', ADMIN: 'ADMIN' },
+  errorsToString: jest.fn(),
+}));
+jest.mock('@librechat/api', () => {
+  const crypto = require('node:crypto');
+  const shouldUseSecureCookie = jest.fn(() => false);
+  const TOKEN_KEY_COOKIE = 'openid_token_key';
+  /** base64url of 32 bytes is 43 chars; the parser accepts exactly that shape. */
+  const TOKEN_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+  const parseTokenKey = jest.fn((value) => {
+    if (typeof value !== 'string' || !TOKEN_KEY_PATTERN.test(value)) {
+      return null;
+    }
+    const buffer = Buffer.from(value, 'base64url');
+    return buffer.length === 32 ? buffer : null;
+  });
+  const hashTokenKey = jest.fn((key) =>
+    crypto.createHash('sha256').update(key).digest('base64url'),
+  );
+  const setTokenKeyCookie = jest.fn((res, tokenKey, expires) => {
+    res.cookie(TOKEN_KEY_COOKIE, tokenKey, {
+      expires,
+      httpOnly: true,
+      secure: shouldUseSecureCookie(),
+      sameSite: 'strict',
+      path: '/',
     });
-    const hashTokenKey = jest.fn((key) =>
-      crypto.createHash('sha256').update(key).digest('base64url'),
-    );
-    const setTokenKeyCookie = jest.fn((res, tokenKey, expires) => {
-      res.cookie(TOKEN_KEY_COOKIE, tokenKey, {
+  });
+  const clearTokenKeyCookie = jest.fn((res) => {
+    res.clearCookie?.(TOKEN_KEY_COOKIE, { path: '/' });
+  });
+  /**
+   * A stateful fake of the custody service: `createCustody` mints a real 32-byte key, derives its
+   * hash, and stores a record keyed by hash; `deleteCustody` removes it. The record's `expiresAt`
+   * mirrors the service rule (fallback branch: now + fallbackRefreshTtlMs) so the cookie's expiry
+   * is a real Date the tests can assert against.
+   */
+  /**
+   * The single instance the app constructs is memoized at the module level, so it survives
+   * `jest.clearAllMocks()`. Holding it on a stable reference (rather than reading
+   * `createTokenCustodyService.mock.results`, which `clearAllMocks` empties) lets every test reach
+   * the same `createCustody` / `deleteCustody` spies.
+   */
+  let custodyInstance = null;
+  const createTokenCustodyService = jest.fn(({ fallbackRefreshTtlMs }) => {
+    const records = new Map();
+    custodyInstance = {
+      records,
+      createCustody: jest.fn(async ({ tokens, identity }) => {
+        const key = crypto.randomBytes(32);
+        const tokenKey = key.toString('base64url');
+        const tokenKeyHash = crypto.createHash('sha256').update(key).digest('base64url');
+        const base =
+          tokens.refreshTokenExpiresAt != null
+            ? tokens.refreshTokenExpiresAt
+            : Date.now() + fallbackRefreshTtlMs;
+        const expiresAt = new Date(
+          tokens.accessTokenExpiresAt != null ? Math.max(base, tokens.accessTokenExpiresAt) : base,
+        );
+        records.set(tokenKeyHash, { tokens, identity, tokenKeyHash, expiresAt });
+        return { tokenKey, tokenKeyHash, expiresAt };
+      }),
+      deleteCustody: jest.fn(async ({ tokenKeyHash }) => {
+        records.delete(tokenKeyHash);
+      }),
+    };
+    return custodyInstance;
+  });
+  return {
+    __getCustodyService: () => custodyInstance,
+    isEnabled: jest.fn((val) => val === 'true' || val === true),
+    checkEmailConfig: jest.fn(),
+    isEmailDomainAllowed: jest.fn(),
+    math: jest.fn((val, fallback) => (val ? Number(val) : fallback)),
+    shouldUseSecureCookie,
+    TOKEN_KEY_COOKIE,
+    parseTokenKey,
+    hashTokenKey,
+    setTokenKeyCookie,
+    clearTokenKeyCookie,
+    createTokenCustodyService,
+    setOpenIDMarkerCookies: jest.fn((res, { userId, expires, tokenKey }) => {
+      res.cookie('token_provider', 'openid', {
         expires,
         httpOnly: true,
         secure: shouldUseSecureCookie(),
         sameSite: 'strict',
-        path: '/',
       });
-    });
-    const clearTokenKeyCookie = jest.fn((res) => {
-      res.clearCookie?.(TOKEN_KEY_COOKIE, { path: '/' });
-    });
-    /**
-     * A stateful fake of the custody service: `createCustody` mints a real 32-byte key, derives its
-     * hash, and stores a record keyed by hash; `deleteCustody` removes it. The record's `expiresAt`
-     * mirrors the service rule (fallback branch: now + fallbackRefreshTtlMs) so the cookie's expiry
-     * is a real Date the tests can assert against.
-     */
-    /**
-     * The single instance the app constructs is memoized at the module level, so it survives
-     * `jest.clearAllMocks()`. Holding it on a stable reference (rather than reading
-     * `createTokenCustodyService.mock.results`, which `clearAllMocks` empties) lets every test reach
-     * the same `createCustody` / `deleteCustody` spies.
-     */
-    let custodyInstance = null;
-    const createTokenCustodyService = jest.fn(({ fallbackRefreshTtlMs }) => {
-      const records = new Map();
-      custodyInstance = {
-        records,
-        createCustody: jest.fn(async ({ tokens, identity }) => {
-          const key = crypto.randomBytes(32);
-          const tokenKey = key.toString('base64url');
-          const tokenKeyHash = crypto.createHash('sha256').update(key).digest('base64url');
-          const base =
-            tokens.refreshTokenExpiresAt != null
-              ? tokens.refreshTokenExpiresAt
-              : Date.now() + fallbackRefreshTtlMs;
-          const expiresAt = new Date(
-            tokens.accessTokenExpiresAt != null
-              ? Math.max(base, tokens.accessTokenExpiresAt)
-              : base,
-          );
-          records.set(tokenKeyHash, { tokens, identity, tokenKeyHash, expiresAt });
-          return { tokenKey, tokenKeyHash, expiresAt };
-        }),
-        deleteCustody: jest.fn(async ({ tokenKeyHash }) => {
-          records.delete(tokenKeyHash);
-        }),
-      };
-      return custodyInstance;
-    });
-    return {
-      __getCustodyService: () => custodyInstance,
-      isEnabled: jest.fn((val) => val === 'true' || val === true),
-      checkEmailConfig: jest.fn(),
-      isEmailDomainAllowed: jest.fn(),
-      math: jest.fn((val, fallback) => (val ? Number(val) : fallback)),
-      shouldUseSecureCookie,
-      TOKEN_KEY_COOKIE,
-      parseTokenKey,
-      hashTokenKey,
-      setTokenKeyCookie,
-      clearTokenKeyCookie,
-      createTokenCustodyService,
-      setOpenIDMarkerCookies: jest.fn((res, { userId, expires, tokenKey }) => {
-        res.cookie('token_provider', 'openid', {
+      if (userId && tokenKey) {
+        const key = parseTokenKey(tokenKey);
+        const tokenKeyHash = key ? hashTokenKey(key) : undefined;
+        res.cookie('openid_user_id', `signed:${userId}:${tokenKeyHash ?? ''}`, {
           expires,
           httpOnly: true,
           secure: shouldUseSecureCookie(),
           sameSite: 'strict',
         });
-        if (userId && tokenKey) {
-          const key = parseTokenKey(tokenKey);
-          const tokenKeyHash = key ? hashTokenKey(key) : undefined;
-          res.cookie('openid_user_id', `signed:${userId}:${tokenKeyHash ?? ''}`, {
-            expires,
-            httpOnly: true,
-            secure: shouldUseSecureCookie(),
-            sameSite: 'strict',
-          });
-        }
-      }),
-      normalizeExpiresIn: (value) => {
-        const normalized = typeof value === 'string' && value.trim() ? Number(value) : value;
-        return typeof normalized === 'number' && Number.isFinite(normalized)
-          ? normalized
-          : undefined;
+      }
+    }),
+    normalizeExpiresIn: (value) => {
+      const normalized = typeof value === 'string' && value.trim() ? Number(value) : value;
+      return typeof normalized === 'number' && Number.isFinite(normalized) ? normalized : undefined;
+    },
+    resolveAppConfigForUser: jest.fn(async (_getAppConfig, _user) => ({})),
+    createOpenIDSessionIdentity: jest.fn(
+      ({ user, userId, openidSubject, tenantId, openidIssuer }) => {
+        const normalize = (value) => {
+          if (value == null) {
+            return undefined;
+          }
+          const normalized = typeof value === 'string' ? value.trim() : value.toString().trim();
+          return normalized || undefined;
+        };
+        const normalizeIssuer = (value) =>
+          normalize(value)
+            ?.replace(/\/\.well-known\/openid-configuration$/, '')
+            .replace(/\/+$/, '');
+        return {
+          appUserId: normalize(userId) ?? normalize(user?._id) ?? normalize(user?.id),
+          openidSubject: normalize(openidSubject) ?? normalize(user?.openidId),
+          tenantId: normalize(tenantId) ?? normalize(user?.tenantId),
+          openidIssuer: normalizeIssuer(openidIssuer) ?? normalizeIssuer(user?.openidIssuer),
+        };
       },
-      resolveAppConfigForUser: jest.fn(async (_getAppConfig, _user) => ({})),
-      createOpenIDSessionIdentity: jest.fn(
-        ({ user, userId, openidSubject, tenantId, openidIssuer }) => {
-          const normalize = (value) => {
-            if (value == null) {
-              return undefined;
-            }
-            const normalized = typeof value === 'string' ? value.trim() : value.toString().trim();
-            return normalized || undefined;
-          };
-          const normalizeIssuer = (value) =>
-            normalize(value)
-              ?.replace(/\/\.well-known\/openid-configuration$/, '')
-              .replace(/\/+$/, '');
-          return {
-            appUserId: normalize(userId) ?? normalize(user?._id) ?? normalize(user?.id),
-            openidSubject: normalize(openidSubject) ?? normalize(user?.openidId),
-            tenantId: normalize(tenantId) ?? normalize(user?.tenantId),
-            openidIssuer: normalizeIssuer(openidIssuer) ?? normalizeIssuer(user?.openidIssuer),
-          };
-        },
-      ),
-      setCloudFrontCookies: jest.fn(() => true),
-      clearCloudFrontCookies: jest.fn(),
-      getCloudFrontConfig: jest.fn(() => ({
-        domain: 'https://cdn.example.com',
-        imageSigning: 'cookies',
-        cookieDomain: '.example.com',
-        privateKey: 'test-private-key',
-        keyPairId: 'K123ABC',
-      })),
-      parseCloudFrontCookieScope: jest.fn(() => null),
-      CLOUDFRONT_SCOPE_COOKIE: 'LibreChat-CloudFront-Scope',
-    };
-  },
-  { virtual: true },
-);
+    ),
+    setCloudFrontCookies: jest.fn(() => true),
+    clearCloudFrontCookies: jest.fn(),
+    getCloudFrontConfig: jest.fn(() => ({
+      domain: 'https://cdn.example.com',
+      imageSigning: 'cookies',
+      cookieDomain: '.example.com',
+      privateKey: 'test-private-key',
+      keyPairId: 'K123ABC',
+    })),
+    parseCloudFrontCookieScope: jest.fn(() => null),
+    CLOUDFRONT_SCOPE_COOKIE: 'LibreChat-CloudFront-Scope',
+  };
+});
 jest.mock('~/models', () => ({
   findUser: jest.fn(),
   findToken: jest.fn(),

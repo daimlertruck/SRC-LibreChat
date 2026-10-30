@@ -7,27 +7,15 @@ const mockCustodyService = { id: 'custody-service' };
 const mockGetTokenCustodyService = jest.fn(() => mockCustodyService);
 
 jest.mock('jsonwebtoken', () => ({ verify: (...args) => mockVerify(...args) }));
-jest.mock(
-  '@librechat/api',
-  () => ({
-    isEnabled: (v) => v === 'true' || v === true,
-    verifyCustodyBinding: (...args) => mockVerifyCustodyBinding(...args),
-  }),
-  {
-    virtual: true,
-  },
-);
-jest.mock(
-  '@librechat/data-schemas',
-  () => ({
-    logger: { warn: jest.fn(), error: jest.fn() },
-    runAsSystem: (...args) => mockRunAsSystem(...args),
-  }),
-  { virtual: true },
-);
-jest.mock('librechat-data-provider', () => ({ SystemRoles: { USER: 'USER' } }), {
-  virtual: true,
-});
+jest.mock('@librechat/api', () => ({
+  isEnabled: (v) => v === 'true' || v === true,
+  verifyCustodyBinding: (...args) => mockVerifyCustodyBinding(...args),
+}));
+jest.mock('@librechat/data-schemas', () => ({
+  logger: { warn: jest.fn(), error: jest.fn() },
+  runAsSystem: (...args) => mockRunAsSystem(...args),
+}));
+jest.mock('librechat-data-provider', () => ({ SystemRoles: { USER: 'USER' } }));
 jest.mock('~/models', () => ({
   getUserById: (...args) => mockGetUserById(...args),
   findSession: (...args) => mockFindSession(...args),
