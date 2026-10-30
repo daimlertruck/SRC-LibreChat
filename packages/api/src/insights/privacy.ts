@@ -1,6 +1,5 @@
 import type { TInsightsAggregateResponse, TInsightsResponse } from 'librechat-data-provider';
 
-/** Only these aggregate fields may cross the API boundary when inspection is disabled. */
 export function toAggregateInsightsResponse(
   insights: TInsightsResponse,
 ): TInsightsAggregateResponse {
