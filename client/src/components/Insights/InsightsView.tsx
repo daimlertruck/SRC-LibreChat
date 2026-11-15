@@ -784,10 +784,11 @@ export default function InsightsView() {
           : agent.name,
     }));
   }, [data]);
-  const effectiveAgentIds = useMemo(
-    () => (selectedAgentIds.length > 0 ? selectedAgentIds : agentItems.map((agent) => agent.value)),
-    [agentItems, selectedAgentIds],
-  );
+  const effectiveAgentIds = useMemo(() => {
+    if (selectedAgentIds.length > 0) return selectedAgentIds;
+    if (data?.autoSelectAllAgents === false) return [];
+    return agentItems.map((agent) => agent.value);
+  }, [agentItems, selectedAgentIds, data?.autoSelectAllAgents]);
   const displayedAgentIds = pendingAgentIds ?? effectiveAgentIds;
 
   useDocumentTitle(`${localize('com_insights_title')} | LibreChat`);
@@ -946,6 +947,7 @@ export default function InsightsView() {
     const nextParams = new URLSearchParams(urlSearchParams);
     nextParams.delete('agentIds');
     if (
+      data.autoSelectAllAgents === false ||
       normalizedIds.length !== allAgentIds.length ||
       normalizedIds.some((agentId, index) => agentId !== allAgentIds[index])
     ) {
@@ -993,7 +995,7 @@ export default function InsightsView() {
                   setPendingAgentIds(null);
                 }
               }}
-              disabled={agentItems.length <= 1}
+              disabled={agentItems.length <= 1 && displayedAgentIds.length > 0}
               showSelectedValues
               showItemCheckboxes
               searchPlaceholder={
@@ -1117,7 +1119,14 @@ export default function InsightsView() {
               </span>
             </Panel>
           )}
-          {data && (
+          {data?.selectionRequired && (
+            <Panel>
+              <p className="text-text-secondary text-sm">
+                {localize('com_insights_select_agents_to_load')}
+              </p>
+            </Panel>
+          )}
+          {data && !data.selectionRequired && (
             <>
               <p className="text-text-secondary text-sm">
                 {localize('com_insights_last_used')}{' '}
