@@ -3,6 +3,7 @@ import { ThumbDownIcon, ThumbUpIcon } from '@librechat/client';
 import type { TInsightsComment } from 'librechat-data-provider';
 import { useLocalize } from '~/hooks';
 import { Panel } from './Panel';
+import { cn } from '~/utils';
 
 export default function FeedbackComments({
   comments,
@@ -34,7 +35,10 @@ export default function FeedbackComments({
                   aria-label={localize(
                     positive ? 'com_ui_feedback_positive' : 'com_ui_feedback_negative',
                   )}
-                  className="text-text-secondary mt-0.5 shrink-0"
+                  className={cn(
+                    'mt-0.5 shrink-0',
+                    positive ? 'text-status-success' : 'text-status-error',
+                  )}
                 >
                   <Icon size="1rem" />
                 </span>
