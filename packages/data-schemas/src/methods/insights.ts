@@ -1,8 +1,11 @@
 import _ from 'lodash';
 import {
+  ErrorTypes,
   FEEDBACK_TAGS,
+  ViolationTypes,
   CREDITS_PER_USD,
   INSIGHTS_MAX_RANGE_DAYS,
+  parseLangChainErrorCode,
   INSIGHTS_SEARCH_MAX_LENGTH,
   INSIGHTS_SEARCH_MIN_LENGTH,
 } from 'librechat-data-provider';
@@ -16,9 +19,13 @@ import type {
   TInsightsChurnedUser,
   TInsightsConversation,
   TInsightsDailyPoint,
+  TInsightsFailure,
+  TInsightsFailureCategory,
+  TInsightsFailureHour,
   TInsightsFeedback,
   TInsightsModel,
   TInsightsParams,
+  TInsightsRecentFailures,
   TInsightsResponse,
   TInsightsResponseOutcomes,
   TInsightsSummary,
@@ -48,6 +55,14 @@ type CommentRow = {
   rating: TFeedbackRating;
   tag?: TFeedbackTagKey;
   text: string;
+};
+type FailureUsers = { affected: number; repeated: number };
+type FailureRow = {
+  createdAt: Date;
+  insightsAgentId: string;
+  outcome: TInsightsFailure['status'];
+  contentErrors?: unknown;
+  errorText?: unknown;
 };
 type ConversationDay = { date: string; conversations: number };
 type ModelSpend = { date: string; model: unknown; credits: number; usageTokens: number };
@@ -94,7 +109,9 @@ const defaultRange = '7d';
 const churnedUserWindowDays = 28;
 const churnedUserLimit = 8;
 const commentLimit = 20;
+const recentFailureLimit = 8;
 const dayMs = 24 * 60 * 60 * 1000;
+const hourMs = dayMs / 24;
 const replyUsageWindowMs = dayMs;
 const replyUsageContexts = ['message', 'abort', 'incomplete', 'reasoning', null];
 
@@ -123,6 +140,110 @@ const ratingCount = (rating: string) => ({
   $sum: { $cond: [{ $eq: ['$insightsFeedbackRating', rating] }, 1, 0] },
 });
 
+const failureCodes: Array<[TInsightsFailureCategory, string[]]> = [
+  [
+    'credentials',
+    [
+      ErrorTypes.NO_USER_KEY,
+      ErrorTypes.EXPIRED_USER_KEY,
+      ErrorTypes.INVALID_USER_KEY,
+      ErrorTypes.NO_BASE_URL,
+      ErrorTypes.INVALID_BASE_URL,
+      ErrorTypes.AUTH_FAILED,
+      'MODEL_AUTHENTICATION',
+    ],
+  ],
+  [
+    'limit',
+    [
+      ErrorTypes.INPUT_LENGTH,
+      ErrorTypes.FINAL_CONTEXT_OVERFLOW,
+      ErrorTypes.MODEL_RATE_LIMIT,
+      ErrorTypes.AUTH_RATE_LIMITED,
+      ViolationTypes.TOKEN_BALANCE,
+      ViolationTypes.TOOL_CALL_LIMIT,
+      ViolationTypes.MESSAGE_LIMIT,
+      ViolationTypes.CONCURRENT,
+      ViolationTypes.FILE_UPLOAD_LIMIT,
+      'MODEL_RATE_LIMIT',
+    ],
+  ],
+  [
+    'moderation',
+    [ErrorTypes.MODERATION, ErrorTypes.REFUSAL, ErrorTypes.AUTH_BANNED, ViolationTypes.BAN],
+  ],
+  [
+    'configuration',
+    [
+      ErrorTypes.INVALID_AGENT_PROVIDER,
+      ErrorTypes.MISSING_MODEL,
+      ErrorTypes.MODELS_NOT_LOADED,
+      ErrorTypes.ENDPOINT_MODELS_NOT_LOADED,
+      ErrorTypes.MODEL_NOT_FOUND,
+      ErrorTypes.GOOGLE_TOOL_CONFLICT,
+      ErrorTypes.NO_SYSTEM_MESSAGES,
+      ErrorTypes.INVALID_ACTION,
+      ErrorTypes.STATEFUL_CODE_ENVIRONMENT_NOT_ALLOWED,
+      ErrorTypes.CODE_WORKSPACE_UNAVAILABLE,
+      ViolationTypes.ILLEGAL_MODEL_REQUEST,
+      'MODEL_NOT_FOUND',
+    ],
+  ],
+  [
+    'provider',
+    [
+      ErrorTypes.UPSTREAM_MODEL_ERROR,
+      ErrorTypes.MODEL_STREAM_CLOSED,
+      ErrorTypes.MODEL_STREAM_STALLED,
+      ErrorTypes.STREAM_EXPIRED,
+      ErrorTypes.GOOGLE_ERROR,
+      ErrorTypes.GOOGLE_VIDEO_UNPROCESSABLE,
+      ErrorTypes.INVALID_REQUEST,
+    ],
+  ],
+];
+const failureCategories = new Map(
+  failureCodes.flatMap(([category, codes]) =>
+    codes.map((code): [string, TInsightsFailureCategory] => [code, category]),
+  ),
+);
+
+const readCode = (payload: unknown, path: string): string | null => {
+  const value: unknown = _.get(payload, path);
+  return typeof value === 'string' && value !== '' ? value : null;
+};
+
+function payloadCode(text: string): string | null {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    const payload: unknown = JSON.parse(text.slice(start, end + 1));
+    return (
+      readCode(payload, 'code') ??
+      readCode(payload, 'type') ??
+      readCode(payload, 'error.code') ??
+      readCode(payload, 'error.type')
+    );
+  } catch {
+    return null;
+  }
+}
+
+function failureCode(text: unknown): string | null {
+  if (typeof text !== 'string') return null;
+  return parseLangChainErrorCode(text) ?? payloadCode(text);
+}
+
+function failureCategory(row: FailureRow): TInsightsFailureCategory | null {
+  const texts = [...(Array.isArray(row.contentErrors) ? row.contentErrors : []), row.errorText];
+  for (const text of texts) {
+    const code = failureCode(text);
+    if (code != null) return failureCategories.get(code) ?? 'other';
+  }
+  return null;
+}
+
 function tenantMatch(tenantId?: string) {
   return tenantId ? { tenantId } : { tenantId: { $exists: false } };
 }
@@ -137,15 +258,34 @@ function validTimeZone(timeZone?: string) {
   }
 }
 
-function dateKey(date: Date, timeZone: string) {
+function dateKey(date: Date, timeZone: string, withHour = false) {
   const parts = new Intl.DateTimeFormat('en', {
     day: '2-digit',
     month: '2-digit',
     timeZone,
     year: 'numeric',
+    ...(withHour && { hour: '2-digit', hourCycle: 'h23' as const }),
   }).formatToParts(date);
   const values = new Map(parts.map((part) => [part.type, part.value]));
-  return `${values.get('year')}-${values.get('month')}-${values.get('day')}`;
+  const day = `${values.get('year')}-${values.get('month')}-${values.get('day')}`;
+  return withHour ? `${day}T${values.get('hour')}` : day;
+}
+
+function hourlyFailures(
+  rows: TInsightsFailureHour[],
+  from: Date,
+  to: Date,
+  timeZone: string,
+): TInsightsFailureHour[] {
+  const hours = new Map<string, TInsightsFailureHour>();
+  const addHour = (time: Date) => {
+    const hour = dateKey(time, timeZone, true);
+    hours.set(hour, { hour, failed: 0, interrupted: 0 });
+  };
+  for (let time = from.getTime(); time <= to.getTime(); time += hourMs) addHour(new Date(time));
+  addHour(to);
+  for (const row of rows) hours.set(row.hour, row);
+  return [...hours.values()].sort((left, right) => left.hour.localeCompare(right.hour));
 }
 
 function dateKeyValue(key: string) {
@@ -457,6 +597,11 @@ export function createInsightsMethods(mongoose: typeof import('mongoose')): Insi
       $lte: to,
     });
     const messagePipeline = messageScope(messageMatch, agentIds);
+    const failurePipeline: PipelineStage[] = [
+      ...messagePipeline,
+      { $addFields: { insightsOutcome: responseOutcome } },
+      { $match: { insightsOutcome: { $in: ['failed', 'interrupted'] } } },
+    ];
 
     const requestedSearch = options.search?.trim().slice(0, INSIGHTS_SEARCH_MAX_LENGTH) ?? '';
     const search =
@@ -517,6 +662,9 @@ export function createInsightsMethods(mongoose: typeof import('mongoose')): Insi
       replyRows,
       commentRows,
       agentVersions,
+      failureRows,
+      failureUsers,
+      failureHours,
     ] = await Promise.all([
       Conversation.aggregate<ConversationDay>([
         ...conversationPipeline,
@@ -743,6 +891,47 @@ export function createInsightsMethods(mongoose: typeof import('mongoose')): Insi
       agentIds.length === 1
         ? getSavedVersions(mongoose, agentIds[0], options.tenantId)
         : Promise.resolve(undefined),
+      Message.aggregate<FailureRow>([
+        ...failurePipeline,
+        { $sort: { createdAt: -1, _id: -1 } },
+        { $limit: recentFailureLimit },
+        {
+          $project: {
+            _id: 0,
+            createdAt: 1,
+            insightsAgentId: 1,
+            outcome: '$insightsOutcome',
+            contentErrors: '$content.error',
+            errorText: { $cond: [{ $eq: ['$error', true] }, '$text', null] },
+          },
+        },
+      ]),
+      Message.aggregate<FailureUsers>([
+        ...failurePipeline,
+        { $group: { _id: '$user', failures: { $sum: 1 } } },
+        {
+          $group: {
+            _id: null,
+            affected: { $sum: 1 },
+            repeated: { $sum: { $cond: [{ $gt: ['$failures', 1] }, 1, 0] } },
+          },
+        },
+      ]),
+      (options.range ?? defaultRange) === '24h'
+        ? Message.aggregate<TInsightsFailureHour>([
+            ...failurePipeline,
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: '%Y-%m-%dT%H', date: '$createdAt', timezone: timeZone },
+                },
+                failed: outcomeCount('failed'),
+                interrupted: outcomeCount('interrupted'),
+              },
+            },
+            { $project: { _id: 0, hour: '$_id', failed: 1, interrupted: 1 } },
+          ])
+        : Promise.resolve(null),
     ]);
 
     const days = new Map<string, TInsightsDailyPoint>();
@@ -827,11 +1016,23 @@ export function createInsightsMethods(mongoose: typeof import('mongoose')): Insi
     }
     for (const row of dailyUsers) addDay(days, row.date).users = row.users;
     const agentNames = new Map((options.agents ?? []).map((agent) => [agent.id, agent.name]));
+    const recentFailures: TInsightsRecentFailures = {
+      affectedUsers: failureUsers[0]?.affected ?? 0,
+      repeatedUsers: failureUsers[0]?.repeated ?? 0,
+      occurrences: failureRows.map((row) => ({
+        at: row.createdAt.toISOString(),
+        agentId: row.insightsAgentId,
+        status: row.outcome,
+        category: failureCategory(row),
+      })),
+      ...(failureHours && { hourly: hourlyFailures(failureHours, from, to, timeZone) }),
+    };
     const aggregate: TInsightsAggregateResponse = {
       agents: options.agents ?? [],
       summary,
       daily: [...days.values()].sort((left, right) => left.date.localeCompare(right.date)),
       ...(agentVersions !== undefined && { agentVersions }),
+      recentFailures,
       models: [...models.values()].sort(
         (left, right) =>
           Number(left.model == null) - Number(right.model == null) ||

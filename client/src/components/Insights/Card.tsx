@@ -32,18 +32,20 @@ export type KpiCardData = {
 
 const tagAlignment = { start: '', center: '-translate-x-1/2', end: '-translate-x-full' };
 
-function Sparkline({
+export function Sparkline({
   values,
   label,
   locale,
   format,
   versionMarks,
+  hour,
 }: {
   values: SparklinePoint[];
   label: string;
   locale: string;
   format?: 'currency';
   versionMarks?: VersionMark[];
+  hour?: 'numeric';
 }) {
   const patternId = useId().replace(/:/g, '');
   const [activeIndex, setActiveIndex] = useState<number>();
@@ -72,6 +74,7 @@ function Sparkline({
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+    hour,
     timeZone: 'UTC',
   });
   const markedVersions = points.flatMap((point, index) => {

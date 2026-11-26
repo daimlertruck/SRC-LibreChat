@@ -108,6 +108,34 @@ export type TInsightsComment = {
   text: string;
 };
 
+export type TInsightsFailureCategory =
+  | 'provider'
+  | 'limit'
+  | 'credentials'
+  | 'moderation'
+  | 'configuration'
+  | 'other';
+
+export type TInsightsFailure = {
+  at: string;
+  agentId: string;
+  status: 'failed' | 'interrupted';
+  category: TInsightsFailureCategory | null;
+};
+
+export type TInsightsFailureHour = {
+  hour: string;
+  failed: number;
+  interrupted: number;
+};
+
+export type TInsightsRecentFailures = {
+  affectedUsers: number;
+  repeatedUsers: number;
+  occurrences: TInsightsFailure[];
+  hourly?: TInsightsFailureHour[];
+};
+
 export type TInsightsSelectionResponse = {
   selectionRequired: true;
   agents: TInsightsAgent[];
@@ -120,6 +148,7 @@ export type TInsightsAggregateResponse = {
   models: TInsightsModel[];
   comments?: TInsightsComment[];
   agentVersions?: TInsightsAgentVersion[];
+  recentFailures?: TInsightsRecentFailures;
 };
 
 type TInsightsDetailSections = {

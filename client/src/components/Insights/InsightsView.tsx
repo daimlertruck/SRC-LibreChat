@@ -29,6 +29,7 @@ import { getRollingDateRange } from './dateRange';
 import FeedbackCategories from './Feedback';
 import { getMetricCards } from './metrics';
 import FeedbackComments from './Comments';
+import RecentFailures from './Failures';
 import ModelsTable from './Models';
 import { KpiCard } from './Card';
 import { cn } from '~/utils';
@@ -472,6 +473,10 @@ export default function InsightsView() {
     () => (versionDays ? getVersionMarks(versionDays, localize) : undefined),
     [localize, versionDays],
   );
+  const agentNames = useMemo(
+    () => new Map(agentItems.map(({ value, label }) => [value, label])),
+    [agentItems],
+  );
   const { kpiCards, outcomeCards, feedbackCards } = useMemo(
     () => getMetricCards(data, localize),
     [data, localize],
@@ -720,6 +725,19 @@ export default function InsightsView() {
                   ))}
                 </div>
               </section>
+              {data.recentFailures && (
+                <RecentFailures
+                  failures={data.recentFailures}
+                  summary={data.summary}
+                  daily={data.daily}
+                  versionMarks={versionMarks}
+                  agentNames={agentNames}
+                  showAgent={effectiveAgentIds.length !== 1}
+                  localize={localize}
+                  locale={locale}
+                  timeZone={timeZone}
+                />
+              )}
               <section aria-labelledby={`${sectionId}-feedback`}>
                 <h2 id={`${sectionId}-feedback`} className="mb-3 text-base font-semibold">
                   {localize('com_insights_feedback')}

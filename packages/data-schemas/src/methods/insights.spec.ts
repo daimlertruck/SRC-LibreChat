@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
-import { FEEDBACK_TAGS } from 'librechat-data-provider';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import { ErrorTypes, FEEDBACK_TAGS } from 'librechat-data-provider';
 import type { TFeedbackTagKey } from 'librechat-data-provider';
 import { createInsightsMethods as createIndexedInsightsMethods } from './insights';
 import { backfillInsightsAttribution } from '../migrations/insightsAgentIds';
@@ -311,6 +311,7 @@ describe('Insights methods', () => {
         'comments',
         'daily',
         'models',
+        'recentFailures',
         'summary',
       ]);
     },
@@ -401,6 +402,7 @@ describe('Insights methods', () => {
       daily: detailed.daily,
       models: detailed.models,
       agentVersions: detailed.agentVersions,
+      recentFailures: detailed.recentFailures,
     });
     expect(aggregate.summary).toEqual({
       totalUsers: 1,
@@ -445,6 +447,7 @@ describe('Insights methods', () => {
       'comments',
       'daily',
       'models',
+      'recentFailures',
       'summary',
     ]);
     expect(aggregate.comments?.map(({ text, tag }) => [text, tag])).toEqual([
@@ -453,7 +456,7 @@ describe('Insights methods', () => {
     expect(JSON.stringify(aggregate)).not.toContain(privateValue);
     expect(userFind).not.toHaveBeenCalled();
     expect(conversationAggregate).toHaveBeenCalledTimes(1);
-    expect(messageAggregate).toHaveBeenCalledTimes(5);
+    expect(messageAggregate).toHaveBeenCalledTimes(7);
     const pipelines = [
       ...conversationAggregate.mock.calls,
       ...messageAggregate.mock.calls,
@@ -467,7 +470,85 @@ describe('Insights methods', () => {
     expect(serialized).not.toContain('matchedIdentity');
     expect(serialized).not.toContain('firstMessage');
     expect(serialized).not.toContain('"$first"');
-    expect(serialized).not.toContain('"$limit"');
+  });
+
+  it('lists recent failures with only their time, agent, status and an allowlisted type', async () => {
+    const owner = new mongoose.Types.ObjectId().toString();
+    const other = new mongoose.Types.ObjectId().toString();
+    const privateValue = 'private-failure-sentinel';
+    const at = (minutes: number) => new Date(Date.now() - minutes * 60 * 1000);
+    await fixtures.conversations.insertMany(
+      [owner, other].map((user) => ({
+        conversationId: `${privateValue}-${user}`,
+        user,
+        tenantId: 'tenant-a',
+        initial_agent_id: 'agent-a',
+        createdAt: at(120),
+        isTemporary: false,
+      })),
+    );
+    const reply = (
+      user: string,
+      messageId: string,
+      minutes: number,
+      fields: Record<string, unknown>,
+    ) => ({
+      messageId,
+      conversationId: `${privateValue}-${user}`,
+      user,
+      tenantId: 'tenant-a',
+      createdAt: at(minutes),
+      isCreatedByUser: false,
+      isTemporary: false,
+      ...fields,
+    });
+    await fixtures.messages.insertMany([
+      reply(owner, 'completed', 5, { text: privateValue }),
+      reply(owner, 'rate-limited', 10, {
+        error: true,
+        text: `${privateValue}\n{"type":"${ErrorTypes.MODEL_RATE_LIMIT}"}`,
+      }),
+      reply(owner, 'mid-answer', 20, {
+        text: privateValue,
+        content: [
+          { type: 'text', text: privateValue },
+          { type: 'error', error: `${privateValue}\n{"error":{"type":"overloaded_error"}}` },
+        ],
+      }),
+      reply(other, 'unclassified', 30, { error: true, text: privateValue }),
+      reply(owner, 'stopped', 40, { unfinished: true, text: privateValue }),
+      reply(owner, 'oldest', 50, { error: true, text: `{"type":"${ErrorTypes.MODERATION}"}` }),
+    ]);
+
+    const { recentFailures } = await createInsightsMethods(mongoose).getInsights({
+      tenantId: 'tenant-a',
+      range: '24h',
+      agentIds: ['agent-a'],
+      showDetails: false,
+    });
+
+    expect(
+      recentFailures?.occurrences.map(({ agentId, status, category }) => [
+        agentId,
+        status,
+        category,
+      ]),
+    ).toEqual([
+      ['agent-a', 'failed', 'limit'],
+      ['agent-a', 'failed', 'other'],
+      ['agent-a', 'failed', null],
+      ['agent-a', 'interrupted', null],
+      ['agent-a', 'failed', 'moderation'],
+    ]);
+    expect(recentFailures?.affectedUsers).toBe(2);
+    expect(recentFailures?.repeatedUsers).toBe(1);
+    expect(
+      recentFailures?.hourly?.reduce((total, hour) => total + hour.failed + hour.interrupted, 0),
+    ).toBe(5);
+    const serialized = JSON.stringify(recentFailures);
+    for (const hidden of [privateValue, owner, other, 'rate-limited', 'overloaded_error']) {
+      expect(serialized).not.toContain(hidden);
+    }
   });
 
   it('lists the latest written feedback of the selected agents, newest first', async () => {
